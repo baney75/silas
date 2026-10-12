@@ -3,6 +3,7 @@ name: Nightly
 # The stable channel is macOS only and is released from Donovan's Mac (scripts/release-stable.sh)
 # with a different signing key, so nothing built here can reach stable users.
 #
+# Re-run with "Re-run all jobs", never "Re-run failed jobs": a failed run deletes its draft.
 # Builds upload into a private draft. Only when every platform succeeded does the last job
 # write one latest.json and swap the draft in as `nightly`, so users never see a half-built release.
 on:
@@ -13,10 +14,9 @@ permissions:
   contents: write
 concurrency:
   group: nightly
-  cancel-in-progress: true
+  cancel-in-progress: false
 env:
   REPO: ${{ github.repository }}
-  GH_TOKEN: ${{ github.token }}
 jobs:
   prepare:
     runs-on: ubuntu-latest
@@ -27,6 +27,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           base=$(jq -r .version src-tauri/tauri.conf.json)
           IFS=. read -r ma mi pa <<< "$base"
@@ -82,6 +84,10 @@ jobs:
         run: bunx tauri build ${{ matrix.args }}
       - name: Upload to the draft
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: |
           set -euo pipefail
           mkdir -p out
@@ -96,6 +102,11 @@ jobs:
             Windows)
               cp "$bundle"/nsis/*-setup.exe* out/ ;;
           esac
+          # Every installable file needs an updater signature; sign any the bundler skipped.
+          for f in out/*; do
+            case "$f" in *.sig) continue ;; esac
+            [ -f "$f.sig" ] || bunx tauri signer sign "$f" > /dev/null
+          done
           ls -la out
           for f in out/*; do
             name=$(basename "$f")
@@ -110,6 +121,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Write latest.json and swap the draft in as nightly
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           id=${{ needs.prepare.outputs.draft }}
@@ -118,7 +131,7 @@ jobs:
           platforms='{}'
           add() { # platform-key asset-name
             sig_url=$(awk -F'\t' -v n="$2.sig" '$1==n {print $2}' assets.tsv)
-            [ -n "$sig_url" ] || return 0
+            [ -n "$sig_url" ] || { echo "no signature for $2" >&2; exit 1; }
             sig=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" "$sig_url")
             platforms=$(jq --arg k "$1" --arg s "$sig" --arg u "$base/$2" '. + {($k): {signature: $s, url: $u}}' <<< "$platforms")
           }
@@ -131,7 +144,7 @@ jobs:
               *-setup.exe) add windows-x86_64 "$name"; add windows-x86_64-nsis "$name" ;;
             esac
           done < assets.tsv
-          for k in darwin-aarch64 linux-x86_64 windows-x86_64; do
+          for k in darwin-aarch64 linux-x86_64 linux-x86_64-deb linux-x86_64-rpm windows-x86_64; do
             jq -e --arg k "$k" 'has($k)' <<< "$platforms" > /dev/null || { echo "missing $k" >&2; exit 1; }
           done
           jq -n --arg v "${{ needs.prepare.outputs.version }}" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson p "$platforms" \
@@ -148,4 +161,6 @@ jobs:
     if: always() && needs.prepare.outputs.draft != '' && (needs.build.result != 'success' || needs.publish.result != 'success')
     runs-on: ubuntu-latest
     steps:
-      - run: gh api -X DELETE "repos/$REPO/releases/${{ needs.prepare.outputs.draft }}" || true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X DELETE "repos/$REPO/releases/${{ needs.prepare.outputs.draft }}" || true

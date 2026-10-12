@@ -220,7 +220,15 @@ impl Core {
     /// Every key event from the global listener lands here.
     pub fn on_key(self: &Shared, ev: &handy_keys::KeyEvent) {
         if self.typing.load(Ordering::Relaxed) {
-            if ev.is_key_down && ev.key.is_some() {
+            // Silas's own text arrives as key events too, so only keys it never sends
+            // (deleting, moving the cursor) mean the user edited mid-typing.
+            use handy_keys::Key::*;
+            if ev.is_key_down
+                && matches!(
+                    ev.key,
+                    Some(Delete | ForwardDelete | LeftArrow | RightArrow | UpArrow | DownArrow | Escape | Home | End | PageUp | PageDown)
+                )
+            {
                 self.typed_over.store(true, Ordering::Relaxed);
             }
             return;
@@ -232,7 +240,13 @@ impl Core {
                 Some(name) => {
                     let _ = tx.send(name);
                 }
-                None => *self.capture.lock() = Some(tx),
+                None => {
+                    // Put it back only if no newer capture has started meanwhile.
+                    let mut slot = self.capture.lock();
+                    if slot.is_none() {
+                        *slot = Some(tx);
+                    }
+                }
             }
             return;
         }
