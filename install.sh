@@ -9,10 +9,11 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
 case "$(uname -s)" in
 Darwin)
+  [ "$(uname -m)" = arm64 ] || { echo "Silas needs a Mac with Apple silicon (M1 or newer)." >&2; exit 1; }
   if [ "${SILAS_CHANNEL:-stable}" = nightly ]; then
-    url="$REPO/download/nightly/Silas_universal.app.tar.gz"
+    url="$REPO/download/nightly/Silas_aarch64.app.tar.gz"
   else
-    url="$REPO/latest/download/Silas_universal.app.tar.gz"
+    url="$REPO/latest/download/Silas_aarch64.app.tar.gz"
   fi
   say "Downloading Silas for macOS"
   curl -fL# "$url" -o "$tmp/silas.tar.gz" || { echo "Could not download Silas from $url" >&2; exit 1; }

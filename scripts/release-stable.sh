@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Release a stable Silas for macOS from this Mac.
+# Release a stable Silas for macOS (Apple silicon) from this Mac.
+# ONNX Runtime ships no prebuilt x86_64-apple-darwin library, so there is no Intel build.
 #
 #   scripts/release-stable.sh 0.2.0 "What changed, in a sentence or two."
 #
@@ -32,22 +33,22 @@ sed -i '' -E "1,10s/^version = \".*\"/version = \"$version\"/" src-tauri/Cargo.t
 (cd src-tauri && cargo test --lib --quiet && cargo clippy --lib --quiet -- -D warnings)
 
 export TAURI_SIGNING_PRIVATE_KEY="$(cat "$key")" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" APPLE_SIGNING_IDENTITY="$identity"
-rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null
-bunx tauri build --target universal-apple-darwin --bundles app,dmg
+rustup target add aarch64-apple-darwin >/dev/null
+bunx tauri build --target aarch64-apple-darwin --bundles app,dmg
 
-out=src-tauri/target/universal-apple-darwin/release/bundle
+out=src-tauri/target/aarch64-apple-darwin/release/bundle
 dir=$(mktemp -d)
-cp "$out/macos/Silas.app.tar.gz" "$dir/Silas_universal.app.tar.gz"
-cp "$out/macos/Silas.app.tar.gz.sig" "$dir/Silas_universal.app.tar.gz.sig"
-cp "$(ls "$out"/dmg/*.dmg | head -1)" "$dir/Silas_universal.dmg"
-url="https://github.com/baney75/silas/releases/download/v$version/Silas_universal.app.tar.gz"
-jq -n --arg v "$version" --arg n "$notes" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg s "$(cat "$dir/Silas_universal.app.tar.gz.sig")" --arg u "$url" \
-  '{version:$v, notes:$n, pub_date:$d, platforms:{"darwin-aarch64":{signature:$s,url:$u}, "darwin-x86_64":{signature:$s,url:$u}}}' > "$dir/latest.json"
+cp "$out/macos/Silas.app.tar.gz" "$dir/Silas_aarch64.app.tar.gz"
+cp "$out/macos/Silas.app.tar.gz.sig" "$dir/Silas_aarch64.app.tar.gz.sig"
+cp "$(ls "$out"/dmg/*.dmg | head -1)" "$dir/Silas_aarch64.dmg"
+url="https://github.com/baney75/silas/releases/download/v$version/Silas_aarch64.app.tar.gz"
+jq -n --arg v "$version" --arg n "$notes" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg s "$(cat "$dir/Silas_aarch64.app.tar.gz.sig")" --arg u "$url" \
+  '{version:$v, notes:$n, pub_date:$d, platforms:{"darwin-aarch64":{signature:$s,url:$u}}}' > "$dir/latest.json"
 
 git diff --quiet || git commit -qam "Release Silas $version"
 git push -q origin main
 # The release creates the tag on GitHub, so a failed upload never leaves a bare tag.
 gh release create "v$version" --target "$(git rev-parse HEAD)" --latest --title "Silas $version" --notes "$notes" \
-  "$dir/Silas_universal.dmg" "$dir/Silas_universal.app.tar.gz" "$dir/Silas_universal.app.tar.gz.sig" "$dir/latest.json"
+  "$dir/Silas_aarch64.dmg" "$dir/Silas_aarch64.app.tar.gz" "$dir/Silas_aarch64.app.tar.gz.sig" "$dir/latest.json"
 git fetch -q origin --tags
 echo "Released Silas $version (stable, macOS)."

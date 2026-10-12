@@ -10,7 +10,7 @@ your words as you fix them.
 
 ## Install
 
-**macOS** (stable):
+**macOS** (stable, Apple silicon):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | sh
