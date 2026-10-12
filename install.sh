@@ -20,6 +20,7 @@ Darwin)
   tar -xzf "$tmp/silas.tar.gz" -C "$tmp"
   [ -d "$tmp/Silas.app" ] || { echo "The download did not contain Silas.app" >&2; exit 1; }
   osascript -e 'quit app "Silas"' >/dev/null 2>&1 || true
+  i=0; while pgrep -xq silas && [ $i -lt 20 ]; do sleep 0.5; i=$((i+1)); done
   dest=/Applications
   [ -w "$dest" ] || dest="$HOME/Applications"
   mkdir -p "$dest"
@@ -30,7 +31,7 @@ Darwin)
   mv "$dest/Silas.app.new" "$dest/Silas.app"
   xattr -dr com.apple.quarantine "$dest/Silas.app" 2>/dev/null || true
   say "Installed to $dest. Opening Silas…"
-  open "$dest/Silas.app"
+  open "$dest/Silas.app" || { sleep 2; open "$dest/Silas.app"; }
   ;;
 Linux)
   api="https://api.github.com/repos/baney75/silas/releases/tags/nightly"
