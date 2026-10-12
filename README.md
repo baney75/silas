@@ -16,7 +16,7 @@ your words as you fix them.
 curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | sh
 ```
 
-**Linux** (nightly, x86_64): the same command. It installs the `.deb` or `.rpm` when it can,
+**Linux** (nightly, x86_64, glibc 2.39 or newer, e.g. Ubuntu 24.04+): the same command. It installs the `.deb` or `.rpm` when it can,
 otherwise an AppImage plus a udev rule so Silas can read the hold-to-talk key.
 
 **Windows** (nightly), in PowerShell:
