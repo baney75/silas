@@ -1,6 +1,7 @@
 import { hotkeyLabel, installUpdate, statusText, store, subscribe } from "./store";
 import { clear, h, icon, keycap, num, timeAgo } from "./ui";
 import type { Navigate } from "./main";
+import { api } from "./api";
 
 // Hidden until the next launch once the user says "later".
 let dismissed = false;
@@ -88,8 +89,37 @@ export function mountHome(root: HTMLElement, go: Navigate): () => void {
             h("div", null, h("strong", null, "Silas needs a speech model."), " It downloads once and runs on this computer."),
             h("button", { class: "btn btn-primary", type: "button", onclick: () => go("model") }, "Choose a model"),
           )
-        : null,
+        : keyAccessMissing(s)
+          ? h(
+              "div",
+              { class: "banner" },
+              icon("keyboard", 20),
+              h(
+                "div",
+                null,
+                h("strong", null, "Silas can't hear your key yet."),
+                s.platform === "macos"
+                  ? " Turn on Silas under Privacy & Security, Accessibility. Silas picks it up in a couple of seconds, no restart needed."
+                  : ` ${s.detail ?? ""}`,
+              ),
+              s.platform === "macos"
+                ? h("button", { class: "btn btn-primary", type: "button", onclick: () => void api.openPermission("accessibility") }, "Open Settings")
+                : null,
+            )
+          : s.permissions.microphone === "denied"
+            ? h(
+                "div",
+                { class: "banner" },
+                icon("mic", 20),
+                h("div", null, h("strong", null, "Silas can't use the microphone."), " Allow it in Privacy & Security, Microphone."),
+                h("button", { class: "btn btn-primary", type: "button", onclick: () => void api.openPermission("microphone") }, "Open Settings"),
+              )
+            : null,
     );
+  }
+
+  function keyAccessMissing(s: typeof store.state): boolean {
+    return s.permissions.accessibility === "denied" || (s.status === "error" && (s.detail ?? "").includes("can't hear your key"));
   }
 
   function drawStats() {

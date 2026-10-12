@@ -29,24 +29,35 @@ pub fn show_main(app: &AppHandle) {
 
 /// Read every key on its own thread and hand events to the core.
 fn start_listener(core: Shared) {
-    std::thread::spawn(move || loop {
-        match handy_keys::KeyboardListener::new() {
-            Ok(listener) => {
-                log::info!("keyboard listener running");
-                loop {
-                    match listener.recv_timeout(Duration::from_millis(500)) {
-                        Ok(ev) => core.on_key(&ev),
-                        Err(handy_keys::Error::Timeout) => core.tick(),
-                        Err(e) => {
-                            log::warn!("keyboard listener stopped: {e}");
-                            break;
+    std::thread::spawn(move || {
+        let mut warned = false;
+        loop {
+            match handy_keys::KeyboardListener::new() {
+                Ok(listener) => {
+                    log::info!("keyboard listener running");
+                    warned = false;
+                    core.set_listener(true);
+                    loop {
+                        match listener.recv_timeout(Duration::from_millis(500)) {
+                            Ok(ev) => core.on_key(&ev),
+                            Err(handy_keys::Error::Timeout) => core.tick(),
+                            Err(e) => {
+                                log::warn!("keyboard listener stopped: {e}");
+                                break;
+                            }
                         }
                     }
+                    core.set_listener(false);
                 }
-            }
-            Err(e) => {
-                log::warn!("keyboard listener unavailable (permission?): {e}");
-                std::thread::sleep(Duration::from_secs(3));
+                Err(e) => {
+                    if !warned {
+                        log::warn!("keyboard listener unavailable (permission?): {e}");
+                        warned = true;
+                    }
+                    core.set_listener(false);
+                    // Retry until the user grants access; no restart needed.
+                    std::thread::sleep(Duration::from_secs(2));
+                }
             }
         }
     });

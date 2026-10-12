@@ -42,6 +42,9 @@ pub struct Core {
     watch: Mutex<Option<EditWatch>>,
     /// True while Silas is typing, so its own keystrokes are not read as the user's.
     pub typing: AtomicBool,
+    /// The global key listener is running. Without it the hotkey can't work, so Silas
+    /// must never claim to be ready.
+    pub listener_ok: AtomicBool,
     /// The user pressed keys while Silas was typing, so its copy of the text is off.
     typed_over: AtomicBool,
     /// Bumped per recording so the length limit only stops the one it was set for.
@@ -54,6 +57,16 @@ pub struct Core {
 pub type Shared = Arc<Core>;
 
 const MAX_RECORDING: Duration = Duration::from_secs(300);
+
+pub fn key_access_message() -> String {
+    if cfg!(target_os = "macos") {
+        "Silas can't hear your key yet. Turn on Silas in System Settings › Privacy & Security › Accessibility.".into()
+    } else if cfg!(target_os = "linux") {
+        "Silas can't read the keyboard. Reinstall the package, or add the udev rule from the README, then log out and back in.".into()
+    } else {
+        "Silas couldn't start its keyboard listener. Restart Silas.".into()
+    }
+}
 
 impl Core {
     pub fn new(app: AppHandle) -> Shared {
@@ -78,6 +91,7 @@ impl Core {
             machine: Mutex::new(machine),
             watch: Mutex::new(None),
             typing: AtomicBool::new(false),
+            listener_ok: AtomicBool::new(false),
             typed_over: AtomicBool::new(false),
             recording_gen: std::sync::atomic::AtomicU64::new(0),
             capture: Mutex::new(None),
@@ -93,7 +107,26 @@ impl Core {
         self.status.lock().clone()
     }
 
+    /// The key listener started or stopped; refresh the status the user sees.
+    pub fn set_listener(&self, ok: bool) {
+        let was = self.listener_ok.swap(ok, Ordering::Relaxed);
+        if was == ok {
+            return;
+        }
+        let (status, _) = self.status();
+        if ok && status == Status::Error && self.active_model().is_some() {
+            self.set_status(Status::Ready, None);
+        } else if !ok && status == Status::Ready {
+            self.set_status(Status::Ready, None); // becomes the permission message
+        }
+    }
+
     pub fn set_status(&self, s: Status, detail: Option<String>) {
+        let (s, detail) = if s == Status::Ready && !self.listener_ok.load(Ordering::Relaxed) {
+            (Status::Error, Some(key_access_message()))
+        } else {
+            (s, detail)
+        };
         *self.status.lock() = (s, detail.clone());
         let _ = self
             .app
