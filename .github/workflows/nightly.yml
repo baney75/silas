@@ -1,0 +1,79 @@
+name: Nightly
+# Rebuilds the rolling `nightly` pre-release for macOS, Windows and Linux.
+# The stable channel is macOS only and is released from Donovan's Mac (scripts/release-stable.sh).
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      skip: ${{ steps.v.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          base=$(jq -r .version src-tauri/tauri.conf.json)
+          IFS=. read -r ma mi pa <<< "$base"
+          version="$ma.$mi.$((pa+1))-nightly.$(date -u +%Y%m%d%H%M)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          built=$(gh release view nightly --json targetCommitish -q .targetCommitish 2>/dev/null || true)
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$built" = "$GITHUB_SHA" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          gh release delete nightly --cleanup-tag --yes 2>/dev/null || true
+          gh release create nightly --prerelease --target "$GITHUB_SHA" \
+            --title "Silas Nightly $version" \
+            --notes "Built from $GITHUB_SHA. Nightly builds are untested on Windows and Linux."
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            args: --target universal-apple-darwin
+          - os: ubuntu-22.04
+            args: --bundles deb,rpm,appimage
+          - os: windows-latest
+            args: --bundles nsis
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'macos-14' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: src-tauri }
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libudev-dev libxdo-dev
+      - run: bun install --frozen-lockfile
+      - name: Set nightly version
+        shell: bash
+        run: |
+          jq --arg v "${{ needs.prepare.outputs.version }}" '.version = $v' src-tauri/tauri.conf.json > t.json && mv t.json src-tauri/tauri.conf.json
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          APPLE_SIGNING_IDENTITY: "-"
+        with:
+          tagName: nightly
+          releaseName: "Silas Nightly ${{ needs.prepare.outputs.version }}"
+          prerelease: true
+          includeUpdaterJson: true
+          args: ${{ matrix.args }}

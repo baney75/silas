@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Silas</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#20242B"/>
+      <stop offset="1" stop-color="#121418"/>
+    </linearGradient>
+    <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="#fff"/>
+      <path d="M512 330 L512 900" stroke="#000" stroke-width="26" stroke-linecap="round"/>
+<path d="M452 388 L452 548" stroke="#000" stroke-width="26" stroke-linecap="round"/>
+<path d="M572 388 L572 548" stroke="#000" stroke-width="26" stroke-linecap="round"/>
+<path d="M396 436 L396 500" stroke="#000" stroke-width="26" stroke-linecap="round"/>
+<path d="M628 436 L628 500" stroke="#000" stroke-width="26" stroke-linecap="round"/>
+      <path d="M396 300 L628 300" stroke="#000" stroke-width="14"/>
+    </mask>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
+  <rect x="100.5" y="100.5" width="823" height="823" rx="185.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.08"/>
+  <g transform="translate(0 -30)" mask="url(#cut)">
+    <path d="M512 872 C492 800 360 640 350 470 C346 400 368 340 396 304 L396 252 Q396 236 412 236 L612 236 Q628 236 628 252 L628 304 C656 340 678 400 674 470 C664 640 532 800 512 872 Z" fill="#B98F4B"/>
+    <path d="M512 872 C492 800 360 640 350 470 C346 400 368 340 396 304 L396 252 Q396 236 412 236 L512 236 Z" fill="#D9B676"/>
+  </g>
+</svg>

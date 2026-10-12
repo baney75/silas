@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Silas Overlay</title>
+  </head>
+  <body>
+    <div class="pill" id="pill" data-state="idle" role="status" aria-live="polite">
+      <div class="face face-recording">
+        <span class="rec-dot" aria-hidden="true"></span>
+        <div class="bars" id="bars" aria-hidden="true"></div>
+        <span class="elapsed" id="elapsed">0:00</span>
+      </div>
+      <div class="face face-writing">
+        <span class="ink" aria-hidden="true"><span></span></span>
+        <span class="label">Writing…</span>
+      </div>
+      <div class="face face-typing">
+        <span class="ink done" aria-hidden="true"><span></span></span>
+        <span class="label">Typing…</span>
+      </div>
+      <div class="face face-learned">
+        <span class="spark" aria-hidden="true"></span>
+        <span class="learned-text" id="learned"></span>
+      </div>
+    </div>
+    <script type="module" src="/src/overlay.ts"></script>
+  </body>
+</html>

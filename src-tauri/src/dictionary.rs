@@ -1,0 +1,877 @@
+//! The personal dictionary: words Silas must spell right, corrections it applies after
+//! transcription, and the learning rules that turn a user's edits into new corrections.
+//!
+//! Everything here is pure and deterministic so it can be tested without audio.
+
+use std::collections::HashSet;
+use std::sync::OnceLock;
+
+use chrono::Utc;
+use rphonetic::{DoubleMetaphone, Encoder};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Term {
+    pub text: String,
+    pub source: String,
+    pub added: String,
+    #[serde(default)]
+    pub uses: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Correction {
+    pub from: String,
+    pub to: String,
+    #[serde(default)]
+    pub count: u32,
+    pub source: String,
+    pub added: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Pending {
+    pub from: String,
+    pub to: String,
+    pub count: u32,
+    pub last_seen: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Dictionary {
+    #[serde(default)]
+    pub terms: Vec<Term>,
+    #[serde(default)]
+    pub corrections: Vec<Correction>,
+    #[serde(default)]
+    pub pending: Vec<Pending>,
+    #[serde(default = "default_fillers")]
+    pub fillers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LearnResult {
+    pub learned: Vec<Correction>,
+    pub pending: Vec<Pending>,
+    pub terms: Vec<String>,
+}
+
+impl LearnResult {
+    pub fn is_empty(&self) -> bool {
+        self.learned.is_empty() && self.pending.is_empty() && self.terms.is_empty()
+    }
+}
+
+pub fn default_fillers() -> Vec<String> {
+    [
+        "um", "umm", "uh", "uhh", "uhm", "erm", "er", "ah", "hmm", "mm", "mhm",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
+impl Default for Dictionary {
+    fn default() -> Self {
+        Self {
+            terms: vec![],
+            corrections: vec![],
+            pending: vec![],
+            fillers: default_fillers(),
+        }
+    }
+}
+
+/// A fix seen this many times becomes automatic.
+const PROMOTE_AFTER: u32 = 2;
+
+fn now() -> String {
+    Utc::now().to_rfc3339()
+}
+
+fn common_words() -> &'static HashSet<&'static str> {
+    static WORDS: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    WORDS.get_or_init(|| {
+        include_str!("../data/common-en.txt")
+            .lines()
+            .map(str::trim)
+            .collect()
+    })
+}
+
+pub fn is_common(word: &str) -> bool {
+    common_words().contains(word.to_lowercase().as_str())
+}
+
+/// Top 5,000 words only. The full list holds many names (it comes from subtitles), so a
+/// capitalized word outside this smaller set is treated as a name worth remembering.
+pub fn is_everyday(word: &str) -> bool {
+    static WORDS: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    WORDS
+        .get_or_init(|| {
+            include_str!("../data/common-en.txt")
+                .lines()
+                .take(5000)
+                .map(str::trim)
+                .collect()
+        })
+        .contains(word.to_lowercase().as_str())
+}
+
+// ---------------------------------------------------------------- tokens
+
+/// One word with the punctuation that hugs it, e.g. `"(Parish,"` → pre `(`, core `Parish`, post `,`.
+#[derive(Debug, Clone, PartialEq)]
+struct Tok {
+    pre: String,
+    core: String,
+    post: String,
+}
+
+impl Tok {
+    fn key(&self) -> String {
+        norm(&self.core)
+    }
+    fn render(&self) -> String {
+        format!("{}{}{}", self.pre, self.core, self.post)
+    }
+}
+
+
+fn split_tok(raw: &str) -> Tok {
+    let chars: Vec<char> = raw.chars().collect();
+    let mut start = 0;
+    while start < chars.len() && !chars[start].is_alphanumeric() {
+        start += 1;
+    }
+    let mut end = chars.len();
+    while end > start && !chars[end - 1].is_alphanumeric() {
+        end -= 1;
+    }
+    // keep inner punctuation (local.ai, E-R-O, don't) but not outer.
+    let core: String = chars[start..end].iter().collect();
+    Tok {
+        pre: chars[..start].iter().collect(),
+        core,
+        post: chars[end..].iter().collect(),
+    }
+}
+
+fn tokenize(text: &str) -> Vec<Tok> {
+    text.split_whitespace().map(split_tok).collect()
+}
+
+fn render(toks: &[Tok]) -> String {
+    toks.iter()
+        .map(Tok::render)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Lowercase letters and digits only, with spoken digits folded ("one" → "1").
+fn norm(word: &str) -> String {
+    let lower: String = word
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect();
+    match lower.as_str() {
+        "zero" => "0".into(),
+        "one" => "1".into(),
+        "two" => "2".into(),
+        "three" => "3".into(),
+        "four" => "4".into(),
+        "five" => "5".into(),
+        "six" => "6".into(),
+        "seven" => "7".into(),
+        "eight" => "8".into(),
+        "nine" => "9".into(),
+        _ => lower,
+    }
+}
+
+fn norm_phrase(phrase: &str) -> Vec<String> {
+    tokenize(phrase)
+        .iter()
+        .map(Tok::key)
+        .filter(|k| !k.is_empty())
+        .collect()
+}
+
+fn levenshtein(a: &[char], b: &[char]) -> usize {
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0; b.len() + 1];
+    for i in 1..=a.len() {
+        cur[0] = i;
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+/// 1.0 = identical, 0.0 = nothing in common.
+pub fn similarity(a: &str, b: &str) -> f32 {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let max = a.len().max(b.len());
+    if max == 0 {
+        return 1.0;
+    }
+    1.0 - levenshtein(&a, &b) as f32 / max as f32
+}
+
+/// Primary and alternate Double Metaphone codes ("omarchy" → AMRX / AMRK).
+fn phonetic(s: &str) -> [String; 2] {
+    let letters: String = s.chars().filter(|c| c.is_ascii_alphabetic()).collect();
+    if letters.is_empty() {
+        return [String::new(), String::new()];
+    }
+    let dm = DoubleMetaphone::default();
+    [dm.encode(&letters), dm.encode_alternate(&letters)]
+}
+
+/// How alike two spellings sound and look, 0..1. Used both to snap heard words to
+/// dictionary terms and to decide whether a user's edit was a real correction.
+pub fn sound_alike(heard: &str, intended: &str) -> f32 {
+    let a: String = norm_phrase(heard).concat();
+    let b: String = norm_phrase(intended).concat();
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    let mut score = similarity(&a, &b);
+    let (pa, pb) = (phonetic(&a), phonetic(&b));
+    for x in pa.iter().filter(|x| !x.is_empty()) {
+        for y in pb.iter().filter(|y| !y.is_empty()) {
+            if x == y {
+                score = score.max(0.85);
+            } else {
+                score = score.max(similarity(x, y) * 0.8);
+            }
+        }
+    }
+    score
+}
+
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => String::new(),
+    }
+}
+
+fn starts_upper(s: &str) -> bool {
+    s.chars().next().is_some_and(char::is_uppercase)
+}
+
+fn ends_sentence(t: &Tok) -> bool {
+    t.post.contains(['.', '!', '?'])
+}
+
+// ---------------------------------------------------------------- applying
+
+impl Dictionary {
+    /// Turn the engine's text into what Silas types.
+    pub fn apply(&mut self, text: &str, remove_fillers: bool) -> String {
+        let mut toks = tokenize(text);
+        if remove_fillers {
+            toks = self.drop_fillers(toks);
+            toks = drop_stutters(toks);
+        }
+        let mut locked = vec![false; toks.len()];
+        self.apply_corrections(&mut toks, &mut locked);
+        self.snap_terms(&mut toks, &mut locked);
+        render(&toks)
+    }
+
+    fn drop_fillers(&self, toks: Vec<Tok>) -> Vec<Tok> {
+        let fillers: HashSet<String> = self.fillers.iter().map(|f| norm(f)).collect();
+        let mut out: Vec<Tok> = Vec::with_capacity(toks.len());
+        let mut capitalize_next = false;
+        for (i, t) in toks.into_iter().enumerate() {
+            if fillers.contains(&t.key()) && !t.key().is_empty() {
+                // "Um, so" → "So"; "it, um, works" → "it works"; "done um." → "done."
+                let sentence_start = i == 0 || out.last().is_some_and(ends_sentence);
+                if sentence_start && starts_upper(&t.core) {
+                    capitalize_next = true;
+                }
+                if t.post.contains(['.', '!', '?']) {
+                    if let Some(prev) = out.last_mut() {
+                        if !ends_sentence(prev) {
+                            prev.post = prev.post.trim_end_matches(',').to_string()
+                                + t.post.trim_start_matches(',').trim();
+                        }
+                    }
+                } else if let Some(prev) = out.last_mut() {
+                    if prev.post == "," && t.post == "," {
+                        // "it, um, works": keep a single comma? Drop both, speech pauses.
+                        prev.post.clear();
+                    }
+                }
+                continue;
+            }
+            let mut t = t;
+            if capitalize_next {
+                t.core = capitalize(&t.core);
+                capitalize_next = false;
+            }
+            out.push(t);
+        }
+        out
+    }
+
+    fn apply_corrections(&mut self, toks: &mut Vec<Tok>, locked: &mut Vec<bool>) {
+        let mut order: Vec<usize> = (0..self.corrections.len()).collect();
+        order.sort_by_key(|&i| std::cmp::Reverse(norm_phrase(&self.corrections[i].from).len()));
+        for ci in order {
+            let from = norm_phrase(&self.corrections[ci].from);
+            if from.is_empty() {
+                continue;
+            }
+            let to = self.corrections[ci].to.clone();
+            let mut i = 0;
+            while i + from.len() <= toks.len() {
+                let window_matches =
+                    (0..from.len()).all(|k| !locked[i + k] && toks[i + k].key() == from[k]);
+                if !window_matches {
+                    i += 1;
+                    continue;
+                }
+                let sentence_start = i == 0 || ends_sentence(&toks[i - 1]);
+                let replaced = replace_span(toks, locked, i, from.len(), &to, sentence_start);
+                self.corrections[ci].count += 1;
+                i += replaced.max(1);
+            }
+        }
+    }
+
+    fn snap_terms(&mut self, toks: &mut Vec<Tok>, locked: &mut Vec<bool>) {
+        let mut order: Vec<usize> = (0..self.terms.len()).collect();
+        order.sort_by_key(|&i| std::cmp::Reverse(self.terms[i].text.len()));
+        for ti in order {
+            let term = self.terms[ti].text.clone();
+            let target: String = norm_phrase(&term).concat();
+            if target.len() < 3 {
+                continue;
+            }
+            let term_words = norm_phrase(&term).len();
+            let mut i = 0;
+            while i < toks.len() {
+                let mut hit: Option<usize> = None;
+                for w in (1..=(term_words + 1).min(3)).rev() {
+                    if i + w > toks.len() || (i..i + w).any(|k| locked[k]) {
+                        continue;
+                    }
+                    // Don't fuse across a sentence break or a comma.
+                    if (i..i + w - 1).any(|k| !toks[k].post.is_empty()) {
+                        continue;
+                    }
+                    let window: Vec<String> = (i..i + w).map(|k| toks[k].key()).collect();
+                    let joined = window.concat();
+                    if joined.is_empty() {
+                        continue;
+                    }
+                    let exact = joined == target;
+                    let all_common = (i..i + w).all(|k| is_common(&toks[k].core));
+                    let already = (i..i + w)
+                        .map(|k| toks[k].core.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        == term;
+                    if already {
+                        hit = Some(0);
+                        break;
+                    }
+                    // A one-word term that is also an everyday word ("Actor", "Leading") only
+                    // keeps its casing when spoken as such; never recase "the actor".
+                    if exact && !(w == 1 && is_everyday(&toks[i].core)) {
+                        hit = Some(w);
+                        break;
+                    }
+                    // Fuzzy only for words that are not ordinary English; that guard is what
+                    // keeps "better" from becoming "Bezier" and "make sure" from "make Azure".
+                    if all_common || target.len() < 5 || joined.len() < 4 {
+                        continue;
+                    }
+                    let score = sound_alike(&joined, &target);
+                    if score >= 0.82 && (w == term_words || score >= 0.88) {
+                        hit = Some(w);
+                        break;
+                    }
+                }
+                match hit {
+                    Some(0) => {
+                        self.terms[ti].uses += 1;
+                        i += term_words.max(1);
+                    }
+                    Some(w) => {
+                        let sentence_start = i == 0 || ends_sentence(&toks[i - 1]);
+                        let n = replace_span(toks, locked, i, w, &term, sentence_start);
+                        self.terms[ti].uses += 1;
+                        i += n.max(1);
+                    }
+                    None => i += 1,
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ editing
+
+    pub fn add_term(&mut self, text: &str, source: &str) -> bool {
+        let text = text.trim();
+        if text.is_empty() || self.terms.iter().any(|t| t.text.eq_ignore_ascii_case(text)) {
+            return false;
+        }
+        self.terms.push(Term {
+            text: text.into(),
+            source: source.into(),
+            added: now(),
+            uses: 0,
+        });
+        true
+    }
+
+    pub fn remove_term(&mut self, text: &str) {
+        self.terms
+            .retain(|t| !t.text.eq_ignore_ascii_case(text.trim()));
+    }
+
+    pub fn add_correction(&mut self, from: &str, to: &str, source: &str) -> Option<Correction> {
+        let (from, to) = (from.trim(), to.trim());
+        if from.is_empty() || norm_phrase(from) == norm_phrase(to) && from == to {
+            return None;
+        }
+        self.pending.retain(|p| !p.from.eq_ignore_ascii_case(from));
+        if let Some(c) = self
+            .corrections
+            .iter_mut()
+            .find(|c| c.from.eq_ignore_ascii_case(from))
+        {
+            c.to = to.into();
+            return Some(c.clone());
+        }
+        let c = Correction {
+            from: from.into(),
+            to: to.into(),
+            count: 0,
+            source: source.into(),
+            added: now(),
+        };
+        self.corrections.push(c.clone());
+        Some(c)
+    }
+
+    pub fn remove_correction(&mut self, from: &str) {
+        self.corrections
+            .retain(|c| !c.from.eq_ignore_ascii_case(from.trim()));
+    }
+
+    pub fn accept_pending(&mut self, from: &str) {
+        if let Some(p) = self
+            .pending
+            .iter()
+            .find(|p| p.from.eq_ignore_ascii_case(from))
+            .cloned()
+        {
+            self.add_correction(&p.from, &p.to, "learned");
+        }
+    }
+
+    pub fn dismiss_pending(&mut self, from: &str) {
+        self.pending.retain(|p| !p.from.eq_ignore_ascii_case(from));
+    }
+
+    // ------------------------------------------------------------ learning
+
+    /// Learn from the user turning `typed` into `fixed`. `explicit` means they fixed it on
+    /// purpose in Silas's History, so every plausible fix is trusted at once.
+    pub fn learn(&mut self, typed: &str, fixed: &str, explicit: bool) -> LearnResult {
+        let mut result = LearnResult::default();
+        for (from, to) in diff_fixes(typed, fixed) {
+            if to.is_empty() {
+                // A deleted word. Only ever a suggestion; never automatic.
+                if norm_phrase(&from).len() == 1
+                    && !self.fillers.iter().any(|f| norm(f) == norm(&from))
+                {
+                    self.observe_pending(&from, "", &mut result);
+                }
+                continue;
+            }
+            let score = sound_alike(&from, &to);
+            let case_only = norm_phrase(&from) == norm_phrase(&to);
+            let needed = if explicit { 0.3 } else { 0.45 };
+            if !case_only && score < needed {
+                continue; // a rewrite, not a mishearing
+            }
+            // A name (capitalized or with digits) that is not ordinary English is worth keeping as a word.
+            let new_words: Vec<String> = tokenize(&to)
+                .into_iter()
+                .map(|t| t.core)
+                .filter(|w| {
+                    (starts_upper(w) || w.chars().any(|c| c.is_ascii_digit()))
+                        && !is_everyday(w)
+                        && w.len() > 2
+                })
+                .collect();
+            let is_name = !new_words.is_empty();
+            for w in &new_words {
+                if self.add_term(w, "learned") {
+                    result.terms.push(w.clone());
+                }
+            }
+            let trusted = explicit || (is_name && score >= 0.6) || case_only;
+            if trusted {
+                if let Some(c) = self.add_correction(&from, &to, "learned") {
+                    result.learned.push(c);
+                }
+            } else {
+                self.observe_pending(&from, &to, &mut result);
+            }
+        }
+        result.learned.dedup_by(|a, b| a.from == b.from);
+        result
+    }
+
+    fn observe_pending(&mut self, from: &str, to: &str, result: &mut LearnResult) {
+        let existing = self
+            .pending
+            .iter_mut()
+            .find(|p| p.from.eq_ignore_ascii_case(from) && p.to == to);
+        let count = match existing {
+            Some(p) => {
+                p.count += 1;
+                p.last_seen = now();
+                p.count
+            }
+            None => {
+                self.pending.push(Pending {
+                    from: from.into(),
+                    to: to.into(),
+                    count: 1,
+                    last_seen: now(),
+                });
+                1
+            }
+        };
+        if count >= PROMOTE_AFTER && !to.is_empty() {
+            if let Some(c) = self.add_correction(from, to, "learned") {
+                result.learned.push(c);
+            }
+        } else if let Some(p) = self
+            .pending
+            .iter()
+            .find(|p| p.from.eq_ignore_ascii_case(from) && p.to == to)
+        {
+            result.pending.push(p.clone());
+        }
+    }
+
+    /// Merge another dictionary: a Silas export or a TypeWhisper export
+    /// (`[{type: "term"|"correction", original, replacement}]`).
+    pub fn import(&mut self, json: &str) -> anyhow::Result<usize> {
+        let before = self.terms.len() + self.corrections.len();
+        if let Ok(other) = serde_json::from_str::<Dictionary>(json) {
+            for t in other.terms {
+                self.add_term(&t.text, "import");
+            }
+            for c in other.corrections {
+                self.add_correction(&c.from, &c.to, "import");
+            }
+        } else {
+            #[derive(Deserialize)]
+            struct TwEntry {
+                #[serde(rename = "type")]
+                kind: String,
+                original: String,
+                replacement: Option<String>,
+            }
+            let entries: Vec<TwEntry> = serde_json::from_str(json)?;
+            for e in entries {
+                match (e.kind.as_str(), e.replacement.as_deref()) {
+                    ("correction", Some(to)) if !to.is_empty() => {
+                        self.add_correction(&e.original, to, "import");
+                    }
+                    _ => {
+                        self.add_term(&e.original, "import");
+                    }
+                }
+            }
+        }
+        Ok(self.terms.len() + self.corrections.len() - before)
+    }
+}
+
+/// "the the the idea" → "the idea". Two in a row is kept unless it's a short function
+/// word, since "had had" and "that that" are real English.
+fn drop_stutters(toks: Vec<Tok>) -> Vec<Tok> {
+    const STUTTER: &[&str] = &["the", "a", "an", "i", "to", "and", "we", "it", "is", "of", "in", "my", "you", "so", "but", "for"];
+    let mut out: Vec<Tok> = Vec::with_capacity(toks.len());
+    let mut i = 0;
+    while i < toks.len() {
+        let mut j = i + 1;
+        while j < toks.len() && toks[j].key() == toks[i].key() && toks[j - 1].post.is_empty() && !toks[i].key().is_empty() {
+            j += 1;
+        }
+        let run = j - i;
+        if run >= 3 || (run == 2 && STUTTER.contains(&toks[i].key().as_str())) {
+            let mut kept = toks[i].clone();
+            kept.post = toks[j - 1].post.clone();
+            out.push(kept);
+        } else {
+            out.extend_from_slice(&toks[i..j]);
+        }
+        i = j;
+    }
+    out
+}
+
+/// Replace `toks[i..i+n]` with `with`, keeping the outer punctuation. Returns the new length.
+fn replace_span(
+    toks: &mut Vec<Tok>,
+    locked: &mut Vec<bool>,
+    i: usize,
+    n: usize,
+    with: &str,
+    sentence_start: bool,
+) -> usize {
+    let pre = toks[i].pre.clone();
+    let post = toks[i + n - 1].post.clone();
+    let mut new: Vec<Tok> = tokenize(with);
+    if new.is_empty() {
+        toks.drain(i..i + n);
+        locked.drain(i..i + n);
+        return 0;
+    }
+    if sentence_start {
+        new[0].core = capitalize(&new[0].core);
+    }
+    new[0].pre = pre + &new[0].pre;
+    let last = new.len() - 1;
+    new[last].post = new[last].post.clone() + &post;
+    let len = new.len();
+    toks.splice(i..i + n, new);
+    locked.splice(i..i + n, std::iter::repeat_n(true, len));
+    len
+}
+
+/// Word-level diff of what Silas typed against what the user left. Returns small
+/// replacement hunks (1–3 words each side) as plain phrases.
+pub fn diff_fixes(typed: &str, fixed: &str) -> Vec<(String, String)> {
+    let a = tokenize(typed);
+    let b = tokenize(fixed);
+    let (n, m) = (a.len(), b.len());
+    // dp[i][j] = edit distance between a[i..] and b[j..]
+    let mut dp = vec![vec![0usize; m + 1]; n + 1];
+    for i in (0..=n).rev() {
+        for j in (0..=m).rev() {
+            dp[i][j] = if i == n {
+                m - j
+            } else if j == m {
+                n - i
+            } else if a[i].core == b[j].core {
+                dp[i + 1][j + 1]
+            } else {
+                1 + dp[i + 1][j + 1].min(dp[i + 1][j]).min(dp[i][j + 1])
+            };
+        }
+    }
+    let mut hunks = vec![];
+    let (mut i, mut j) = (0, 0);
+    let (mut ha, mut hb): (Vec<String>, Vec<String>) = (vec![], vec![]);
+    let flush =
+        |ha: &mut Vec<String>, hb: &mut Vec<String>, hunks: &mut Vec<(String, String)>| {
+            if !ha.is_empty() && ha.len() <= 3 && hb.len() <= 3 {
+                hunks.push((ha.join(" "), hb.join(" ")));
+            }
+            ha.clear();
+            hb.clear();
+        };
+    while i < n || j < m {
+        if i < n && j < m && a[i].core == b[j].core {
+            flush(&mut ha, &mut hb, &mut hunks);
+            i += 1;
+            j += 1;
+        } else if i < n && j < m && dp[i][j] == 1 + dp[i + 1][j + 1] {
+            ha.push(a[i].core.clone());
+            hb.push(b[j].core.clone());
+            i += 1;
+            j += 1;
+        } else if i < n && (j == m || dp[i][j] == 1 + dp[i + 1][j]) {
+            ha.push(a[i].core.clone());
+            i += 1;
+        } else {
+            hb.push(b[j].core.clone());
+            j += 1;
+        }
+    }
+    flush(&mut ha, &mut hb, &mut hunks);
+    hunks
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dict() -> Dictionary {
+        let mut d = Dictionary::default();
+        for t in [
+            "Claude Code",
+            "Claude",
+            "Parish1",
+            "Chapel1",
+            "Ghostty",
+            "TypeWhisper",
+            "GitHub",
+            "Tailscale",
+            "Omarchy",
+            "BaneyVault",
+        ] {
+            d.add_term(t, "user");
+        }
+        d.add_correction("Paris one", "Parish1", "user");
+        d.add_correction("make Azure", "make sure", "user");
+        d
+    }
+
+    #[test]
+    fn fillers_go_and_sentence_case_stays() {
+        let mut d = dict();
+        assert_eq!(
+            d.apply("Um, so we start. Uh it works, um, fine.", true),
+            "So we start. It works fine."
+        );
+        assert_eq!(d.apply("This is done um.", true), "This is done.");
+        assert_eq!(d.apply("Um", true), "");
+    }
+
+    #[test]
+    fn corrections_apply_with_punctuation() {
+        let mut d = dict();
+        assert_eq!(
+            d.apply("ssh into Paris one, then check.", true),
+            "ssh into Parish1, then check."
+        );
+        assert_eq!(d.apply("Paris one is up.", true), "Parish1 is up.");
+        assert_eq!(
+            d.apply("Please make Azure it runs.", true),
+            "Please make sure it runs."
+        );
+    }
+
+    #[test]
+    fn terms_snap_exact_joins_and_case() {
+        let mut d = dict();
+        assert_eq!(
+            d.apply("open ghostty and type whisper", true),
+            "open Ghostty and TypeWhisper"
+        );
+        assert_eq!(d.apply("push it to github.", true), "push it to GitHub.");
+        assert_eq!(
+            d.apply("restart chapel one now", true),
+            "restart Chapel1 now"
+        );
+        assert_eq!(
+            d.apply("I use clot code daily", true),
+            "I use clot code daily"
+        ); // two common-ish words: no guess
+    }
+
+    #[test]
+    fn terms_snap_fuzzy_rare_words() {
+        let mut d = dict();
+        assert_eq!(d.apply("open Ghosty please", true), "open Ghostty please");
+        assert_eq!(
+            d.apply("install Omarki on it", true),
+            "install Omarchy on it"
+        );
+        assert_eq!(d.apply("check Tail Scale", true), "check Tailscale");
+    }
+
+    #[test]
+    fn common_words_are_never_bent_into_jargon() {
+        let mut d = dict();
+        for t in ["Bezier", "Azure", "Codex", "Faber"] {
+            d.add_term(t, "user");
+        }
+        let s = "make sure the model is faster and better, and the code is clean.";
+        assert_eq!(d.apply(s, true), s);
+    }
+
+    #[test]
+    fn stutters_collapse_but_real_doubles_stay() {
+        let mut d = dict();
+        assert_eq!(d.apply("I don't like the the the idea", true), "I don't like the idea");
+        assert_eq!(d.apply("we we had had enough", true), "we had had enough");
+        assert_eq!(d.apply("no, no, no.", true), "no, no, no.");
+    }
+
+    #[test]
+    fn everyday_words_keep_their_case() {
+        let mut d = dict();
+        d.add_term("Actor", "user");
+        assert_eq!(d.apply("the actor left", true), "the actor left");
+        assert_eq!(d.apply("ask claude", true), "ask Claude");
+    }
+
+    #[test]
+    fn diff_finds_small_fixes() {
+        let f = diff_fixes(
+            "ssh into Paris one and run it",
+            "ssh into Parish1 and run it",
+        );
+        assert_eq!(f, vec![("Paris one".to_string(), "Parish1".to_string())]);
+        let f = diff_fixes("I love clot code a lot", "I love Claude Code a lot");
+        assert_eq!(
+            f,
+            vec![("clot code".to_string(), "Claude Code".to_string())]
+        );
+        assert!(diff_fixes("same text", "same text").is_empty());
+    }
+
+    #[test]
+    fn learning_names_is_immediate_and_words_need_two() {
+        let mut d = Dictionary::default();
+        let r = d.learn("ask Magnet to run it", "ask Magnus to run it", false);
+        // "Magnus" is not common English and is capitalized: trusted at once.
+        assert_eq!(r.learned.len(), 1, "{r:?}");
+        assert_eq!(d.apply("ask Magnet now", true), "ask Magnus now");
+
+        let r = d.learn("the bezier works", "the better works", false);
+        assert!(r.learned.is_empty() && r.pending.len() == 1, "{r:?}");
+        let r = d.learn("so bezier now", "so better now", false);
+        assert_eq!(r.learned.len(), 1, "{r:?}");
+        assert_eq!(d.apply("it is bezier", true), "it is better");
+    }
+
+    #[test]
+    fn rewrites_are_not_learned() {
+        let mut d = Dictionary::default();
+        let r = d.learn("send the report today", "send the invoice today", false);
+        assert!(r.learned.is_empty() && r.pending.is_empty(), "{r:?}");
+    }
+
+    #[test]
+    fn explicit_fixes_are_trusted() {
+        let mut d = Dictionary::default();
+        let r = d.learn("open the gh repo", "open the GitHub repo", true);
+        assert!(r.learned.iter().any(|c| c.to == "GitHub"), "{r:?}");
+    }
+
+    #[test]
+    fn imports_typewhisper_export() {
+        let mut d = Dictionary::default();
+        let json = r#"[{"type":"term","original":"Ghostty","replacement":""},{"type":"correction","original":"Paris one","replacement":"Parish1"}]"#;
+        assert_eq!(d.import(json).unwrap(), 2);
+        assert_eq!(d.apply("Paris one", true), "Parish1");
+    }
+}

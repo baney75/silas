@@ -1,0 +1,4 @@
+# Lets the logged-in user's Silas read the keyboard (for the hold-to-talk key)
+# and type through uinput. uaccess rules must sort before 73-seat-late.rules.
+KERNEL=="uinput", TAG+="uaccess"
+SUBSYSTEM=="input", KERNEL=="event*", TAG+="uaccess"
