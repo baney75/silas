@@ -114,6 +114,14 @@ impl Core {
             return;
         }
         let (status, _) = self.status();
+        if ok {
+            // The user just flipped the switch in System Settings; bring them back to Silas.
+            if let Some(w) = self.app.get_webview_window("main") {
+                if w.is_visible().unwrap_or(false) {
+                    let _ = w.set_focus();
+                }
+            }
+        }
         if ok && status == Status::Error && self.active_model().is_some() {
             self.set_status(Status::Ready, None);
         } else if !ok && status == Status::Ready {

@@ -258,6 +258,11 @@ pub fn open_permission(kind: String) {
 }
 
 #[tauri::command]
+pub fn reset_accessibility() {
+    permissions::reset_accessibility();
+}
+
+#[tauri::command]
 pub fn list_microphones() -> Vec<String> {
     audio::microphones()
 }

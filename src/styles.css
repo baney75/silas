@@ -1715,6 +1715,26 @@ button {
   font-size: 13px;
   color: var(--text-3);
 }
+.perm.later {
+  opacity: 0.55;
+}
+.perm .btn[disabled] {
+  cursor: default;
+}
+.perm-text .perm-fix {
+  margin-top: 6px;
+  color: var(--text-2);
+}
+.linklike {
+  font: inherit;
+  color: var(--gold-ink);
+  background: none;
+  border: 0;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
 
 .onb-model {
   width: 100%;

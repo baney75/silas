@@ -4,7 +4,7 @@ import { mountDictionary } from "./dictionary";
 import { mountHistory } from "./history";
 import { mountHome } from "./home";
 import { mountModels } from "./models";
-import { mountOnboarding } from "./onboarding";
+import { mountOnboarding, needsAccess } from "./onboarding";
 import { mountSettings } from "./settings";
 import {
   HISTORY_LIMIT,
@@ -52,8 +52,9 @@ async function boot() {
   document.documentElement.dataset.platform = store.state.platform;
   if (!inTauri) document.documentElement.dataset.preview = "true";
   wireEvents();
-  if (store.settings.onboarded) shell();
-  else onboarding();
+  if (!store.settings.onboarded) onboarding();
+  else if (needsAccess()) onboarding("permissions");
+  else shell();
 }
 
 function wireEvents() {
@@ -99,15 +100,19 @@ function wireEvents() {
   window.addEventListener("focus", () => void refreshState());
 }
 
-function onboarding() {
+function onboarding(start?: "permissions") {
   unmount?.();
   const root = h("div", { class: "onb-root" });
   clear(app, root);
-  unmount = mountOnboarding(root, () => {
-    unmount?.();
-    unmount = null;
-    shell();
-  });
+  unmount = mountOnboarding(
+    root,
+    () => {
+      unmount?.();
+      unmount = null;
+      shell();
+    },
+    { start },
+  );
 }
 
 function shell() {

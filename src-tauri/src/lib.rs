@@ -147,6 +147,7 @@ pub fn run() {
             commands::toggle_recording,
             commands::capture_hotkey,
             commands::open_permission,
+            commands::reset_accessibility,
             commands::list_microphones,
             commands::show_main,
             commands::check_update,

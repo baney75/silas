@@ -203,6 +203,8 @@ export const api = {
   toggleRecording: () => call<null>("toggle_recording"),
   captureHotkey: () => call<string>("capture_hotkey"),
   openPermission: (kind: PermissionKind) => call<null>("open_permission", { kind }),
+  /** macOS: clear Silas's Accessibility entry and ask again (fixes a stale grant). */
+  resetAccessibility: () => call<null>("reset_accessibility"),
   listMicrophones: () => call<string[]>("list_microphones"),
   showMain: () => call<null>("show_main"),
   checkUpdate: () => call<UpdateInfo | null>("check_update"),

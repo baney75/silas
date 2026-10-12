@@ -5,10 +5,21 @@ import { clear, h, icon, keycap, logo } from "./ui";
 
 type Step = "welcome" | "permissions" | "model" | "try";
 
-export function mountOnboarding(root: HTMLElement, onDone: () => void): () => void {
+/** Mac and Linux need the hotkey listener; without access Silas can't hear its key. */
+export function needsAccess(): boolean {
+  const s = store.state;
+  if (s.platform === "windows") return false;
+  return s.permissions.accessibility !== "granted" || (s.platform === "macos" && s.permissions.microphone === "denied");
+}
+
+export function mountOnboarding(root: HTMLElement, onDone: () => void, opts: { start?: Step } = {}): () => void {
   const platform = store.state.platform;
-  const steps: Step[] = platform === "windows" ? ["welcome", "model", "try"] : ["welcome", "permissions", "model", "try"];
+  // The model downloads in the background from the first screen, so it needs no step of its own.
+  const steps: Step[] = opts.start === "permissions" ? ["permissions"] : platform === "windows" ? ["welcome", "try"] : ["welcome", "permissions", "try"];
+  const repair = opts.start === "permissions";
   let index = 0;
+  let asked: Record<string, number> = {};
+  let advancing = 0;
   let poll = 0;
   let unsub: (() => void) | null = null;
   let autoSelected = false;
@@ -54,6 +65,8 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void): () => vo
 
   function go(i: number) {
     stopLive();
+    window.clearTimeout(advancing);
+    advancing = 0;
     index = i;
     draw();
     requestAnimationFrame(() => (card.querySelector("[data-autofocus]") as HTMLElement | null)?.focus());
@@ -83,55 +96,128 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void): () => vo
     ];
   }
 
-  function permRow(title: string, why: string, state: PermissionState, kind: "microphone" | "accessibility" | "input"): HTMLElement {
+  function permRow(
+    title: string,
+    why: string,
+    state: PermissionState,
+    kind: "microphone" | "accessibility" | "input",
+    enabled: boolean,
+  ): HTMLElement {
     const granted = state === "granted";
+    const waiting = !granted && asked[kind] !== undefined;
+    const slow = waiting && Date.now() - asked[kind] > 9000;
+    const hint =
+      kind === "accessibility"
+        ? "In the list that opened, turn on Silas. If macOS asks, enter your password. Silas comes back here by itself."
+        : "Click Allow in the macOS prompt. If no prompt appears, turn on Silas in the Microphone list that opened.";
+    const label = state === "denied" && kind === "microphone" ? "Open Settings" : "Allow";
     return h(
       "div",
-      { class: `perm${granted ? " ok" : ""}` },
+      { class: `perm${granted ? " ok" : ""}${enabled || granted ? "" : " later"}` },
       h("span", { class: "perm-icon" }, icon(kind === "microphone" ? "mic" : "keyboard", 20)),
-      h("div", { class: "perm-text" }, h("strong", null, title), h("p", null, why)),
+      h(
+        "div",
+        { class: "perm-text" },
+        h("strong", null, title),
+        h("p", null, waiting ? hint : why),
+        slow && kind === "accessibility"
+          ? h(
+              "p",
+              { class: "perm-fix" },
+              "Already switched on? macOS sometimes keeps an old entry. ",
+              h(
+                "button",
+                {
+                  class: "linklike",
+                  type: "button",
+                  onclick: async () => {
+                    asked[kind] = Date.now();
+                    await api.resetAccessibility();
+                    draw();
+                  },
+                },
+                "Reset it and ask again",
+              ),
+            )
+          : null,
+      ),
       granted
         ? h("span", { class: "state-pill active" }, icon("check", 14), "Allowed")
-        : h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: () => void api.openPermission(kind) }, "Open Settings"),
+        : waiting
+          ? h("span", { class: "state-pill" }, h("span", { class: "spinner sm" }), "Waiting")
+          : h(
+              "button",
+              {
+                class: `btn ${enabled ? "btn-primary" : "btn-ghost"} btn-sm`,
+                type: "button",
+                disabled: enabled ? null : true,
+                "data-autofocus": enabled ? true : null,
+                onclick: async () => {
+                  asked[kind] = Date.now();
+                  draw();
+                  await api.openPermission(kind);
+                },
+              },
+              label,
+            ),
     );
   }
 
   function permissions(): HTMLElement[] {
     const p = store.state.permissions;
     if (!poll) {
-      poll = window.setInterval(() => void refreshState(), 1500);
+      poll = window.setInterval(() => {
+        void refreshState();
+        draw(); // refreshes the "already switched on?" hint
+      }, 1000);
       unsub = subscribe(["state"], draw);
     }
+    const leave = () => (index + 1 < steps.length ? next() : finish());
     if (platform === "linux") {
+      const ok = p.accessibility === "granted";
+      if (ok && !advancing) advancing = window.setTimeout(leave, 700);
       return [
-        h("h1", { class: "onb-title" }, "Let Silas hear your hotkey"),
+        h("h1", { class: "onb-title" }, ok ? "Silas can hear your hotkey" : "Let Silas hear your hotkey"),
         h(
           "p",
           { class: "onb-body" },
-          "On Linux, Silas reads the hotkey straight from your keyboard. The installer adds a rule that lets your user read input devices. If the hotkey doesn't respond, log out and back in once.",
+          ok
+            ? "All set."
+            : "On Linux, Silas reads the hotkey straight from your keyboard. The installer adds a rule for that. If this stays unchecked, log out and back in once.",
         ),
-        h("div", { class: "perm-list" }, permRow("Input access", "So Silas can see when you hold the hotkey and type for you.", p.accessibility, "input")),
-        nav(h("button", { class: "btn btn-primary btn-lg", type: "button", "data-autofocus": true, onclick: next }, p.accessibility === "granted" ? "Continue" : "Continue anyway")),
+        h("div", { class: "perm-list" }, permRow("Keyboard access", "So Silas can see when you hold the hotkey.", p.accessibility, "input", true)),
+        nav(h("button", { class: "btn btn-ghost btn-lg", type: "button", onclick: leave }, ok ? "Continue" : "Continue anyway")),
       ];
     }
-    const all = p.microphone === "granted" && p.accessibility === "granted";
+    const micOk = p.microphone === "granted";
+    const all = micOk && p.accessibility === "granted";
+    if (all && !advancing) advancing = window.setTimeout(leave, 800);
     return [
-      h("h1", { class: "onb-title" }, "Two quick permissions"),
-      h("p", { class: "onb-body" }, "macOS asks you to allow these once. Turn on Silas in each pane, then come back here."),
+      h("h1", { class: "onb-title" }, all ? "You're all set" : repair ? "Silas needs access again" : "Two quick permissions"),
+      h(
+        "p",
+        { class: "onb-body" },
+        all
+          ? "Silas can hear you and type for you."
+          : repair
+            ? "macOS turned off a permission Silas needs, usually after an update. Allow it once more."
+            : "Allow each one when asked. Silas moves on by itself when both are on.",
+      ),
       h(
         "div",
         { class: "perm-list" },
-        permRow("Microphone", "So Silas can hear you. Audio stays on this computer.", p.microphone, "microphone"),
-        permRow("Accessibility", "So Silas can notice your hotkey and type into other apps.", p.accessibility, "accessibility"),
+        permRow("Microphone", "So Silas can hear you. Audio never leaves this computer.", p.microphone, "microphone", true),
+        permRow("Accessibility", "So Silas can notice your hotkey and type into other apps.", p.accessibility, "accessibility", micOk || p.microphone === "denied"),
       ),
-      nav(
-        h(
-          "button",
-          { class: `btn ${all ? "btn-primary" : "btn-ghost"} btn-lg`, type: "button", "data-autofocus": true, onclick: next },
-          all ? "Continue" : "Skip for now",
-        ),
-      ),
+      all
+        ? h("div", { class: "onb-nav" }, h("span"), h("span", { class: "state-pill active" }, icon("check", 14), "Continuing…"))
+        : nav(h("button", { class: "btn btn-ghost", type: "button", onclick: leave }, "Skip for now"), { back: !repair }),
     ];
+  }
+
+  async function finish() {
+    await updateSettings({ onboarded: true });
+    onDone();
   }
 
   function model(): HTMLElement[] {
@@ -159,7 +245,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void): () => vo
   }
 
   function tryIt(): HTMLElement[] {
-    if (!unsub) unsub = subscribe(["state"], updateLive);
+    if (!unsub) unsub = subscribe(["state", "progress", "models"], updateLive);
     const live = h("div", { class: "live", role: "status", "aria-live": "polite" });
     const area = h("textarea", {
       class: "try-area",
@@ -171,7 +257,16 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void): () => vo
     function updateLive() {
       const s = store.state.status;
       live.className = `live live-${s}`;
-      clear(live, h("span", { class: "dot" }), statusText[s]);
+      const m = recommended();
+      const p = m ? store.progress[m.id] : undefined;
+      const pct = p && p.total > 0 ? Math.round((p.downloaded / p.total) * 100) : null;
+      const text =
+        s === "needs_model" || (s === "loading" && p)
+          ? pct === null
+            ? "Getting the voice model…"
+            : `Getting the voice model · ${pct}%. You can try it as soon as this finishes.`
+          : statusText[s];
+      clear(live, h("span", { class: "dot" }), text);
     }
     updateLive();
     return [
@@ -187,10 +282,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void): () => vo
           {
             class: "btn btn-primary btn-lg",
             type: "button",
-            onclick: async () => {
-              await updateSettings({ onboarded: true });
-              onDone();
-            },
+            onclick: () => void finish(),
           },
           "Start using Silas",
         ),
@@ -217,6 +309,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void): () => vo
   void prepareModel();
   requestAnimationFrame(() => (card.querySelector("[data-autofocus]") as HTMLElement | null)?.focus());
   return () => {
+    window.clearTimeout(advancing);
     stopLive();
     unsubBg();
   };

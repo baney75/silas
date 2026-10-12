@@ -121,6 +121,22 @@ pub fn open(kind: &str) {
     let _ = kind;
 }
 
+/// macOS keeps an Accessibility entry tied to the build it saw first. After a re-sign the
+/// switch can look on while the grant no longer applies. Clearing Silas's own entry and
+/// asking again fixes it.
+pub fn reset_accessibility() {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("tccutil")
+            .args(["reset", "Accessibility", "com.baney.silas"])
+            .status();
+        prompt_accessibility();
+        let _ = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .spawn();
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn prompt_accessibility() {
     use core_foundation::base::TCFType;

@@ -409,6 +409,9 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
       window.setTimeout(() => (state.permissions[kind] = "granted"), 2500);
       return null as T;
     }
+    case "reset_accessibility":
+      window.setTimeout(() => (state.permissions.accessibility = "granted"), 2500);
+      return null as T;
     case "list_microphones":
       return out(["MacBook Pro Microphone", "Shure MV7+", "AirPods Pro"]);
     case "show_main":
