@@ -34,13 +34,15 @@ sed -i '' -E "1,10s/^version = \".*\"/version = \"$version\"/" src-tauri/Cargo.t
 
 export TAURI_SIGNING_PRIVATE_KEY="$(cat "$key")" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" APPLE_SIGNING_IDENTITY="$identity"
 rustup target add aarch64-apple-darwin >/dev/null
-bunx tauri build --target aarch64-apple-darwin --bundles app,dmg
+bunx tauri build --target aarch64-apple-darwin --bundles app
 
 out=src-tauri/target/aarch64-apple-darwin/release/bundle
 dir=$(mktemp -d)
 cp "$out/macos/Silas.app.tar.gz" "$dir/Silas_aarch64.app.tar.gz"
 cp "$out/macos/Silas.app.tar.gz.sig" "$dir/Silas_aarch64.app.tar.gz.sig"
-cp "$(ls "$out"/dmg/*.dmg | head -1)" "$dir/Silas_aarch64.dmg"
+# A plain disk image: Tauri's styled DMG drives Finder through AppleScript, which fails headless.
+mkdir -p "$dir/dmg" && cp -R "$out/macos/Silas.app" "$dir/dmg/" && ln -s /Applications "$dir/dmg/Applications"
+hdiutil create -quiet -volname Silas -srcfolder "$dir/dmg" -ov -format UDZO "$dir/Silas_aarch64.dmg"
 url="https://github.com/baney75/silas/releases/download/v$version/Silas_aarch64.app.tar.gz"
 jq -n --arg v "$version" --arg n "$notes" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg s "$(cat "$dir/Silas_aarch64.app.tar.gz.sig")" --arg u "$url" \
   '{version:$v, notes:$n, pub_date:$d, platforms:{"darwin-aarch64":{signature:$s,url:$u}}}' > "$dir/latest.json"
