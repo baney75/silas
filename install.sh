@@ -9,21 +9,32 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
 case "$(uname -s)" in
 Darwin)
-  url="$REPO/latest/download/Silas_universal.app.tar.gz"
-  [ "${SILAS_CHANNEL:-stable}" = nightly ] && url="$REPO/download/nightly/Silas_universal.app.tar.gz"
+  if [ "${SILAS_CHANNEL:-stable}" = nightly ]; then
+    url="$REPO/download/nightly/Silas_universal.app.tar.gz"
+  else
+    url="$REPO/latest/download/Silas_universal.app.tar.gz"
+  fi
   say "Downloading Silas for macOS"
-  curl -fL# "$url" -o "$tmp/silas.tar.gz"
+  curl -fL# "$url" -o "$tmp/silas.tar.gz" || { echo "Could not download Silas from $url" >&2; exit 1; }
   tar -xzf "$tmp/silas.tar.gz" -C "$tmp"
+  [ -d "$tmp/Silas.app" ] || { echo "The download did not contain Silas.app" >&2; exit 1; }
   osascript -e 'quit app "Silas"' >/dev/null 2>&1 || true
-  rm -rf /Applications/Silas.app
-  mv "$tmp/Silas.app" /Applications/Silas.app
-  xattr -dr com.apple.quarantine /Applications/Silas.app 2>/dev/null || true
-  say "Installed to /Applications. Opening Silas…"
-  open /Applications/Silas.app
+  dest=/Applications
+  [ -w "$dest" ] || dest="$HOME/Applications"
+  mkdir -p "$dest"
+  # Stage beside the old copy, then swap, so a failure never leaves half an app.
+  rm -rf "$dest/Silas.app.new"
+  mv "$tmp/Silas.app" "$dest/Silas.app.new"
+  rm -rf "$dest/Silas.app"
+  mv "$dest/Silas.app.new" "$dest/Silas.app"
+  xattr -dr com.apple.quarantine "$dest/Silas.app" 2>/dev/null || true
+  say "Installed to $dest. Opening Silas…"
+  open "$dest/Silas.app"
   ;;
 Linux)
   api="https://api.github.com/repos/baney75/silas/releases/tags/nightly"
-  assets=$(curl -fsSL "$api" | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4)
+  assets=$(curl -fsSL "$api" | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4) || true
+  [ -n "$assets" ] || { echo "The nightly release is being rebuilt. Try again in a few minutes." >&2; exit 1; }
   arch=$(uname -m); [ "$arch" = x86_64 ] || { echo "Silas builds are x86_64 only for now" >&2; exit 1; }
   if command -v apt-get >/dev/null 2>&1; then
     deb=$(echo "$assets" | grep '\.deb$' | head -1)

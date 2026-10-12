@@ -2,6 +2,7 @@ pub mod audio;
 pub mod commands;
 pub mod core;
 pub mod dictionary;
+pub mod focus;
 pub mod keys;
 pub mod models;
 pub mod permissions;

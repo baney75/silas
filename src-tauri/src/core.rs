@@ -42,6 +42,10 @@ pub struct Core {
     watch: Mutex<Option<EditWatch>>,
     /// True while Silas is typing, so its own keystrokes are not read as the user's.
     pub typing: AtomicBool,
+    /// The user pressed keys while Silas was typing, so its copy of the text is off.
+    typed_over: AtomicBool,
+    /// Bumped per recording so the length limit only stops the one it was set for.
+    recording_gen: std::sync::atomic::AtomicU64,
     pub capture: Mutex<Option<std::sync::mpsc::Sender<String>>>,
     pub last_activity: Mutex<Instant>,
     downloading: Mutex<Vec<String>>,
@@ -49,9 +53,15 @@ pub struct Core {
 
 pub type Shared = Arc<Core>;
 
+const MAX_RECORDING: Duration = Duration::from_secs(300);
+
 impl Core {
     pub fn new(app: AppHandle) -> Shared {
-        let settings: Settings = store::load("settings.json");
+        let mut settings: Settings = store::load("settings.json");
+        // A fresh nightly install stays on nightly instead of jumping to stable.
+        if !store::exists("settings.json") && app.package_info().version.pre.as_str().starts_with("nightly") {
+            settings.update_channel = "nightly".into();
+        }
         let trigger = Trigger::parse(&settings.hotkey)
             .or_else(|| Trigger::parse(store::default_hotkey()))
             .expect("default hotkey parses");
@@ -68,6 +78,8 @@ impl Core {
             machine: Mutex::new(machine),
             watch: Mutex::new(None),
             typing: AtomicBool::new(false),
+            typed_over: AtomicBool::new(false),
+            recording_gen: std::sync::atomic::AtomicU64::new(0),
             capture: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
             downloading: Mutex::new(vec![]),
@@ -147,6 +159,10 @@ impl Core {
                 Ok(mut engine) => {
                     // Warm up so the first real dictation is as fast as the rest.
                     let _ = engine.transcribe(&vec![0.0; 16_000], "en");
+                    // Another model may have been chosen while this one loaded.
+                    if me.settings.lock().model != id {
+                        return;
+                    }
                     *me.engine.lock() = Some((id.clone(), engine));
                     log::info!("loaded {id} in {:.1}s", t.elapsed().as_secs_f32());
                     me.set_status(Status::Ready, None);
@@ -204,13 +220,17 @@ impl Core {
     /// Every key event from the global listener lands here.
     pub fn on_key(self: &Shared, ev: &handy_keys::KeyEvent) {
         if self.typing.load(Ordering::Relaxed) {
+            if ev.is_key_down && ev.key.is_some() {
+                self.typed_over.store(true, Ordering::Relaxed);
+            }
             return;
         }
-        if let Some(tx) = self.capture.lock().take() {
+        // Take the sender in its own statement: an `if let` would keep the lock held.
+        let capture = self.capture.lock().take();
+        if let Some(tx) = capture {
             match crate::keys::describe(ev) {
                 Some(name) => {
                     let _ = tx.send(name);
-                    return;
                 }
                 None => *self.capture.lock() = Some(tx),
             }
@@ -236,36 +256,44 @@ impl Core {
     fn feed_watch(self: &Shared, ev: &handy_keys::KeyEvent, now: Instant) {
         let mut guard = self.watch.lock();
         let Some(w) = guard.as_mut() else { return };
+        let focus = w.focus;
         if let Watch::Done(edit) = w.on_event(ev, now) {
             *guard = None;
             drop(guard);
-            if let Some((typed, fixed)) = edit {
-                self.learn_from_edit(&typed, &fixed, false, None);
-            }
+            self.finish_watch(focus, edit);
         }
     }
 
     /// Called on a timer so an edit is learned even if the user never presses Return.
     pub fn tick(self: &Shared) {
         let mut guard = self.watch.lock();
+        let focus = guard.as_ref().and_then(|w| w.focus);
         if let Some(Watch::Done(edit)) = guard.as_ref().and_then(|w| w.idle(Instant::now())) {
             *guard = None;
             drop(guard);
-            if let Some((typed, fixed)) = edit {
-                self.learn_from_edit(&typed, &fixed, false, None);
-            }
+            self.finish_watch(focus, edit);
         }
+    }
+
+    /// Learn the edit only if the same app still has focus: the keys may have gone
+    /// somewhere else after a click we can't see.
+    fn finish_watch(self: &Shared, focus: Option<u64>, edit: Option<(String, String)>) {
+        let Some((typed, fixed)) = edit else { return };
+        if focus.is_some() && crate::focus::focused() != focus {
+            log::info!("focus moved during the edit; not learning from it");
+            return;
+        }
+        self.learn_from_edit(&typed, &fixed, false, None);
     }
 
     // ------------------------------------------------------------ dictation
 
     fn start_recording(self: &Shared) {
         // A new dictation ends any edit we were following.
-        if let Some(w) = self.watch.lock().take() {
-            if let Some(Watch::Done(Some((typed, fixed)))) =
-                w.idle(Instant::now() + Duration::from_secs(3600))
-            {
-                self.learn_from_edit(&typed, &fixed, false, None);
+        let watching = self.watch.lock().take();
+        if let Some(w) = watching {
+            if let Some(Watch::Done(edit)) = w.idle(Instant::now() + Duration::from_secs(3600)) {
+                self.finish_watch(w.focus, edit);
             }
         }
         match self.status().0 {
@@ -287,8 +315,18 @@ impl Core {
         }) {
             Ok(r) => {
                 *self.recording.lock() = Some((r, Instant::now()));
+                let gen = self.recording_gen.fetch_add(1, Ordering::Relaxed) + 1;
                 self.cue("start");
                 self.set_status(Status::Recording, None);
+                // Hands-free mode left on by mistake would grow without end; stop at 5 minutes.
+                let me = self.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(MAX_RECORDING);
+                    if me.recording_gen.load(Ordering::Relaxed) == gen && me.recording.lock().is_some() {
+                        me.machine.lock().reset();
+                        me.finish_recording();
+                    }
+                });
             }
             Err(e) => {
                 self.machine.lock().reset();
@@ -299,14 +337,17 @@ impl Core {
     }
 
     fn cancel_recording(self: &Shared) {
-        if let Some((r, _)) = self.recording.lock().take() {
+        // Release the lock before set_status, which waits on the main thread for the tray.
+        let recording = self.recording.lock().take();
+        if let Some((r, _)) = recording {
             drop(r);
             self.set_status(Status::Ready, None);
         }
     }
 
     fn finish_recording(self: &Shared) {
-        let Some((rec, started)) = self.recording.lock().take() else {
+        let recording = self.recording.lock().take();
+        let Some((rec, started)) = recording else {
             return;
         };
         self.cue("stop");
@@ -347,6 +388,7 @@ impl Core {
             }
             let latency = released.elapsed().as_millis() as u64;
             me.set_status(Status::Typing, None);
+            me.typed_over.store(false, Ordering::Relaxed);
             me.typing.store(true, Ordering::Relaxed);
             let typed = typer::type_text(
                 &text,
@@ -361,8 +403,9 @@ impl Core {
                 me.recover_soon();
                 return;
             }
-            if s.learn_from_edits {
-                *me.watch.lock() = Some(EditWatch::new(&text, Instant::now()));
+            let typed_over = me.typed_over.load(Ordering::Relaxed);
+            if s.learn_from_edits && !typed_over && crate::focus::us_layout() {
+                *me.watch.lock() = Some(EditWatch::new(&text, Instant::now(), crate::focus::focused()));
             }
             let item = HistoryItem {
                 id: Utc::now().timestamp_millis().to_string(),

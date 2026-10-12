@@ -14,6 +14,11 @@ use crate::core::{Shared, Status};
 
 const REPO: &str = "https://github.com/baney75/silas/releases";
 
+/// Each channel has its own signing key. The stable key never leaves the release Mac,
+/// so nothing CI signs can ever install on a stable user's machine.
+const STABLE_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI0OUZBOTBFNEEyQUQzNTgKUldSWTB5cEtEcW1mdE5FYXBNV1AyT3NGaXdzVXFvUHRPeGZlZHFiWE9mNXhZTUtEZTJWZGhicWMK";
+const NIGHTLY_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ1QTkyOTlGNzM0MEJGMTIKUldRU3YwQnpueW1wMVUvOEtteWFXL0xyUys3L1JOSmhZbkFqNEtUVTh5RjdwWGZMdWV1VzA4cGcK";
+
 pub fn endpoint(channel: &str) -> String {
     match channel {
         "stable" => format!("{REPO}/latest/download/latest.json"),
@@ -42,6 +47,7 @@ async fn find(app: &AppHandle) -> anyhow::Result<Option<(tauri_plugin_updater::U
     let updater = app
         .updater_builder()
         .endpoints(vec![url])?
+        .pubkey(if channel == "stable" { STABLE_PUBKEY } else { NIGHTLY_PUBKEY })
         // Moving from nightly back to stable can mean a lower version number; allow it.
         .version_comparator(|current, remote| remote.version != current)
         .timeout(Duration::from_secs(30))

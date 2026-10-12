@@ -1,59 +1,67 @@
 name: Nightly
 # Rebuilds the rolling `nightly` pre-release for macOS, Windows and Linux.
-# The stable channel is macOS only and is released from Donovan's Mac (scripts/release-stable.sh).
+# The stable channel is macOS only and is released from Donovan's Mac (scripts/release-stable.sh)
+# with a different signing key, so nothing built here can reach stable users.
+#
+# Builds upload into a private draft. Only when every platform succeeded does the last job
+# write one latest.json and swap the draft in as `nightly`, so users never see a half-built release.
 on:
   schedule:
     - cron: "0 7 * * *"
   workflow_dispatch:
 permissions:
   contents: write
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+env:
+  REPO: ${{ github.repository }}
+  GH_TOKEN: ${{ github.token }}
 jobs:
   prepare:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
       skip: ${{ steps.v.outputs.skip }}
+      draft: ${{ steps.v.outputs.draft }}
     steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - id: v
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           base=$(jq -r .version src-tauri/tauri.conf.json)
           IFS=. read -r ma mi pa <<< "$base"
           version="$ma.$mi.$((pa+1))-nightly.$(date -u +%Y%m%d%H%M)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          built=$(gh release view nightly --json targetCommitish -q .targetCommitish 2>/dev/null || true)
+          built=$(gh release view nightly -R "$REPO" --json targetCommitish -q .targetCommitish 2>/dev/null || true)
           if [ "${{ github.event_name }}" = "schedule" ] && [ "$built" = "$GITHUB_SHA" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           echo "skip=false" >> "$GITHUB_OUTPUT"
-          gh release delete nightly --cleanup-tag --yes 2>/dev/null || true
-          gh release create nightly --prerelease --target "$GITHUB_SHA" \
-            --title "Silas Nightly $version" \
-            --notes "Built from $GITHUB_SHA. Nightly builds are untested on Windows and Linux."
+          id=$(gh api "repos/$REPO/releases" -f tag_name="nightly-build-$GITHUB_RUN_ID" -f target_commitish="$GITHUB_SHA" \
+            -f name="Silas Nightly $version" -F draft=true -F prerelease=true -q .id)
+          echo "draft=$id" >> "$GITHUB_OUTPUT"
+
   build:
     needs: prepare
     if: needs.prepare.outputs.skip != 'true'
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - os: macos-14
-            args: --target universal-apple-darwin
+            args: --target universal-apple-darwin --bundles app,dmg
           - os: ubuntu-22.04
             args: --bundles deb,rpm,appimage
           - os: windows-latest
             args: --bundles nsis
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           targets: ${{ matrix.os == 'macos-14' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with: { workspaces: src-tauri }
       - name: Linux packages
         if: runner.os == 'Linux'
@@ -65,15 +73,79 @@ jobs:
         shell: bash
         run: |
           jq --arg v "${{ needs.prepare.outputs.version }}" '.version = $v' src-tauri/tauri.conf.json > t.json && mv t.json src-tauri/tauri.conf.json
-      - uses: tauri-apps/tauri-action@v0
+      - name: Build
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
           APPLE_SIGNING_IDENTITY: "-"
-        with:
-          tagName: nightly
-          releaseName: "Silas Nightly ${{ needs.prepare.outputs.version }}"
-          prerelease: true
-          includeUpdaterJson: true
-          args: ${{ matrix.args }}
+        run: bunx tauri build ${{ matrix.args }}
+      - name: Upload to the draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          bundle=$(find src-tauri/target -type d -path '*release/bundle' | head -1)
+          case "${{ runner.os }}" in
+            macOS)
+              cp "$bundle/macos/Silas.app.tar.gz" out/Silas_universal.app.tar.gz
+              cp "$bundle/macos/Silas.app.tar.gz.sig" out/Silas_universal.app.tar.gz.sig
+              cp "$bundle"/dmg/*.dmg out/Silas_universal.dmg ;;
+            Linux)
+              cp "$bundle"/deb/*.deb* "$bundle"/rpm/*.rpm* "$bundle"/appimage/*.AppImage* out/ ;;
+            Windows)
+              cp "$bundle"/nsis/*-setup.exe* out/ ;;
+          esac
+          ls -la out
+          for f in out/*; do
+            name=$(basename "$f")
+            curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/octet-stream" \
+              --data-binary @"$f" \
+              "https://uploads.github.com/repos/$REPO/releases/${{ needs.prepare.outputs.draft }}/assets?name=$name" > /dev/null
+          done
+
+  publish:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write latest.json and swap the draft in as nightly
+        run: |
+          set -euo pipefail
+          id=${{ needs.prepare.outputs.draft }}
+          base="https://github.com/$REPO/releases/download/nightly"
+          gh api "repos/$REPO/releases/$id/assets" --paginate -q '.[] | [.name, .url] | @tsv' > assets.tsv
+          platforms='{}'
+          add() { # platform-key asset-name
+            sig_url=$(awk -F'\t' -v n="$2.sig" '$1==n {print $2}' assets.tsv)
+            [ -n "$sig_url" ] || return 0
+            sig=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" "$sig_url")
+            platforms=$(jq --arg k "$1" --arg s "$sig" --arg u "$base/$2" '. + {($k): {signature: $s, url: $u}}' <<< "$platforms")
+          }
+          while IFS=$'\t' read -r name _; do
+            case "$name" in
+              Silas_universal.app.tar.gz) add darwin-aarch64 "$name"; add darwin-x86_64 "$name" ;;
+              *.AppImage) add linux-x86_64 "$name"; add linux-x86_64-appimage "$name" ;;
+              *.deb) add linux-x86_64-deb "$name" ;;
+              *.rpm) add linux-x86_64-rpm "$name" ;;
+              *-setup.exe) add windows-x86_64 "$name"; add windows-x86_64-nsis "$name" ;;
+            esac
+          done < assets.tsv
+          for k in darwin-aarch64 linux-x86_64 windows-x86_64; do
+            jq -e --arg k "$k" 'has($k)' <<< "$platforms" > /dev/null || { echo "missing $k" >&2; exit 1; }
+          done
+          jq -n --arg v "${{ needs.prepare.outputs.version }}" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson p "$platforms" \
+            '{version: $v, notes: "Nightly build. Untested on Windows and Linux.", pub_date: $d, platforms: $p}' > latest.json
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" --data-binary @latest.json \
+            "https://uploads.github.com/repos/$REPO/releases/$id/assets?name=latest.json" > /dev/null
+          gh release delete nightly -R "$REPO" --cleanup-tag --yes 2>/dev/null || true
+          gh api -X PATCH "repos/$REPO/releases/$id" -f tag_name=nightly -f target_commitish="$GITHUB_SHA" \
+            -F draft=false -F prerelease=true -f make_latest=false -f name="Silas Nightly ${{ needs.prepare.outputs.version }}" \
+            -f body="Built from $GITHUB_SHA. Nightly builds are untested on Windows and Linux." > /dev/null
+
+  cleanup:
+    needs: [prepare, build, publish]
+    if: always() && needs.prepare.outputs.draft != '' && (needs.build.result != 'success' || needs.publish.result != 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh api -X DELETE "repos/$REPO/releases/${{ needs.prepare.outputs.draft }}" || true

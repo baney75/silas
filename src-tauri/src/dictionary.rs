@@ -524,12 +524,19 @@ impl Dictionary {
                 })
                 .collect();
             let is_name = !new_words.is_empty();
+            // Ordinary words ("office", "apple", "noon") are only ever rewritten into a name.
+            // An edit that turns one ordinary word into another is a change of mind or a
+            // typo, and learning it would break every later sentence that uses the word.
+            let everyday_from = tokenize(&from).iter().all(|t| is_everyday(&t.core));
+            if everyday_from && !is_name && !explicit {
+                continue;
+            }
             for w in &new_words {
                 if self.add_term(w, "learned") {
                     result.terms.push(w.clone());
                 }
             }
-            let trusted = explicit || (is_name && score >= 0.6) || case_only;
+            let trusted = (explicit && (is_name || !everyday_from)) || (is_name && score >= 0.6);
             if trusted {
                 if let Some(c) = self.add_correction(&from, &to, "learned") {
                     result.learned.push(c);
@@ -851,6 +858,24 @@ mod tests {
         let r = d.learn("so bezier now", "so better now", false);
         assert_eq!(r.learned.len(), 1, "{r:?}");
         assert_eq!(d.apply("it is bezier", true), "it is better");
+    }
+
+    #[test]
+    fn everyday_words_are_never_learned_from_edits() {
+        let mut d = Dictionary::default();
+        d.learn("an apple a day", "an Apple a day", false);
+        assert_eq!(d.apply("I ate an apple today", true), "I ate an apple today");
+        for _ in 0..3 {
+            d.learn("back at the office", "back at the officer", false);
+            d.learn("lunch at noon", "lunch at noonn", false);
+        }
+        assert_eq!(d.apply("back at the office at noon", true), "back at the office at noon");
+        // Taught on purpose in History, an ordinary word still needs a second sighting.
+        let r = d.learn("call me at noon", "call me at nine", true);
+        assert!(r.learned.is_empty(), "{r:?}");
+        // A name is still learned at once.
+        let r = d.learn("ssh into Paris one", "ssh into Parish1", false);
+        assert_eq!(r.learned.len(), 1, "{r:?}");
     }
 
     #[test]

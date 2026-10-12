@@ -5,38 +5,49 @@
 #
 # Stable is macOS only: it is the build Donovan tests. It is signed with the local Apple
 # Development identity, so macOS keeps Silas's Microphone and Accessibility grants across
-# updates (CI nightlies are ad-hoc signed and must be re-granted after each update).
+# updates, and its updates are signed with a stable-only key that never leaves this Mac.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 version="${1:?usage: release-stable.sh <version> [notes]}"
 notes="${2:-Silas $version}"
-key="${TAURI_SIGNING_KEY_FILE:-$HOME/.tauri/silas.key}"
+key="${TAURI_SIGNING_KEY_FILE:-$HOME/.tauri/silas-stable.key}"
 identity="${APPLE_SIGNING_IDENTITY:-$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development|Developer ID Application/ {print $2; exit}')}"
-[ -f "$key" ] || { echo "missing updater key $key" >&2; exit 1; }
+
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must look like 1.2.3" >&2; exit 1; }
+[ -f "$key" ] || { echo "missing stable updater key $key" >&2; exit 1; }
 [ -n "$identity" ] || { echo "no code-signing identity found" >&2; exit 1; }
+[ "$(git branch --show-current)" = main ] || { echo "release from main" >&2; exit 1; }
 [ -z "$(git status --porcelain)" ] || { echo "commit your changes first" >&2; exit 1; }
+git fetch -q origin main --tags
+[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "main is not in sync with origin" >&2; exit 1; }
+! git rev-parse -q --verify "refs/tags/v$version" >/dev/null || { echo "v$version already exists" >&2; exit 1; }
+
+# Put the version files back if anything below fails.
+restore() { git checkout -q -- src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock 2>/dev/null || true; }
+trap 'status=$?; [ $status -eq 0 ] || restore' EXIT
 
 jq --arg v "$version" '.version = $v' src-tauri/tauri.conf.json > /tmp/silas-conf.json && mv /tmp/silas-conf.json src-tauri/tauri.conf.json
-sed -i '' -E "s/^version = \".*\"/version = \"$version\"/" src-tauri/Cargo.toml
-(cd src-tauri && cargo test --lib --quiet)
+sed -i '' -E "1,10s/^version = \".*\"/version = \"$version\"/" src-tauri/Cargo.toml
+(cd src-tauri && cargo test --lib --quiet && cargo clippy --lib --quiet -- -D warnings)
 
 export TAURI_SIGNING_PRIVATE_KEY="$(cat "$key")" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" APPLE_SIGNING_IDENTITY="$identity"
 rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null
 bunx tauri build --target universal-apple-darwin --bundles app,dmg
 
 out=src-tauri/target/universal-apple-darwin/release/bundle
-tarball="$out/macos/Silas.app.tar.gz"
-dmg=$(ls "$out"/dmg/*.dmg | head -1)
-sig=$(cat "$tarball.sig")
+dir=$(mktemp -d)
+cp "$out/macos/Silas.app.tar.gz" "$dir/Silas_universal.app.tar.gz"
+cp "$out/macos/Silas.app.tar.gz.sig" "$dir/Silas_universal.app.tar.gz.sig"
+cp "$(ls "$out"/dmg/*.dmg | head -1)" "$dir/Silas_universal.dmg"
 url="https://github.com/baney75/silas/releases/download/v$version/Silas_universal.app.tar.gz"
-cp "$tarball" "$out/macos/Silas_universal.app.tar.gz"
-jq -n --arg v "$version" --arg n "$notes" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg s "$sig" --arg u "$url" \
-  '{version:$v, notes:$n, pub_date:$d, platforms:{"darwin-aarch64":{signature:$s,url:$u}, "darwin-x86_64":{signature:$s,url:$u}}}' > "$out/latest.json"
+jq -n --arg v "$version" --arg n "$notes" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg s "$(cat "$dir/Silas_universal.app.tar.gz.sig")" --arg u "$url" \
+  '{version:$v, notes:$n, pub_date:$d, platforms:{"darwin-aarch64":{signature:$s,url:$u}, "darwin-x86_64":{signature:$s,url:$u}}}' > "$dir/latest.json"
 
-git commit -qam "Release Silas $version"
-git tag "v$version"
-git push -q origin HEAD "v$version"
-gh release create "v$version" --latest --title "Silas $version" --notes "$notes" \
-  "$dmg#Silas_${version}_universal.dmg" "$out/macos/Silas_universal.app.tar.gz" "$out/latest.json"
+git diff --quiet || git commit -qam "Release Silas $version"
+git push -q origin main
+# The release creates the tag on GitHub, so a failed upload never leaves a bare tag.
+gh release create "v$version" --target "$(git rev-parse HEAD)" --latest --title "Silas $version" --notes "$notes" \
+  "$dir/Silas_universal.dmg" "$dir/Silas_universal.app.tar.gz" "$dir/Silas_universal.app.tar.gz.sig" "$dir/latest.json"
+git fetch -q origin --tags
 echo "Released Silas $version (stable, macOS)."

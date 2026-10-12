@@ -17,7 +17,10 @@ bun run build && (cd src-tauri && cargo test --lib && cargo clippy --lib -- -D w
   new matching rule.
 - Stable releases are macOS only and come from `scripts/release-stable.sh` on Donovan's Mac
   (Apple Development signing keeps macOS permissions across updates). CI builds nightly only.
-- The updater key lives in `~/.tauri/silas.key` and the `TAURI_SIGNING_PRIVATE_KEY` repo
-  secret. Never print it or commit it.
+- Two updater keys. Nightly: `~/.tauri/silas.key`, also the `TAURI_SIGNING_PRIVATE_KEY` repo
+  secret. Stable: `~/.tauri/silas-stable.key`, which never leaves the Mac. `updates.rs` pins each
+  channel to its own public key. Never print, copy or commit either private key.
+- Never call `set_status` (it waits on the main thread for the tray) while holding a lock, and
+  never write `if let Some(x) = self.m.lock().take()`: the guard lives through the body.
 - `[profile.release.build-override]` must stay: thin LTO otherwise breaks proc-macros.
 - Benchmark engines with `cargo run --release --features bench --bin silas-bench -- parakeet <dir> <wav>...`.

@@ -178,9 +178,15 @@ pub const WATCH_IDLE: Duration = Duration::from_secs(12);
 
 pub struct EditWatch {
     pub original: String,
+    /// The app that had focus when Silas typed (see `focus::focused`).
+    pub focus: Option<u64>,
     buffer: String,
     last: Instant,
+    born: Instant,
 }
+
+/// Fixes happen right away; anything later is new writing, not a correction.
+pub const WATCH_MAX: Duration = Duration::from_secs(60);
 
 pub enum Watch {
     Continue,
@@ -189,11 +195,13 @@ pub enum Watch {
 }
 
 impl EditWatch {
-    pub fn new(typed: &str, now: Instant) -> Self {
+    pub fn new(typed: &str, now: Instant, focus: Option<u64>) -> Self {
         Self {
             original: typed.to_string(),
+            focus,
             buffer: typed.to_string(),
             last: now,
+            born: now,
         }
     }
 
@@ -207,7 +215,7 @@ impl EditWatch {
     }
 
     pub fn idle(&self, now: Instant) -> Option<Watch> {
-        (now.duration_since(self.last) > WATCH_IDLE).then(|| self.done())
+        (now.duration_since(self.last) > WATCH_IDLE || now.duration_since(self.born) > WATCH_MAX).then(|| self.done())
     }
 
     pub fn on_event(&mut self, ev: &KeyEvent, now: Instant) -> Watch {
@@ -217,6 +225,9 @@ impl EditWatch {
         let Some(key) = ev.key else {
             return Watch::Continue; // a modifier alone
         };
+        if now.duration_since(self.born) > WATCH_MAX {
+            return self.done();
+        }
         self.last = now;
         let m = ev.modifiers;
         let mac = cfg!(target_os = "macos");
@@ -409,7 +420,7 @@ mod tests {
     #[test]
     fn watch_follows_backspace_fixes() {
         let t = Instant::now();
-        let mut w = EditWatch::new("ssh into Paris one ", t);
+        let mut w = EditWatch::new("ssh into Paris one ", t, None);
         for _ in 0..10 {
             assert!(matches!(
                 w.on_event(&key(Key::Delete, Modifiers::empty()), t),
@@ -449,7 +460,7 @@ mod tests {
     #[test]
     fn watch_word_delete() {
         let t = Instant::now();
-        let mut w = EditWatch::new("hello clot code", t);
+        let mut w = EditWatch::new("hello clot code", t, None);
         let word = if cfg!(target_os = "macos") {
             Modifiers::OPT_LEFT
         } else {

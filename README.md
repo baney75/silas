@@ -69,7 +69,8 @@ Measured on eight real dictations (175 s of speech) with `silas-bench`.
 | Nightly | macOS, Windows, Linux | the rolling `nightly` pre-release, rebuilt by CI each night when `main` changed |
 
 Silas checks at launch and every four hours. With auto-update on, it installs once it has
-been idle for two minutes. Updates are signed; Silas refuses an unsigned one. Mac nightly
+been idle for two minutes. Each channel has its own signing key, and Silas refuses an update
+that isn't signed by its channel's key. The stable key never leaves the release Mac. Mac nightly
 builds are ad-hoc signed, so macOS asks for Accessibility again after each nightly update.
 
 ## Build from source
