@@ -109,11 +109,16 @@ impl Core {
 
     /// The key listener started or stopped; refresh the status the user sees.
     pub fn set_listener(&self, ok: bool) {
-        let was = self.listener_ok.swap(ok, Ordering::Relaxed);
-        if was == ok {
-            return;
-        }
-        let (status, _) = self.status();
+        // Flip the flag and read the status under the status lock, so a concurrent
+        // set_status can't write a stale permission error after the listener came back.
+        let refresh = {
+            let cur = self.status.lock();
+            if self.listener_ok.swap(ok, Ordering::Relaxed) == ok {
+                return;
+            }
+            let missing_key = cur.0 == Status::Error && cur.1.as_deref() == Some(key_access_message().as_str());
+            (ok && missing_key) || (!ok && cur.0 == Status::Ready)
+        };
         if ok {
             // The user just flipped the switch in System Settings; bring them back to Silas.
             if let Some(w) = self.app.get_webview_window("main") {
@@ -122,20 +127,33 @@ impl Core {
                 }
             }
         }
-        if ok && status == Status::Error && self.active_model().is_some() {
-            self.set_status(Status::Ready, None);
-        } else if !ok && status == Status::Ready {
-            self.set_status(Status::Ready, None); // becomes the permission message
+        if refresh {
+            if ok && self.active_model().is_none() {
+                self.load_status_after_listener();
+            } else {
+                // Ready becomes the permission message again when the listener is down.
+                self.set_status(Status::Ready, None);
+            }
         }
     }
 
+    /// The listener came back before any model was loaded: show what is really pending.
+    fn load_status_after_listener(&self) {
+        let installed = crate::models::installed(&self.settings.lock().model);
+        self.set_status(if installed { Status::Loading } else { Status::NeedsModel }, None);
+    }
+
     pub fn set_status(&self, s: Status, detail: Option<String>) {
-        let (s, detail) = if s == Status::Ready && !self.listener_ok.load(Ordering::Relaxed) {
-            (Status::Error, Some(key_access_message()))
-        } else {
-            (s, detail)
+        let (s, detail) = {
+            let mut cur = self.status.lock();
+            let next = if s == Status::Ready && !self.listener_ok.load(Ordering::Relaxed) {
+                (Status::Error, Some(key_access_message()))
+            } else {
+                (s, detail)
+            };
+            *cur = next.clone();
+            next
         };
-        *self.status.lock() = (s, detail.clone());
         let _ = self
             .app
             .emit("status", json!({ "status": s, "detail": detail }));

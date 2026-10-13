@@ -8,7 +8,9 @@ type Step = "welcome" | "permissions" | "model" | "try";
 /** Mac and Linux need the hotkey listener; without access Silas can't hear its key. */
 export function needsAccess(): boolean {
   const s = store.state;
-  if (s.platform === "windows") return false;
+  // Windows needs nothing; on Linux a missing udev grant is shown as a Home banner rather
+  // than reopening setup on every launch.
+  if (s.platform !== "macos") return false;
   return s.permissions.accessibility !== "granted" || (s.platform === "macos" && s.permissions.microphone === "denied");
 }
 
@@ -20,6 +22,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, opts: { s
   let index = 0;
   let asked: Record<string, number> = {};
   let advancing = 0;
+  let lastPermKey = "";
   let poll = 0;
   let unsub: (() => void) | null = null;
   let autoSelected = false;
@@ -104,7 +107,10 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, opts: { s
     enabled: boolean,
   ): HTMLElement {
     const granted = state === "granted";
-    const waiting = !granted && asked[kind] !== undefined;
+    // On Linux there is nothing to click: the installer's udev rule grants keyboard access.
+    const actionable = kind !== "input";
+    // A denied permission isn't pending: show the button that opens its Settings pane.
+    const waiting = actionable && !granted && state !== "denied" && asked[kind] !== undefined;
     const slow = waiting && Date.now() - asked[kind] > 9000;
     const hint =
       kind === "accessibility"
@@ -143,7 +149,9 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, opts: { s
       ),
       granted
         ? h("span", { class: "state-pill active" }, icon("check", 14), "Allowed")
-        : waiting
+        : !actionable
+          ? h("span", { class: "state-pill" }, "Not yet")
+          : waiting
           ? h("span", { class: "state-pill" }, h("span", { class: "spinner sm" }), "Waiting")
           : h(
               "button",
@@ -154,6 +162,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, opts: { s
                 "data-autofocus": enabled ? true : null,
                 onclick: async () => {
                   asked[kind] = Date.now();
+                  lastPermKey = permKey();
                   draw();
                   await api.openPermission(kind);
                 },
@@ -163,14 +172,30 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, opts: { s
     );
   }
 
+  function permKey(): string {
+    const p = store.state.permissions;
+    const slow = Object.entries(asked).map(([k, t]) => `${k}:${Date.now() - t > 9000}`);
+    return [p.microphone, p.accessibility, ...slow].join("|");
+  }
+
   function permissions(): HTMLElement[] {
     const p = store.state.permissions;
     if (!poll) {
+      // Redraw only when something visible changed, so clicks and focus survive the poll.
+      const redraw = () => {
+        const key = permKey();
+        if (key === lastPermKey) return;
+        lastPermKey = key;
+        const hadFocus = card.contains(document.activeElement);
+        draw();
+        if (hadFocus) (card.querySelector("[data-autofocus]") as HTMLElement | null)?.focus();
+      };
       poll = window.setInterval(() => {
         void refreshState();
-        draw(); // refreshes the "already switched on?" hint
+        redraw(); // the "already switched on?" hint appears with time
       }, 1000);
-      unsub = subscribe(["state"], draw);
+      unsub = subscribe(["state"], redraw);
+      lastPermKey = permKey();
     }
     const leave = () => (index + 1 < steps.length ? next() : finish());
     if (platform === "linux") {
@@ -207,7 +232,13 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, opts: { s
         "div",
         { class: "perm-list" },
         permRow("Microphone", "So Silas can hear you. Audio never leaves this computer.", p.microphone, "microphone", true),
-        permRow("Accessibility", "So Silas can notice your hotkey and type into other apps.", p.accessibility, "accessibility", micOk || p.microphone === "denied"),
+        permRow(
+          "Accessibility",
+          "So Silas can notice your hotkey and type into other apps.",
+          p.accessibility,
+          "accessibility",
+          micOk || p.microphone === "denied" || asked.microphone !== undefined,
+        ),
       ),
       all
         ? h("div", { class: "onb-nav" }, h("span"), h("span", { class: "state-pill active" }, icon("check", 14), "Continuing…"))
@@ -306,7 +337,8 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, opts: { s
   }
 
   draw();
-  void prepareModel();
+  // Repair mode is only about permissions; never start a download the user didn't ask for.
+  if (!repair) void prepareModel();
   requestAnimationFrame(() => (card.querySelector("[data-autofocus]") as HTMLElement | null)?.focus());
   return () => {
     window.clearTimeout(advancing);
