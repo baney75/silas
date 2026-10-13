@@ -49,8 +49,16 @@ jq -n --arg v "$version" --arg n "$notes" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ
 
 git diff --quiet || git commit -qam "Release Silas $version"
 git push -q origin main
-# The release creates the tag on GitHub, so a failed upload never leaves a bare tag.
-gh release create "v$version" --target "$(git rev-parse HEAD)" --latest --title "Silas $version" --notes "$notes" \
-  "$dir/Silas_aarch64.dmg" "$dir/Silas_aarch64.app.tar.gz" "$dir/Silas_aarch64.app.tar.gz.sig" "$dir/latest.json"
+# Upload into a draft (which creates no tag), retrying slow uploads, and publish only
+# once every file is there, so the update feed never points at a missing file.
+gh release create "v$version" --draft --target "$(git rev-parse HEAD)" --title "Silas $version" --notes "$notes" >/dev/null
+for f in Silas_aarch64.dmg Silas_aarch64.app.tar.gz Silas_aarch64.app.tar.gz.sig latest.json; do
+  for attempt in 1 2 3 4 5; do
+    gh release upload "v$version" "$dir/$f" --clobber && break
+    [ "$attempt" -lt 5 ] || { echo "upload of $f failed; the draft v$version is still there" >&2; exit 1; }
+    sleep $((attempt * 5))
+  done
+done
+gh release edit "v$version" --draft=false --latest >/dev/null
 git fetch -q origin --tags
 echo "Released Silas $version (stable, macOS)."
