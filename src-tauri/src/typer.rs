@@ -62,12 +62,28 @@ fn pieces(text: &str) -> Vec<Piece<'_>> {
     out
 }
 
+/// Splits text into key events of about `size` characters. A space never travels alone: it
+/// rides with the character before it ("no " is one event). macOS turns two quick space events
+/// into ". " (the double-space period shortcut), and an app that lags behind fast input checks
+/// that shortcut against stale text, so "needs no excuse" landed as "needs. noexcuse".
 fn chunks(text: &str, size: usize) -> Vec<String> {
-    let chars: Vec<char> = text.chars().collect();
-    chars
-        .chunks(size.max(1))
-        .map(|c| c.iter().collect())
-        .collect()
+    let mut out: Vec<String> = vec![];
+    let mut cur = String::new();
+    let mut n = 0;
+    for c in text.chars() {
+        if c.is_whitespace() || n < size.max(1) {
+            cur.push(c);
+            n += usize::from(!c.is_whitespace());
+            continue;
+        }
+        out.push(std::mem::take(&mut cur));
+        cur.push(c);
+        n = 1;
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
 }
 
 pub fn type_text(text: &str, pace: Pace, shift_enter: bool) -> anyhow::Result<()> {
@@ -253,5 +269,21 @@ mod tests {
         assert!(matches!(p[1], Piece::Newline));
         assert!(matches!(p[3], Piece::Tab));
         assert_eq!(chunks("héllo", 2), vec!["hé", "ll", "o"]);
+    }
+
+    #[test]
+    fn spaces_never_travel_alone() {
+        assert_eq!(
+            chunks("needs no excuse ", 1),
+            vec!["n", "e", "e", "d", "s ", "n", "o ", "e", "x", "c", "u", "s", "e "]
+        );
+        assert_eq!(chunks(" a  b", 1), vec![" a  ", "b"]);
+        assert_eq!(chunks("Man needs no", 6), vec!["Man nee", "ds no"]);
+        for size in [1, 6] {
+            let text = "Man needs no excuse to strive for excellence. ";
+            let c = chunks(text, size);
+            assert_eq!(c.concat(), text);
+            assert!(c.iter().all(|e| !e.starts_with(' ') && e.chars().count() <= 20));
+        }
     }
 }

@@ -261,6 +261,25 @@ pub fn sound_alike(heard: &str, intended: &str) -> f32 {
     score
 }
 
+/// The "s" or "'s" a heard word adds to a term ("GitHubs" → "GitHub" + "s"), so snapping
+/// to the term does not drop it.
+fn plural_suffix(heard: &str, term: &str) -> String {
+    let t = norm(term);
+    for suffix in ["'s", "\u{2019}s", "s"] {
+        let Some(stem) = heard.strip_suffix(suffix) else {
+            continue;
+        };
+        if term.ends_with(suffix) {
+            return String::new();
+        }
+        let possessive = suffix != "s";
+        if possessive || (!t.ends_with('s') && similarity(&norm(stem), &t) >= 0.82) {
+            return suffix.into();
+        }
+    }
+    String::new()
+}
+
 fn capitalize(s: &str) -> String {
     let mut c = s.chars();
     match c.next() {
@@ -299,7 +318,7 @@ impl Dictionary {
         let mut capitalize_next = false;
         for (i, t) in toks.into_iter().enumerate() {
             if fillers.contains(&t.key()) && !t.key().is_empty() {
-                // "Um, so" → "So"; "it, um, works" → "it works"; "done um." → "done."
+                // "Um, so" → "So"; "and, um, then" → "and then"; "done um." → "done."
                 let sentence_start = i == 0 || out.last().is_some_and(ends_sentence);
                 if sentence_start && starts_upper(&t.core) {
                     capitalize_next = true;
@@ -312,8 +331,13 @@ impl Dictionary {
                         }
                     }
                 } else if let Some(prev) = out.last_mut() {
-                    if prev.post == "," && t.post == "," {
-                        // "it, um, works": keep a single comma? Drop both, speech pauses.
+                    // "lessons, um, remember" keeps its comma: the pause was a real break. After
+                    // "and" or "I think" it was only the filler's pause.
+                    const BRIDGE: &[&str] = &[
+                        "and", "but", "or", "so", "then", "because", "think", "like", "well",
+                        "if", "that", "the", "a", "to", "of", "i", "we", "you",
+                    ];
+                    if prev.post == "," && t.post == "," && BRIDGE.contains(&prev.key().as_str()) {
                         prev.post.clear();
                     }
                 }
@@ -367,6 +391,7 @@ impl Dictionary {
             let mut i = 0;
             while i < toks.len() {
                 let mut hit: Option<usize> = None;
+                let mut fuzzy = false;
                 for w in (1..=(term_words + 1).min(3)).rev() {
                     if i + w > toks.len() || (i..i + w).any(|k| locked[k]) {
                         continue;
@@ -399,12 +424,21 @@ impl Dictionary {
                     }
                     // Fuzzy only for words that are not ordinary English; that guard is what
                     // keeps "better" from becoming "Bezier" and "make sure" from "make Azure".
-                    if all_common || target.len() < 5 || joined.len() < 4 {
+                    // Never bend an address or file name ("claude.ai", "notes/plan.md").
+                    let addressy = (i..i + w).any(|k| toks[k].core.contains(['.', '@', '/', '\\']));
+                    if all_common || addressy || target.len() < 5 || joined.len() < 4 {
                         continue;
                     }
-                    let score = sound_alike(&joined, &target);
+                    // Score "Ghosty's" by its stem, so an ending doesn't block a match. Spelling
+                    // only: sound codes drop the ending's vowel, so "Taurus" would sound like "Tauri".
+                    let stem = joined
+                        .strip_suffix('s')
+                        .filter(|s| !target.ends_with('s') && !is_common(s));
+                    let score = sound_alike(&joined, &target)
+                        .max(stem.map_or(0.0, |s| similarity(s, &target)));
                     if score >= 0.82 && (w == term_words || score >= 0.88) {
                         hit = Some(w);
+                        fuzzy = true;
                         break;
                     }
                 }
@@ -415,7 +449,13 @@ impl Dictionary {
                     }
                     Some(w) => {
                         let sentence_start = i == 0 || ends_sentence(&toks[i - 1]);
-                        let n = replace_span(toks, locked, i, w, &term, sentence_start);
+                        let suffix = if fuzzy {
+                            plural_suffix(&toks[i + w - 1].core, &term)
+                        } else {
+                            String::new()
+                        };
+                        let with = term.clone() + &suffix;
+                        let n = replace_span(toks, locked, i, w, &with, sentence_start);
                         self.terms[ti].uses += 1;
                         i += n.max(1);
                     }
@@ -620,7 +660,7 @@ impl Dictionary {
 
 /// "the the the idea" → "the idea". Two in a row is kept unless it's a short function
 /// word, since "had had" and "that that" are real English.
-fn drop_stutters(toks: Vec<Tok>) -> Vec<Tok> {
+fn drop_stutters(mut toks: Vec<Tok>) -> Vec<Tok> {
     const STUTTER: &[&str] = &["the", "a", "an", "i", "to", "and", "we", "it", "is", "of", "in", "my", "you", "so", "but", "for"];
     let mut out: Vec<Tok> = Vec::with_capacity(toks.len());
     let mut i = 0;
@@ -630,6 +670,22 @@ fn drop_stutters(toks: Vec<Tok>) -> Vec<Tok> {
             j += 1;
         }
         let run = j - i;
+        let key = toks[i].key();
+        // "b b b both" → "both": a run of one letter that starts the next word is a false start.
+        let false_start = run >= 2
+            && key.len() == 1
+            && key != "a"
+            && key != "i"
+            && toks[j - 1].post.is_empty()
+            && toks.get(j).is_some_and(|n| n.key().len() > 1 && n.key().starts_with(&key));
+        if false_start {
+            toks[j].pre = toks[i].pre.clone() + &toks[j].pre;
+            if starts_upper(&toks[i].core) {
+                toks[j].core = capitalize(&toks[j].core);
+            }
+            i = j; // the real word may start its own stutter: "t t the the idea"
+            continue;
+        }
         if run >= 3 || (run == 2 && STUTTER.contains(&toks[i].key().as_str())) {
             let mut kept = toks[i].clone();
             kept.post = toks[j - 1].post.clone();
@@ -755,7 +811,11 @@ mod tests {
         let mut d = dict();
         assert_eq!(
             d.apply("Um, so we start. Uh it works, um, fine.", true),
-            "So we start. It works fine."
+            "So we start. It works, fine."
+        );
+        assert_eq!(
+            d.apply("And, uh, then we ship. I think, um, we should.", true),
+            "And then we ship. I think we should."
         );
         assert_eq!(d.apply("This is done um.", true), "This is done.");
         assert_eq!(d.apply("Um", true), "");
@@ -812,6 +872,13 @@ mod tests {
         }
         let s = "make sure the model is faster and better, and the code is clean.";
         assert_eq!(d.apply(s, true), s);
+        // Endings: a stem match must not bend real words ("Taurus" is not "Tauri" + s).
+        for t in ["Tauri", "Ghostty", "Macy's", "Trader Joe's"] {
+            d.add_term(t, "user");
+        }
+        let s = "the Taurus constellation, the ghosts and the hosts.";
+        assert_eq!(d.apply(s, true), s);
+        assert_eq!(d.apply("shop at macy's and trader joe's", true), "shop at Macy's and Trader Joe's");
     }
 
     #[test]
@@ -820,6 +887,41 @@ mod tests {
         assert_eq!(d.apply("I don't like the the the idea", true), "I don't like the idea");
         assert_eq!(d.apply("we we had had enough", true), "we had had enough");
         assert_eq!(d.apply("no, no, no.", true), "no, no, no.");
+        assert_eq!(
+            d.apply("has both i but b b b b b b b b b both mobile", true),
+            "has both i but both mobile"
+        );
+        assert_eq!(d.apply("B b both work.", true), "Both work.");
+        assert_eq!(d.apply("plan a a apple", true), "plan a apple");
+        assert_eq!(d.apply("x y z", true), "x y z");
+        assert_eq!(d.apply("t t the the idea", true), "the idea");
+        assert_eq!(d.apply("b b both both both", true), "both");
+    }
+
+    #[test]
+    fn filler_between_commas_keeps_one() {
+        let mut d = dict();
+        assert_eq!(
+            d.apply("Regarding the old lessons, um, remember that.", true),
+            "Regarding the old lessons, remember that."
+        );
+    }
+
+    #[test]
+    fn addresses_and_plurals_survive_snapping() {
+        let mut d = dict();
+        assert_eq!(
+            d.apply("please integrate better with claude.ai", true),
+            "please integrate better with claude.ai"
+        );
+        assert_eq!(d.apply("open notes/omarki.md", true), "open notes/omarki.md");
+        assert_eq!(
+            d.apply("the file system, the GitHubs, and all the repos", true),
+            "the file system, the GitHubs, and all the repos"
+        );
+        assert_eq!(d.apply("check the Ghostys now", true), "check the Ghosttys now");
+        assert_eq!(d.apply("Ghosty's config", true), "Ghostty's config");
+        assert_eq!(d.apply("open Ghosty please", true), "open Ghostty please");
     }
 
     #[test]
