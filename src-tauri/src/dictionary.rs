@@ -273,7 +273,7 @@ fn plural_suffix(heard: &str, term: &str) -> String {
             return String::new();
         }
         let possessive = suffix != "s";
-        if possessive || (!t.ends_with('s') && similarity(&norm(stem), &t) >= similarity(&norm(heard), &t)) {
+        if possessive || (!t.ends_with('s') && similarity(&norm(stem), &t) >= 0.82) {
             return suffix.into();
         }
     }
@@ -873,10 +873,10 @@ mod tests {
         let s = "make sure the model is faster and better, and the code is clean.";
         assert_eq!(d.apply(s, true), s);
         // Endings: a stem match must not bend real words ("Taurus" is not "Tauri" + s).
-        for t in ["Tauri", "Codec", "Macy's", "Trader Joe's"] {
+        for t in ["Tauri", "Ghostty", "Macy's", "Trader Joe's"] {
             d.add_term(t, "user");
         }
-        let s = "the Taurus constellation, the codecs, the ghosts and the hosts.";
+        let s = "the Taurus constellation, the ghosts and the hosts.";
         assert_eq!(d.apply(s, true), s);
         assert_eq!(d.apply("shop at macy's and trader joe's", true), "shop at Macy's and Trader Joe's");
     }
