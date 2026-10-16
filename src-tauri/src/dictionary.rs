@@ -415,7 +415,10 @@ impl Dictionary {
                     if all_common || addressy || target.len() < 5 || joined.len() < 4 {
                         continue;
                     }
-                    let score = sound_alike(&joined, &target);
+                    // Score "Ghosty's" and "Omarkis" by their stem, so endings don't block a match.
+                    let stem = joined.strip_suffix('s').filter(|_| !target.ends_with('s'));
+                    let score = sound_alike(&joined, &target)
+                        .max(stem.map_or(0.0, |s| sound_alike(s, &target)));
                     if score >= 0.82 && (w == term_words || score >= 0.88) {
                         hit = Some(w);
                         break;
