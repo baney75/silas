@@ -8,6 +8,9 @@ Tauri 2 app. Rust core in `src-tauri/src`, vanilla TypeScript UI in `src/`, cont
 bun run build && (cd src-tauri && cargo test --lib && cargo clippy --lib -- -D warnings)
 ```
 
+iPad app (SwiftUI, FluidAudio) in `ios/`; see `ios/README.md`. Its check is
+`(cd ios/SilasCore && swift test)`.
+
 ## Rules
 
 - Never paste. Text goes out as keystrokes (`typer.rs`); the clipboard is never touched.
