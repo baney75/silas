@@ -384,7 +384,6 @@ impl Core {
                 return;
             }
         }
-        *self.target.lock() = crate::focus::Target::capture();
         let device = self.settings.lock().microphone.clone();
         let app = self.app.clone();
         match Recording::start(device.as_deref(), move |lvl| {
@@ -392,6 +391,8 @@ impl Core {
         }) {
             Ok(r) => {
                 *self.recording.lock() = Some((r, Instant::now()));
+                // After the mic is open, so a slow app can't cost the first words.
+                *self.target.lock() = crate::focus::Target::capture();
                 let gen = self.recording_gen.fetch_add(1, Ordering::Relaxed) + 1;
                 self.cue("start");
                 self.set_status(Status::Recording, None);
@@ -463,29 +464,31 @@ impl Core {
             if s.trailing_space && !text.ends_with(char::is_whitespace) {
                 text.push(' ');
             }
-            let latency = released.elapsed().as_millis() as u64;
             let target = me.target.lock().take();
-            if let Some(t) = target {
-                t.restore();
-            }
-            me.set_status(Status::Typing, None);
-            me.typed_over.store(false, Ordering::Relaxed);
-            me.typing.store(true, Ordering::Relaxed);
-            let typed = typer::type_text(
-                &text,
-                typer::Pace::from_setting(&s.typing_speed),
-                s.newline_as_shift_enter,
-            );
-            // Let the last synthetic events drain before reading the keyboard again.
-            std::thread::sleep(Duration::from_millis(60));
-            me.typing.store(false, Ordering::Relaxed);
-            if let Err(e) = typed {
-                me.set_status(Status::Error, Some(e.to_string()));
-                me.recover_soon();
-                return;
+            let restored = target.map_or(crate::focus::Restore::Untouched, |t| t.restore());
+            let latency = released.elapsed().as_millis() as u64;
+            // Typing into the window that stole focus is the bug; keep the text in History.
+            let lost_focus = restored == crate::focus::Restore::Failed;
+            if !lost_focus {
+                me.set_status(Status::Typing, None);
+                me.typed_over.store(false, Ordering::Relaxed);
+                me.typing.store(true, Ordering::Relaxed);
+                let typed = typer::type_text(
+                    &text,
+                    typer::Pace::from_setting(&s.typing_speed),
+                    s.newline_as_shift_enter,
+                );
+                // Let the last synthetic events drain before reading the keyboard again.
+                std::thread::sleep(Duration::from_millis(60));
+                me.typing.store(false, Ordering::Relaxed);
+                if let Err(e) = typed {
+                    me.set_status(Status::Error, Some(e.to_string()));
+                    me.recover_soon();
+                    return;
+                }
             }
             let typed_over = me.typed_over.load(Ordering::Relaxed);
-            if s.learn_from_edits && !typed_over && crate::focus::us_layout() {
+            if !lost_focus && s.learn_from_edits && !typed_over && crate::focus::us_layout() {
                 *me.watch.lock() = Some(EditWatch::new(&text, Instant::now(), crate::focus::focused()));
             }
             let item = HistoryItem {
@@ -511,7 +514,15 @@ impl Core {
             store::save("dictionary.json", &*me.dict.lock());
             *me.last_activity.lock() = Instant::now();
             let _ = me.app.emit("transcript", &item);
-            me.set_status(Status::Ready, None);
+            if lost_focus {
+                me.set_status(
+                    Status::Error,
+                    Some("Another window took the keyboard and Silas couldn't get back. Your text is in History.".into()),
+                );
+                me.recover_soon();
+            } else {
+                me.set_status(Status::Ready, None);
+            }
         });
     }
 

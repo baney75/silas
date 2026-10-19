@@ -8,6 +8,9 @@
 /// An id for the focused app or window, or None where the OS can't tell us (Linux).
 #[cfg(target_os = "macos")]
 pub fn focused() -> Option<u64> {
+    if let Some(pid) = mac::front_pid() {
+        return Some(pid as u64);
+    }
     use objc2::msg_send;
     use objc2::runtime::{AnyClass, AnyObject};
     let cls = AnyClass::get(c"NSWorkspace")?;
@@ -32,7 +35,8 @@ pub fn focused() -> Option<u64> {
 
 /// The text field that had the keyboard when the hotkey went down. A window that opens
 /// mid-dictation steals focus without the user asking, so Silas puts the keyboard back here
-/// before it types, unless the user clicked somewhere meanwhile to choose a new place.
+/// before it types, unless the user clicked into another text field to choose a new place.
+/// Only a click counts as choosing; switching apps from the keyboard does not.
 pub struct Target {
     #[cfg(target_os = "macos")]
     mac: mac::Target,
@@ -50,13 +54,23 @@ impl Target {
     }
 
     /// Puts the keyboard back on the captured field if something else took it and the user
-    /// didn't click. Returns true when it had to move focus.
-    pub fn restore(&self) -> bool {
+    /// didn't click into another field.
+    pub fn restore(&self) -> Restore {
         #[cfg(target_os = "macos")]
         return self.mac.restore();
         #[cfg(not(target_os = "macos"))]
-        false
+        Restore::Untouched
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Restore {
+    /// Focus is where the text should go: it never moved, or the user moved it on purpose.
+    Untouched,
+    /// Focus was taken and Silas put it back.
+    Restored,
+    /// Focus was taken and Silas couldn't put it back; typing now would hit the wrong window.
+    Failed,
 }
 
 #[cfg(target_os = "macos")]
@@ -65,6 +79,7 @@ mod mac {
     //! included. Window managers move focus through WindowServer (SkyLight) instead: make the
     //! process frontmost, then tell it which exact window is key. Silas does the same.
 
+    use super::Restore;
     use core_foundation::base::{CFEqual, CFType, CFTypeRef, TCFType};
     use core_foundation::boolean::CFBoolean;
     use core_foundation::string::{CFString, CFStringRef};
@@ -82,6 +97,8 @@ mod mac {
         fn AXUIElementSetAttributeValue(el: AXUIElementRef, attr: CFStringRef, value: CFTypeRef) -> i32;
         fn AXUIElementPerformAction(el: AXUIElementRef, action: CFStringRef) -> i32;
         fn _AXUIElementGetWindow(el: AXUIElementRef, wid: *mut u32) -> i32;
+        fn AXUIElementSetMessagingTimeout(el: AXUIElementRef, seconds: f32) -> i32;
+        fn AXUIElementIsAttributeSettable(el: AXUIElementRef, attr: CFStringRef, settable: *mut u8) -> i32;
         fn GetProcessForPID(pid: i32, psn: *mut Psn) -> i32;
         fn GetProcessPID(psn: *const Psn, pid: *mut i32) -> i32;
     }
@@ -129,7 +146,7 @@ mod mac {
     }
 
     /// The process WindowServer has in front. NSWorkspace lags behind SkyLight changes.
-    fn front_pid() -> Option<i32> {
+    pub(super) fn front_pid() -> Option<i32> {
         let sl = skylight()?;
         let mut psn: Psn = [0; 8];
         let mut pid = 0;
@@ -173,8 +190,29 @@ mod mac {
         (unsafe { _AXUIElementGetWindow(window.as_CFTypeRef(), &mut wid) } == 0 && wid != 0).then_some(wid)
     }
 
+    /// The app's Accessibility element. A hung app must not stall a dictation, so calls into
+    /// it give up after a quarter second instead of the default six.
     fn app(pid: i32) -> Option<CFType> {
-        wrap(unsafe { AXUIElementCreateApplication(pid) })
+        let app = wrap(unsafe { AXUIElementCreateApplication(pid) })?;
+        unsafe { AXUIElementSetMessagingTimeout(app.as_CFTypeRef(), 0.25) };
+        Some(app)
+    }
+
+    fn same(a: &CFType, b: &CFType) -> bool {
+        unsafe { CFEqual(a.as_CFTypeRef(), b.as_CFTypeRef()) != 0 }
+    }
+
+    /// A field the user can type into.
+    fn editable(el: &CFType) -> bool {
+        let role = attr(el, "AXRole").and_then(|r| r.downcast::<CFString>()).map(|r| r.to_string());
+        if matches!(role.as_deref(), Some("AXTextField" | "AXTextArea" | "AXComboBox" | "AXSearchField")) {
+            return true;
+        }
+        let mut settable = 0u8;
+        let err = unsafe {
+            AXUIElementIsAttributeSettable(el.as_CFTypeRef(), CFString::new("AXValue").as_concrete_TypeRef(), &mut settable)
+        };
+        err == 0 && settable != 0
     }
 
     fn focused_window_id(pid: i32) -> Option<u32> {
@@ -208,7 +246,7 @@ mod mac {
 
     impl Target {
         pub fn capture() -> Option<Self> {
-            let pid = front_pid().or_else(|| super::focused().map(|p| p as i32))?;
+            let pid = super::focused()? as i32;
             let app = app(pid)?;
             let window = attr(&app, "AXFocusedWindow")?;
             Some(Self {
@@ -225,22 +263,48 @@ mod mac {
             front_pid() == Some(self.pid) && focused_window_id(self.pid) == Some(self.wid)
         }
 
-        pub fn restore(&self) -> bool {
-            if clicks() != self.clicks {
-                return false; // the user picked a new place to type
+        /// The user clicked into a different text field since key-down: that's where they
+        /// want the text. A click that only dismissed a pop-up or moved the caret is not.
+        fn user_chose_elsewhere(&self) -> bool {
+            if clicks() == self.clicks {
+                return false;
+            }
+            let Some(pid) = front_pid() else { return false };
+            let Some(now) = app(pid).and_then(|a| attr(&a, "AXFocusedUIElement")) else {
+                return false;
+            };
+            let original = pid == self.pid && self.element.as_ref().is_some_and(|e| same(e, &now));
+            !original && editable(&now)
+        }
+
+        /// Ask the app to focus the captured field if something else in it has focus.
+        fn refocus_field(&self) {
+            if let Some(e) = &self.element {
+                let focused = app(self.pid).and_then(|a| attr(&a, "AXFocusedUIElement"));
+                if focused.is_none_or(|f| !same(&f, e)) {
+                    set_true(e, "AXFocused");
+                }
+            }
+        }
+
+        pub fn restore(&self) -> Restore {
+            if self.user_chose_elsewhere() {
+                return Restore::Untouched;
             }
             if self.in_place() {
-                // Same window. Don't re-activate it: that can clear a browser's own focus.
-                return false;
+                // Same window. Don't re-activate it (that can clear a browser's own focus),
+                // but a sheet or dialog inside it may have taken the field.
+                self.refocus_field();
+                return Restore::Untouched;
             }
             if attr(&self.window, "AXRole").is_none() {
                 log::info!("the window focus was taken from is gone; typing where focus is now");
-                return false;
+                return Restore::Untouched;
             }
-            let Some(sl) = skylight() else { return false };
+            let Some(sl) = skylight() else { return Restore::Failed };
             let mut psn: Psn = [0; 8];
             if unsafe { GetProcessForPID(self.pid, &mut psn) } != 0 {
-                return false;
+                return Restore::Failed;
             }
             for _ in 0..2 {
                 // kCPSUserGenerated lets the app install its key window before it handles keys.
@@ -251,21 +315,23 @@ mod mac {
                 }
                 let deadline = Instant::now() + Duration::from_millis(400);
                 while !self.in_place() && Instant::now() < deadline {
+                    if self.user_chose_elsewhere() {
+                        return Restore::Untouched;
+                    }
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 if self.in_place() {
                     break;
                 }
             }
-            // The app restores its own last field on activation; nudge it in case it didn't.
-            if let Some(e) = &self.element {
-                let focused = app(self.pid).and_then(|a| attr(&a, "AXFocusedUIElement"));
-                if focused.is_none_or(|f| unsafe { CFEqual(f.as_CFTypeRef(), e.as_CFTypeRef()) } == 0) {
-                    set_true(e, "AXFocused");
-                }
+            if !self.in_place() {
+                log::warn!("could not put the keyboard back where the dictation started");
+                return Restore::Failed;
             }
+            // The app restores its own last field on activation; nudge it in case it didn't.
+            self.refocus_field();
             log::info!("put the keyboard back where the dictation started");
-            true
+            Restore::Restored
         }
     }
 
@@ -374,7 +440,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(100));
         }
         assert_eq!(mac::front(), Some(calc), "Calculator never took focus");
-        assert!(target.restore());
+        assert_eq!(target.restore(), Restore::Restored);
         assert_eq!(mac::front(), before);
         assert!(target.mac.in_place());
     }
