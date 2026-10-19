@@ -235,7 +235,9 @@ fn phonetic(s: &str) -> [String; 2] {
     if letters.is_empty() {
         return [String::new(), String::new()];
     }
-    let dm = DoubleMetaphone::default();
+    // Full-length codes: the default stops at 4, so every long name sharing a first
+    // syllable sounded the same ("Proton Pass" and "Proton Drive" were both PRTN).
+    let dm = DoubleMetaphone::new(None);
     [dm.encode(&letters), dm.encode_alternate(&letters)]
 }
 
@@ -278,6 +280,11 @@ fn plural_suffix(heard: &str, term: &str) -> String {
         }
     }
     String::new()
+}
+
+/// A name worth listening for: capitalized or with a digit, and not ordinary English.
+fn is_name(w: &str) -> bool {
+    (starts_upper(w) || w.chars().any(|c| c.is_ascii_digit())) && !is_everyday(w) && w.len() > 2
 }
 
 fn capitalize(s: &str) -> String {
@@ -378,11 +385,26 @@ impl Dictionary {
         }
     }
 
+    /// Every word Silas snaps heard text to: the terms, plus the names that corrections
+    /// produce ("martry" → "Martyr" means "Martyr" is a word to listen for). The index is
+    /// the term's, for counting uses; None for a name that only lives in a correction.
+    fn snap_targets(&self) -> Vec<(String, Option<usize>)> {
+        let mut out: Vec<(String, Option<usize>)> =
+            self.terms.iter().enumerate().map(|(i, t)| (t.text.clone(), Some(i))).collect();
+        for c in &self.corrections {
+            for w in tokenize(&c.to).into_iter().map(|t| t.core) {
+                if is_name(&w) && !out.iter().any(|(t, _)| t.eq_ignore_ascii_case(&w)) {
+                    out.push((w, None));
+                }
+            }
+        }
+        out
+    }
+
     fn snap_terms(&mut self, toks: &mut Vec<Tok>, locked: &mut Vec<bool>) {
-        let mut order: Vec<usize> = (0..self.terms.len()).collect();
-        order.sort_by_key(|&i| std::cmp::Reverse(self.terms[i].text.len()));
-        for ti in order {
-            let term = self.terms[ti].text.clone();
+        let mut targets = self.snap_targets();
+        targets.sort_by_key(|(t, _)| std::cmp::Reverse(t.len()));
+        for (term, ti) in targets {
             let target: String = norm_phrase(&term).concat();
             if target.len() < 3 {
                 continue;
@@ -418,7 +440,10 @@ impl Dictionary {
                     }
                     // A one-word term that is also an everyday word ("Actor", "Leading") only
                     // keeps its casing when spoken as such; never recase "the actor".
-                    if exact && !(w == 1 && is_everyday(&toks[i].core)) {
+                    // A name known only from a correction ("Martyr") is a spelling to reach, not a
+                    // casing to force: "a martyr died" stays as spoken.
+                    let ordinary = if ti.is_some() { is_everyday(&toks[i].core) } else { is_common(&toks[i].core) };
+                    if exact && !(w == 1 && ordinary) {
                         hit = Some(w);
                         break;
                     }
@@ -426,17 +451,37 @@ impl Dictionary {
                     // keeps "better" from becoming "Bezier" and "make sure" from "make Azure".
                     // Never bend an address or file name ("claude.ai", "notes/plan.md").
                     let addressy = (i..i + w).any(|k| toks[k].core.contains(['.', '@', '/', '\\']));
+                    // Two ordinary words can still spell a one-word name almost letter for letter
+                    // ("Bane spaces" → "BaneySpaces"). Long names only, nearly exact, same first
+                    // letter, and not just the name plus a plural "s".
+                    let fused = all_common
+                        && w == 2
+                        && term_words == 1
+                        && !addressy
+                        && target.len() >= 8
+                        && joined.chars().next() == target.chars().next()
+                        && joined != format!("{target}s")
+                        && similarity(&joined, &target) >= 0.9;
+                    if fused {
+                        hit = Some(w);
+                        break;
+                    }
                     if all_common || addressy || target.len() < 5 || joined.len() < 4 {
                         continue;
                     }
                     // Score "Ghosty's" by its stem, so an ending doesn't block a match. Spelling
                     // only: sound codes drop the ending's vowel, so "Taurus" would sound like "Tauri".
+                    // Only an ending on the term's own word counts: in "Hildegard is" the s
+                    // belongs to "is".
                     let stem = joined
                         .strip_suffix('s')
-                        .filter(|s| !target.ends_with('s') && !is_common(s));
+                        .filter(|s| w == term_words && !target.ends_with('s') && !is_common(s));
                     let score = sound_alike(&joined, &target)
                         .max(stem.map_or(0.0, |s| similarity(s, &target)));
-                    if score >= 0.82 && (w == term_words || score >= 0.88) {
+                    // A shared sound code alone is not enough: "Obsidian" and "Waypost" both
+                    // encode as APST. Half the letters must agree too.
+                    let spelled_close = similarity(stem.unwrap_or(&joined), &target) >= 0.5;
+                    if spelled_close && score >= 0.82 && (w == term_words || score >= 0.88) {
                         hit = Some(w);
                         fuzzy = true;
                         break;
@@ -444,8 +489,13 @@ impl Dictionary {
                 }
                 match hit {
                     Some(0) => {
-                        self.terms[ti].uses += 1;
-                        i += term_words.max(1);
+                        if let Some(ti) = ti {
+                            self.terms[ti].uses += 1;
+                        }
+                        // Already right: no shorter term may bend it later.
+                        let n = term_words.max(1).min(toks.len() - i);
+                        locked[i..i + n].fill(true);
+                        i += n;
                     }
                     Some(w) => {
                         let sentence_start = i == 0 || ends_sentence(&toks[i - 1]);
@@ -456,7 +506,9 @@ impl Dictionary {
                         };
                         let with = term.clone() + &suffix;
                         let n = replace_span(toks, locked, i, w, &with, sentence_start);
-                        self.terms[ti].uses += 1;
+                        if let Some(ti) = ti {
+                            self.terms[ti].uses += 1;
+                        }
                         i += n.max(1);
                     }
                     None => i += 1,
@@ -554,15 +606,8 @@ impl Dictionary {
                 continue; // a rewrite, not a mishearing
             }
             // A name (capitalized or with digits) that is not ordinary English is worth keeping as a word.
-            let new_words: Vec<String> = tokenize(&to)
-                .into_iter()
-                .map(|t| t.core)
-                .filter(|w| {
-                    (starts_upper(w) || w.chars().any(|c| c.is_ascii_digit()))
-                        && !is_everyday(w)
-                        && w.len() > 2
-                })
-                .collect();
+            let new_words: Vec<String> =
+                tokenize(&to).into_iter().map(|t| t.core).filter(|w| is_name(w)).collect();
             let is_name = !new_words.is_empty();
             // Ordinary words ("office", "apple", "noon") are only ever rewritten into a name.
             // An edit that turns one ordinary word into another is a change of mind or a
@@ -930,6 +975,62 @@ mod tests {
         d.add_term("Actor", "user");
         assert_eq!(d.apply("the actor left", true), "the actor left");
         assert_eq!(d.apply("ask claude", true), "ask Claude");
+    }
+
+    #[test]
+    fn misses_from_real_history() {
+        let mut d = dict();
+        for t in ["BaneySpaces", "Runpod", "abbey1"] {
+            d.add_term(t, "user");
+        }
+        d.add_correction("martry", "Martyr", "import");
+        // A correction's target is a name Silas knows, so a new mishearing of it snaps too.
+        assert_eq!(
+            d.apply("Make sure the theme is that same Marter color scheme", true),
+            "Make sure the theme is that same Martyr color scheme"
+        );
+        // Two ordinary words that spell a one-word name almost exactly fuse into it.
+        assert_eq!(
+            d.apply("For Bane spaces, work out why this blue dot's there.", true),
+            "For BaneySpaces, work out why this blue dot's there."
+        );
+        assert_eq!(d.apply("link their run pod to it", true), "link their Runpod to it");
+        assert_eq!(
+            d.apply("Maybe not on Abbey One because it needs storage.", true),
+            "Maybe not on abbey1 because it needs storage."
+        );
+    }
+
+    #[test]
+    fn fusing_ordinary_words_stays_rare() {
+        let mut d = dict();
+        d.add_term("BaneySpaces", "user");
+        d.add_correction("martry", "Martyr", "import");
+        for s in [
+            "the fish has tail scales.",
+            "a martyr died for the faith.",
+            "she found the bane of spaces everywhere.",
+            "we cloud code it later and make sure it works.",
+        ] {
+            assert_eq!(d.apply(s, true), s);
+        }
+    }
+
+    #[test]
+    fn a_bigger_dictionary_does_not_bend_right_words() {
+        let mut d = dict();
+        for t in ["Obsidian", "Waypost", "Hildegard", "Proton Pass", "Proton Drive"] {
+            d.add_term(t, "user");
+        }
+        for s in [
+            // Same sound code (APST), almost no letters in common.
+            "Obsidian needs more help, and Obsidian opens on my Mac.",
+            // "is" is a word, not Hildegard's plural.
+            "Hildegard is set up for generative requests.",
+            "You should have gone to Proton Pass first, not Proton Drive.",
+        ] {
+            assert_eq!(d.apply(s, true), s);
+        }
     }
 
     #[test]
