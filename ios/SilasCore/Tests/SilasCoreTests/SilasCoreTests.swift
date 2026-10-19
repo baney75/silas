@@ -183,4 +183,20 @@ final class HistoryFileTests: XCTestCase {
         PendingAudio.remove(id: id, in: dir)
         XCTAssertTrue(PendingAudio.list(in: dir).isEmpty)
     }
+
+    func testShortClipsArePaddedToFluidAudiosMinimum() {
+        let short = [Float](repeating: 0.5, count: 5_600)
+        let out = AudioPadding.padded(short)
+        XCTAssertEqual(out.count, 16_000)
+        XCTAssertEqual(Array(out.prefix(5_600)), short)
+        XCTAssertTrue(out.dropFirst(5_600).allSatisfy { $0 == 0 })
+        XCTAssertEqual(AudioPadding.padded([]).count, 16_000)
+    }
+
+    func testLongClipsAreNotTouched() {
+        let long = [Float](repeating: 0.1, count: 16_000)
+        XCTAssertEqual(AudioPadding.padded(long), long)
+        let longer = [Float](repeating: 0.1, count: 40_000)
+        XCTAssertEqual(AudioPadding.padded(longer).count, 40_000)
+    }
 }

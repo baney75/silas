@@ -9,22 +9,22 @@ struct ContentView: View {
             let wide = geo.size.width > geo.size.height
             ZStack {
                 Theme.bg.ignoresSafeArea()
-                if wide {
-                    HStack(spacing: 0) {
-                        DictatePane(model: model, wide: true)
-                        Rectangle().fill(Theme.line).frame(width: 1).ignoresSafeArea()
-                        HistoryPane(model: model)
-                            .frame(width: min(400, geo.size.width * 0.32))
-                            .background(Theme.side.ignoresSafeArea())
-                    }
-                } else {
-                    VStack(spacing: 0) {
-                        DictatePane(model: model, wide: false)
-                        Rectangle().fill(Theme.line).frame(height: 1)
-                        HistoryPane(model: model)
-                            .frame(height: geo.size.height * 0.3)
-                            .background(Theme.side.ignoresSafeArea())
-                    }
+                // One layout container for both orientations keeps every child's identity, so a
+                // hold in progress survives a rotation or a Stage Manager resize.
+                let layout = wide
+                    ? AnyLayout(HStackLayout(spacing: 0))
+                    : AnyLayout(VStackLayout(spacing: 0))
+                layout {
+                    DictatePane(model: model, wide: wide)
+                    Rectangle().fill(Theme.line)
+                        .frame(width: wide ? 1 : nil, height: wide ? nil : 1)
+                        .ignoresSafeArea(edges: wide ? .vertical : [])
+                    HistoryPane(model: model)
+                        .frame(
+                            width: wide ? min(400, geo.size.width * 0.32) : nil,
+                            height: wide ? nil : geo.size.height * 0.3
+                        )
+                        .background(Theme.side.ignoresSafeArea())
                 }
             }
         }
@@ -130,6 +130,7 @@ struct HoldButton: View {
         .onChange(of: pressed) { _, isDown in
             if isDown { model.press() } else { model.release() }
         }
+        .onDisappear { if pressed { model.release() } }
         .overlay(alignment: .topTrailing) {
             if listening {
                 Button {
@@ -193,7 +194,7 @@ struct StatusLine: View {
             default:
                 if model.hasFailedClip {
                     HStack(spacing: 12) {
-                        Text("A recording couldn't be transcribed.")
+                        Text(model.failedClipCount > 1 ? "\(model.failedClipCount) recordings couldn't be transcribed." : "A recording couldn't be transcribed.")
                             .font(.system(size: 15)).foregroundStyle(Theme.red)
                         Button("Try again") { model.retryFailedClip() }
                             .buttonStyle(.bordered)

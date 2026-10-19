@@ -26,6 +26,13 @@ enum Status: Equatable {
     }
 }
 
+struct FailedClip {
+    let samples: [Float]
+    let seconds: Double
+    let id: UUID
+    let date: Date
+}
+
 @MainActor
 @Observable
 final class DictationModel {
@@ -79,12 +86,13 @@ final class DictationModel {
     private var startToken = 0
     private var backgroundTaskID = UIBackgroundTaskIdentifier.invalid
     private var inFlight: Set<UUID> = []
-    /// The last recording whose transcription failed, so "Try again" can retranscribe it.
-    private var failed: (samples: [Float], seconds: Double, id: UUID, date: Date)?
-    /// Clips that failed this launch; recovery skips them so a bad clip is not retried in a loop.
-    private var failedIDs: Set<UUID> = []
-    /// True while a clip could not be transcribed. Recording stays available; the UI offers Try again / Discard.
-    private(set) var hasFailedClip = false
+    /// Every recording whose transcription failed this launch, oldest first, so "Try again" and
+    /// "Discard" reach all of them. Recovery skips these ids so a bad clip is not retried in a loop.
+    @ObservationIgnored private var failed: [FailedClip] = []
+    private var preparing = false
+    /// How many clips could not be transcribed. Recording stays available; the UI offers Try again / Discard.
+    private(set) var failedClipCount = 0
+    var hasFailedClip: Bool { failedClipCount > 0 }
 
     /// Hands-free left on by mistake would grow without end; stop at 5 minutes like the desktop.
     private static let maxRecording: Duration = .seconds(300)
@@ -146,6 +154,12 @@ final class DictationModel {
     // MARK: Model
 
     func prepare() async {
+        // One run at a time, and never once the model is loaded: a rerun would flip a live
+        // recording or transcription back to Ready and re-enable the idle timer.
+        guard !preparing else { return }
+        preparing = true
+        defer { preparing = false }
+        if await engine.isLoaded { return }
         let needsDownload = !SpeechEngine.modelIsDownloaded
         status = needsDownload ? .downloading(progress: 0) : .loading
         UIApplication.shared.isIdleTimerDisabled = true
@@ -263,13 +277,16 @@ final class DictationModel {
         startToken += 1
         let token = startToken
         Task {
-            guard await AVAudioApplication.requestRecordPermission() else {
+            let granted = await AVAudioApplication.requestRecordPermission()
+            // A newer press or a stop owns the gesture now; leave its state alone.
+            guard token == startToken else { return }
+            guard granted else {
                 machine.reset()
                 status = .error("Silas needs the microphone. Turn it on in Settings › Apps › Silas.")
                 return
             }
             // The press may have ended while the permission prompt was up.
-            guard token == startToken, machine.isActive, !recorder.isRunning, status == .ready else {
+            guard machine.isActive, !recorder.isRunning, status == .ready else {
                 machine.reset()
                 return
             }
@@ -320,7 +337,8 @@ final class DictationModel {
     private func beginBackgroundWork() {
         guard backgroundTaskID == .invalid else { return }
         backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "silas-transcribe") { [weak self] in
-            Task { @MainActor in self?.endBackgroundWork() }
+            // iOS calls this on the main thread and kills the app if the task is still open when it returns.
+            MainActor.assumeIsolated { self?.endBackgroundWork() }
         }
     }
 
@@ -336,11 +354,8 @@ final class DictationModel {
         do {
             let raw = try await engine.transcribe(samples)
             let cleaned = Cleanup.apply(raw)
-            failedIDs.remove(id)
-            if failed?.id == id {
-                failed = nil
-                hasFailedClip = false
-            }
+            failed.removeAll { $0.id == id }
+            failedClipCount = failed.count
             status = .ready
             guard !cleaned.isEmpty else {
                 PendingAudio.remove(id: id, in: HistoryStore.directory)
@@ -358,9 +373,9 @@ final class DictationModel {
             }
         } catch {
             // Never block recording over one bad clip: stay Ready and offer Try again / Discard.
-            failed = (samples, seconds, id, date)
-            failedIDs.insert(id)
-            hasFailedClip = true
+            failed.removeAll { $0.id == id }
+            failed.append(FailedClip(samples: samples, seconds: seconds, id: id, date: date))
+            failedClipCount = failed.count
             status = .ready
             show("Couldn't transcribe that recording: \(error.localizedDescription)")
         }
@@ -376,7 +391,7 @@ final class DictationModel {
                 if historyLoaded && !unsavedChanges { PendingAudio.remove(id: id, in: HistoryStore.directory) }
                 continue
             }
-            guard status == .ready, !inFlight.contains(id), !failedIDs.contains(id) else { continue }
+            guard status == .ready, !inFlight.contains(id), !failed.contains(where: { $0.id == id }) else { continue }
             status = .writing
             await transcribe(clip.samples, seconds: Double(clip.samples.count) / Recorder.sampleRate, id: id, date: clip.date)
         }
@@ -399,21 +414,30 @@ final class DictationModel {
         }
     }
 
-    /// Retranscribe the clip that failed.
+    /// Retranscribe every clip that failed.
     func retryFailedClip() {
-        guard let f = failed, status == .ready else { return }
+        guard !failed.isEmpty, status == .ready else { return }
+        let clips = failed
         status = .writing
-        Task { await transcribe(f.samples, seconds: f.seconds, id: f.id, date: f.date) }
+        Task {
+            for (n, f) in clips.enumerated() {
+                if n > 0 {
+                    // Stop if the user started recording between clips.
+                    guard status == .ready else { return }
+                    status = .writing
+                }
+                await transcribe(f.samples, seconds: f.seconds, id: f.id, date: f.date)
+            }
+        }
     }
 
-    /// Give up on the clip that failed: delete its audio and clear the banner.
+    /// Give up on every clip that failed: delete their audio and clear the banner.
     func discardFailedClip() {
-        if let f = failed {
+        for f in failed {
             PendingAudio.remove(id: f.id, in: HistoryStore.directory)
-            failedIDs.remove(f.id)
         }
-        failed = nil
-        hasFailedClip = false
+        failed = []
+        failedClipCount = 0
     }
 
     // MARK: History

@@ -3,6 +3,7 @@
 
 import FluidAudio
 import Foundation
+import SilasCore
 
 enum EngineError: LocalizedError {
     case notReady
@@ -40,7 +41,7 @@ actor SpeechEngine {
     /// `samples` are 16 kHz mono floats.
     func transcribe(_ samples: [Float]) async throws -> String {
         guard let manager else { throw EngineError.notReady }
-        return try await manager.transcribe(samples, source: .microphone).text
+        return try await manager.transcribe(AudioPadding.padded(samples), source: .microphone).text
     }
 
     /// The model is 480 MB and can be downloaded again; keep it out of iCloud backups.
