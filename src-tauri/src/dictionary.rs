@@ -229,28 +229,42 @@ pub fn similarity(a: &str, b: &str) -> f32 {
     1.0 - levenshtein(&a, &b) as f32 / max as f32
 }
 
-/// Primary and alternate Double Metaphone codes ("omarchy" → AMRX / AMRK).
+/// Primary and alternate Double Metaphone codes ("omarchy" → AMRX / AMRK), full length.
 fn phonetic(s: &str) -> [String; 2] {
+    phonetic_max(s, None)
+}
+
+fn phonetic_max(s: &str, max: Option<usize>) -> [String; 2] {
     let letters: String = s.chars().filter(|c| c.is_ascii_alphabetic()).collect();
     if letters.is_empty() {
         return [String::new(), String::new()];
     }
     // Full-length codes: the default stops at 4, so every long name sharing a first
     // syllable sounded the same ("Proton Pass" and "Proton Drive" were both PRTN).
-    let dm = DoubleMetaphone::new(None);
+    let dm = DoubleMetaphone::new(max);
     [dm.encode(&letters), dm.encode_alternate(&letters)]
 }
 
-/// How alike two spellings sound and look, 0..1. Used both to snap heard words to
-/// dictionary terms and to decide whether a user's edit was a real correction.
+/// How alike two spellings sound and look, 0..1, for deciding whether a user's edit was a
+/// real correction. Learning keeps the 4-character codes it was tuned with.
 pub fn sound_alike(heard: &str, intended: &str) -> f32 {
+    sound_alike_codes(heard, intended, Some(4))
+}
+
+/// The same score for snapping heard words to terms, with full-length codes so long names
+/// sharing a first syllable don't sound identical.
+fn sounds_like_term(heard: &str, term: &str) -> f32 {
+    sound_alike_codes(heard, term, None)
+}
+
+fn sound_alike_codes(heard: &str, intended: &str, max: Option<usize>) -> f32 {
     let a: String = norm_phrase(heard).concat();
     let b: String = norm_phrase(intended).concat();
     if a.is_empty() || b.is_empty() {
         return 0.0;
     }
     let mut score = similarity(&a, &b);
-    let (pa, pb) = (phonetic(&a), phonetic(&b));
+    let (pa, pb) = (phonetic_max(&a, max), phonetic_max(&b, max));
     for x in pa.iter().filter(|x| !x.is_empty()) {
         for y in pb.iter().filter(|y| !y.is_empty()) {
             if x == y {
@@ -434,7 +448,8 @@ impl Dictionary {
             if target.len() < 3 || (ti.is_none() && target.len() < 5) {
                 continue;
             }
-            let term_words = norm_phrase(&term).len();
+            let term_keys = norm_phrase(&term);
+            let term_words = term_keys.len();
             let mut i = 0;
             while i < toks.len() {
                 let mut hit: Option<usize> = None;
@@ -464,7 +479,11 @@ impl Dictionary {
                         hit = Some(0);
                         break;
                     }
-                    if guarded && !exact {
+                    // A protected word may only stay put inside a longer name ("Claude" in
+                    // "Claude Kode" → "Claude Code"), never be bent.
+                    let protected_fits = w == term_words
+                        && (i..i + w).all(|k| !protected[k] || toks[k].key() == term_keys[k - i]);
+                    if guarded && !exact && !protected_fits {
                         continue;
                     }
                     // A one-word term that is also an everyday word ("Actor", "Leading") only
@@ -475,6 +494,9 @@ impl Dictionary {
                     if exact && !ordinary {
                         hit = Some(w);
                         break;
+                    }
+                    if exact {
+                        continue; // spoken as ordinary words: leave them
                     }
                     // Fuzzy only for words that are not ordinary English; that guard is what
                     // keeps "better" from becoming "Bezier" and "make sure" from "make Azure".
@@ -497,6 +519,14 @@ impl Dictionary {
                         hit = Some(w);
                         break;
                     }
+                    // "martyr's" is still the word martyr, not the name Martyr.
+                    let common_stem = w == 1
+                        && ["'s", "\u{2019}s", "s"].iter().any(|e| {
+                            toks[i].core.to_lowercase().strip_suffix(e).is_some_and(is_common)
+                        });
+                    if ti.is_none() && common_stem {
+                        continue;
+                    }
                     if all_common || addressy || target.len() < 5 || joined.len() < 4 {
                         continue;
                     }
@@ -507,7 +537,7 @@ impl Dictionary {
                     let stem = joined
                         .strip_suffix('s')
                         .filter(|s| w == term_words && !target.ends_with('s') && !is_common(s));
-                    let score = sound_alike(&joined, &target)
+                    let score = sounds_like_term(&joined, &target)
                         .max(stem.map_or(0.0, |s| similarity(s, &target)));
                     // A shared sound code alone is not enough: "Obsidian" and "Waypost" both
                     // encode as APST. Half the letters must agree too.
@@ -966,12 +996,15 @@ mod tests {
         d.add_correction("martry", "Martyr", "import");
         d.add_correction("eesa", "Isa", "import");
         d.add_correction("eena", "Ina", "import");
+        d.add_correction("bookshelve", "Bookshelf", "import");
         for s in [
             "she found the bane of spaces everywhere.",
             "a martyr died for the faith.",
             "the fish has tail scales.",
             "what matters most is speed.",
             "this is a test, back in a minute.",
+            "we visited the martyr's grave and the martyrs.",
+            "put it on the book shelf.",
         ] {
             assert_eq!(d.apply(s, true), s);
         }
@@ -1090,6 +1123,28 @@ mod tests {
         ] {
             assert_eq!(d.apply(s, true), s);
         }
+    }
+
+    #[test]
+    fn sound_codes_are_full_length() {
+        // DoubleMetaphone::new(None) has no length cap; the default stops at 4.
+        assert_eq!(phonetic("obsidian")[0], "APSTN");
+        assert_ne!(phonetic("obsidian")[0], phonetic("waypost")[0]);
+        assert_ne!(phonetic("protonpass")[0], phonetic("protondrive")[0]);
+    }
+
+    #[test]
+    fn misheard_names_go_to_the_right_twin() {
+        let mut d = dict();
+        for t in ["Obsidian", "Waypost", "Hildegard", "Proton Pass", "Proton Drive"] {
+            d.add_term(t, "user");
+        }
+        // Misspelled, so nothing is protected: the matcher alone has to get these right.
+        assert_eq!(d.apply("open Obsidan now", true), "open Obsidian now");
+        assert_eq!(d.apply("check Proton Pas first", true), "check Proton Pass first");
+        assert_eq!(d.apply("Hildegarde is set up.", true), "Hildegard is set up.");
+        // A longer name whose first word is itself a term still snaps.
+        assert_eq!(d.apply("ask Claude Kode to do it", true), "ask Claude Code to do it");
     }
 
     #[test]
