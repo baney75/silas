@@ -584,7 +584,13 @@ impl Dictionary {
                     // and "Tauri" are both TR); they now tell Obsidian (APSTN) from Waypost (APST).
                     let spelled = similarity(stem.unwrap_or(&joined), &target);
                     let spelled_close = spelled >= 0.5 || (spelled >= 0.3 && same_sound(&joined, &target));
-                    if spelled_close && score >= 0.82 && (w == term_words || score >= 0.88) {
+                    // A wider window than the name never wins when the name already matches
+                    // without its last word: "Tailscal a" is "Tailscale" + "a", not "Tailscale".
+                    let shorter_hits = w > term_words && {
+                        let shorter: String = (i..i + w - 1).map(|k| toks[k].key()).collect();
+                        sounds_like_term(&shorter, &target).max(similarity(&shorter, &target)) >= 0.82
+                    };
+                    if spelled_close && !shorter_hits && score >= 0.82 && (w == term_words || score >= 0.88) {
                         hit = Some(w);
                         fuzzy = true;
                         break;
@@ -1146,6 +1152,8 @@ mod tests {
         // A protected name never swallows the next word, or grows into a longer twin.
         assert_eq!(d.apply("check Tailscale a lot", true), "check Tailscale a lot");
         assert_eq!(d.apply("restart Tailscale two times", true), "restart Tailscale two times");
+        assert_eq!(d.apply("check Tailscal a lot", true), "check Tailscale a lot");
+        assert_eq!(d.apply("check Tail Scale", true), "check Tailscale");
         d.add_term("Parish10", "user");
         assert_eq!(d.apply("ssh into Parish1 now", true), "ssh into Parish1 now");
         // The digit picks the twin.
