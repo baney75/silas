@@ -30,7 +30,10 @@ enum Status: Equatable {
 @Observable
 final class DictationModel {
     private(set) var status: Status = .loading
-    private(set) var history: [Dictation] = HistoryStore.load()
+    private(set) var history: [Dictation] = []
+    /// False while history.json exists but could not be read (device locked). Nothing saves until it loads.
+    private var historyLoaded = false
+    private var unsavedChanges = false
     private(set) var selectedID: UUID?
     /// A short note under the status line ("Didn't catch that", "Copied").
     private(set) var notice: String?
@@ -40,7 +43,17 @@ final class DictationModel {
     /// The editor's text. Edits are saved to the selected dictation.
     var text: String = "" {
         didSet {
-            guard text != oldValue, let id = selectedID,
+            guard text != oldValue else { return }
+            if selectedID == nil {
+                // Typing with nothing selected (fresh install, or history emptied): keep it as a dictation.
+                guard !text.isEmpty else { return }
+                let item = Dictation(raw: "", text: text, seconds: 0)
+                history.insert(item, at: 0)
+                selectedID = item.id
+                scheduleSave()
+                return
+            }
+            guard let id = selectedID,
                 let i = history.firstIndex(where: { $0.id == id }), history[i].text != text
             else { return }
             history[i].text = text
@@ -62,19 +75,68 @@ final class DictationModel {
     private var maxTimer: Task<Void, Never>?
     private var saveTask: Task<Void, Never>?
     private var noticeTask: Task<Void, Never>?
+    /// Bumped whenever a pending start (waiting on the mic permission) must not go ahead.
+    private var startToken = 0
+    private var backgroundTaskID = UIBackgroundTaskIdentifier.invalid
+    private var inFlight: Set<UUID> = []
+    /// The last recording whose transcription failed, so "Try again" can retranscribe it.
+    private var failed: (samples: [Float], seconds: Double, id: UUID)?
 
     /// Hands-free left on by mistake would grow without end; stop at 5 minutes like the desktop.
     private static let maxRecording: Duration = .seconds(300)
     private static let minSeconds = 0.35
 
     init() {
-        if let first = history.first {
-            selectedID = first.id
-            text = first.text
-        }
+        loadHistory()
         recorder.onLevel = { [weak self] lvl in
             Task { @MainActor in self?.level = lvl }
         }
+        recorder.onInterrupted = { [weak self] in
+            Task { @MainActor in self?.interrupted() }
+        }
+    }
+
+    // MARK: History file
+
+    /// Read history.json. A file that exists but cannot be read leaves the store unloaded, so a
+    /// later save cannot replace it with a near-empty list.
+    private func loadHistory() {
+        switch HistoryStore.load() {
+        case .missing:
+            historyLoaded = true
+        case .ok(let items):
+            historyLoaded = true
+            let known = Set(history.map(\.id))
+            history = (history + items.filter { !known.contains($0.id) }).sorted { $0.date > $1.date }
+        case .corrupt:
+            historyLoaded = true
+            show("History couldn't be read. The old file was kept aside.")
+        case .unreadable:
+            historyLoaded = false
+        }
+        if selectedID == nil, text.isEmpty, let first = history.first {
+            selectedID = first.id
+            text = first.text
+        }
+    }
+
+    private func persist() {
+        guard historyLoaded else {
+            unsavedChanges = true
+            return
+        }
+        unsavedChanges = !HistoryStore.save(history)
+    }
+
+    func leavingForeground() {
+        finishIfRecording()
+        saveNow()
+    }
+
+    func becameActive() {
+        if !historyLoaded { loadHistory() }
+        if unsavedChanges { persist() }
+        Task { await recoverPending() }
     }
 
     // MARK: Model
@@ -85,7 +147,7 @@ final class DictationModel {
         UIApplication.shared.isIdleTimerDisabled = true
         defer { UIApplication.shared.isIdleTimerDisabled = false }
 
-        let monitor: Task<Void, Never>? = needsDownload ? Task { [weak self] in
+        let monitor: Task<Void, Never>? = needsDownload ? Task.detached { [weak self] in
             while !Task.isCancelled {
                 let bytes = SpeechEngine.downloadedBytes()
                 let p = min(0.99, Double(bytes) / Double(SpeechEngine.expectedDownloadBytes))
@@ -101,6 +163,11 @@ final class DictationModel {
             try await engine.prepare()
             monitor?.cancel()
             status = .ready
+            // Ask now, so the system alert never lands under a finger mid-hold.
+            if AVAudioApplication.shared.recordPermission == .undetermined {
+                _ = await AVAudioApplication.requestRecordPermission()
+            }
+            await recoverPending()
             #if DEBUG
             await selfTest()
             #endif
@@ -137,6 +204,11 @@ final class DictationModel {
 
     func press() {
         guard canRecord else { return }
+        if AVAudioApplication.shared.recordPermission == .undetermined {
+            // Never start a hold under the permission alert: the system cancels the touch.
+            Task { _ = await AVAudioApplication.requestRecordPermission() }
+            return
+        }
         act(machine.press())
     }
 
@@ -160,9 +232,19 @@ final class DictationModel {
 
     /// The app is leaving the screen: keep what was said.
     func finishIfRecording() {
-        guard recorder.isRunning else { return }
+        // Also drops a start that is still waiting on the permission prompt.
+        startToken += 1
         machine.reset()
+        guard recorder.isRunning else { return }
         finish()
+    }
+
+    /// The microphone was cut off (call, Siri, route change). Keep what was heard.
+    private func interrupted() {
+        startToken += 1
+        machine.reset()
+        finish(force: true)
+        show("Recording stopped: the microphone was interrupted.")
     }
 
     private func act(_ out: HoldMachine.Out) {
@@ -174,6 +256,8 @@ final class DictationModel {
     }
 
     private func start() {
+        startToken += 1
+        let token = startToken
         Task {
             guard await AVAudioApplication.requestRecordPermission() else {
                 machine.reset()
@@ -181,7 +265,7 @@ final class DictationModel {
                 return
             }
             // The press may have ended while the permission prompt was up.
-            guard machine.isActive, !recorder.isRunning else { return }
+            guard token == startToken, machine.isActive, !recorder.isRunning else { return }
             do {
                 try recorder.start()
             } catch {
@@ -200,8 +284,8 @@ final class DictationModel {
         }
     }
 
-    private func finish() {
-        guard recorder.isRunning else { return }
+    private func finish(force: Bool = false) {
+        guard recorder.isRunning || force else { return }
         stopTimers()
         let samples = recorder.stop()
         level = 0
@@ -211,23 +295,73 @@ final class DictationModel {
             return
         }
         status = .writing
+        // Keep the audio on disk until the text is saved, and ask iOS for time to finish.
+        let id = UUID()
+        do {
+            try PendingAudio.write(samples, id: id, in: HistoryStore.directory)
+        } catch {
+            NSLog("SILAS pending audio write failed: %@", String(describing: error))
+        }
+        beginBackgroundWork()
         Task {
-            do {
-                let raw = try await engine.transcribe(samples)
-                let cleaned = Cleanup.apply(raw)
-                status = .ready
-                guard !cleaned.isEmpty else {
-                    show("Didn't catch that. Try again a little closer.")
-                    return
-                }
-                let item = Dictation(id: UUID(), date: Date(), raw: raw, text: cleaned, seconds: seconds)
-                history.insert(item, at: 0)
-                selectedID = item.id
-                text = cleaned
-                HistoryStore.save(history)
-            } catch {
-                status = .error("Couldn't transcribe: \(error.localizedDescription)")
+            await transcribe(samples, seconds: seconds, id: id)
+            endBackgroundWork()
+        }
+    }
+
+    private func beginBackgroundWork() {
+        guard backgroundTaskID == .invalid else { return }
+        backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "silas-transcribe") { [weak self] in
+            Task { @MainActor in self?.endBackgroundWork() }
+        }
+    }
+
+    private func endBackgroundWork() {
+        guard backgroundTaskID != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTaskID)
+        backgroundTaskID = .invalid
+    }
+
+    private func transcribe(_ samples: [Float], seconds: Double, id: UUID) async {
+        guard inFlight.insert(id).inserted else { return }
+        defer { inFlight.remove(id) }
+        do {
+            let raw = try await engine.transcribe(samples)
+            let cleaned = Cleanup.apply(raw)
+            failed = nil
+            status = .ready
+            guard !cleaned.isEmpty else {
+                PendingAudio.remove(id: id, in: HistoryStore.directory)
+                show("Didn't catch that. Try again a little closer.")
+                return
             }
+            let item = Dictation(id: id, date: Date(), raw: raw, text: cleaned, seconds: seconds)
+            history.insert(item, at: 0)
+            selectedID = item.id
+            text = cleaned
+            persist()
+            // The audio is only safe to drop once the text is on disk.
+            if historyLoaded && !unsavedChanges {
+                PendingAudio.remove(id: id, in: HistoryStore.directory)
+            }
+        } catch {
+            failed = (samples, seconds, id)
+            status = .error("Couldn't transcribe: \(error.localizedDescription)")
+        }
+    }
+
+    /// Finish recordings the app was suspended or killed before it could write.
+    private func recoverPending() async {
+        guard status == .ready else { return }
+        let known = Set(history.map(\.id))
+        for (id, samples) in PendingAudio.list(in: HistoryStore.directory) {
+            if known.contains(id) {
+                if historyLoaded && !unsavedChanges { PendingAudio.remove(id: id, in: HistoryStore.directory) }
+                continue
+            }
+            guard status == .ready, !inFlight.contains(id), failed?.id != id else { continue }
+            status = .writing
+            await transcribe(samples, seconds: Double(samples.count) / Recorder.sampleRate, id: id)
         }
     }
 
@@ -240,7 +374,14 @@ final class DictationModel {
     /// Clear an error and go back to Ready if the model is loaded.
     func dismissError() {
         Task {
-            if await engine.isLoaded { status = .ready } else { await prepare() }
+            if let f = failed {
+                status = .writing
+                await transcribe(f.samples, seconds: f.seconds, id: f.id)
+            } else if await engine.isLoaded {
+                status = .ready
+            } else {
+                await prepare()
+            }
         }
     }
 
@@ -259,7 +400,8 @@ final class DictationModel {
             selectedID = history.first?.id
             text = history.first?.text ?? ""
         }
-        HistoryStore.save(history)
+        PendingAudio.remove(id: d.id, in: HistoryStore.directory)
+        persist()
     }
 
     private func scheduleSave() {
@@ -267,13 +409,13 @@ final class DictationModel {
         saveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled, let self else { return }
-            HistoryStore.save(self.history)
+            self.persist()
         }
     }
 
     func saveNow() {
         saveTask?.cancel()
-        HistoryStore.save(history)
+        persist()
     }
 
     // MARK: Actions

@@ -86,7 +86,7 @@ func dropFillers(_ toks: [Tok], fillers: Set<String>) -> [Tok] {
     var capitalizeNext = false
     for (i, t) in toks.enumerated() {
         let key = t.key
-        if !key.isEmpty && fillers.contains(key) {
+        if !key.isEmpty && fillers.contains(key) && !looksLikeRealWord(t, after: out.last) {
             // "Um, so" → "So"; "and, um, then" → "and then"; "done um." → "done."
             let sentenceStart = i == 0 || (out.last.map(endsSentence) ?? false)
             if sentenceStart && startsUpper(t.core) {
@@ -116,6 +116,18 @@ func dropFillers(_ toks: [Tok], fillers: Set<String>) -> [Tok] {
         out.append(t)
     }
     return out
+}
+
+/// "ER" (emergency room) and "5 mm" are words, not hesitations.
+private func looksLikeRealWord(_ t: Tok, after prev: Tok?) -> Bool {
+    if t.core.count > 1 && t.core.allSatisfy({ $0.isUppercase }) && t.core.contains(where: { $0.isLetter }) {
+        // "UM" typed in caps is rare; "ER", "AH" in caps are acronyms. Keep them.
+        return true
+    }
+    if let prev, prev.post.isEmpty || prev.post == ",", !prev.key.isEmpty, prev.key.allSatisfy({ $0.isNumber }) {
+        return true
+    }
+    return false
 }
 
 private func trimTrailingCommas(_ s: String) -> String {

@@ -13,9 +13,13 @@ struct SilasApp: App {
                 .task { await model.prepare() }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .background {
-                model.finishIfRecording()
-                model.saveNow()
+            switch phase {
+            case .background:
+                model.leavingForeground()
+            case .active:
+                model.becameActive()
+            default:
+                break
             }
         }
     }

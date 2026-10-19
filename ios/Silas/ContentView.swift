@@ -1,4 +1,5 @@
 import SwiftUI
+import SilasCore
 
 struct ContentView: View {
     @Bindable var model: DictationModel
@@ -87,7 +88,8 @@ struct DictatePane: View {
 
 struct HoldButton: View {
     @Bindable var model: DictationModel
-    @State private var pressed = false
+    /// Resets by itself when the system cancels the touch (permission alert, call, Control Center).
+    @GestureState private var pressed = false
 
     private let size: CGFloat = 200
 
@@ -123,16 +125,11 @@ struct HoldButton: View {
         .contentShape(Circle())
         .gesture(
             DragGesture(minimumDistance: 0)
-                .onChanged { _ in
-                    guard !pressed else { return }
-                    pressed = true
-                    model.press()
-                }
-                .onEnded { _ in
-                    pressed = false
-                    model.release()
-                }
+                .updating($pressed) { _, state, _ in state = true }
         )
+        .onChange(of: pressed) { _, isDown in
+            if isDown { model.press() } else { model.release() }
+        }
         .overlay(alignment: .topTrailing) {
             if listening {
                 Button {
@@ -155,6 +152,7 @@ struct HoldButton: View {
         .accessibilityLabel(listening ? "Stop and write" : "Dictate")
         .accessibilityHint("Starts listening. Activate again to write what you said.")
         .accessibilityAction { model.toggle() }
+        .accessibilityAction(named: "Cancel") { if listening { model.cancel() } }
     }
 }
 

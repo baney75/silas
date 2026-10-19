@@ -13,7 +13,8 @@ iPad app (SwiftUI, FluidAudio) in `ios/`; see `ios/README.md`. Its check is
 
 ## Rules
 
-- Never paste. Text goes out as keystrokes (`typer.rs`); the clipboard is never touched.
+- Desktop: never paste. Text goes out as keystrokes (`typer.rs`); the clipboard is never touched.
+- iPad: Copy writes the pasteboard only when the user taps it; nothing else touches it.
 - Never auto-unload the model. Reload latency is the bug Silas exists to avoid.
 - Fuzzy matching must not touch common English words (`dictionary.rs` guards with
   `data/common-en.txt`). Add a test to `common_words_are_never_bent_into_jargon` for any

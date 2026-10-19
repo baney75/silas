@@ -17,7 +17,9 @@ enum RecorderError: LocalizedError {
 final class Recorder {
     static let sampleRate: Double = 16_000
 
-    private let engine = AVAudioEngine()
+    /// A fresh engine per recording, so a route change between recordings cannot leave a stale input format.
+    private var engine = AVAudioEngine()
+    private var observers: [NSObjectProtocol] = []
     private let lock = NSLock()
     private var samples: [Float] = []
     private var converter: AVAudioConverter?
@@ -28,11 +30,16 @@ final class Recorder {
     /// Called on the audio thread with a 0...1 loudness for the button's glow.
     var onLevel: ((Float) -> Void)?
 
+    /// Called on the main queue when the capture was cut off (call, Siri, route change).
+    /// The recorder is already halted; `stop()` still returns what was heard.
+    var onInterrupted: (() -> Void)?
+
     func start() throws {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.record, mode: .default, options: [.allowBluetoothHFP])
         try session.setActive(true)
 
+        engine = AVAudioEngine()
         let input = engine.inputNode
         let inFormat = input.outputFormat(forBus: 0)
         guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else { throw RecorderError.noMicrophone }
@@ -54,6 +61,27 @@ final class Recorder {
             throw error
         }
         isRunning = true
+        observe()
+    }
+
+    private func observe() {
+        let nc = NotificationCenter.default
+        let cut: (Notification) -> Void = { [weak self] _ in self?.interrupted() }
+        observers = [
+            nc.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main, using: cut),
+            nc.addObserver(
+                forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+            ) { [weak self] note in
+                let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+                if raw == AVAudioSession.InterruptionType.began.rawValue { self?.interrupted() }
+            },
+        ]
+    }
+
+    private func interrupted() {
+        guard isRunning else { return }
+        halt()
+        onInterrupted?()
     }
 
     /// Stop and return everything heard, as 16 kHz mono floats.
@@ -73,6 +101,8 @@ final class Recorder {
 
     private func halt() {
         guard isRunning else { return }
+        for o in observers { NotificationCenter.default.removeObserver(o) }
+        observers = []
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         isRunning = false
