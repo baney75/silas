@@ -502,9 +502,19 @@ impl Dictionary {
                             let key = toks[k].key();
                             let rest = target.get(at..).unwrap_or("");
                             at += key.len();
-                            !protected[k]
-                                || rest.starts_with(&key)
-                                || (k == i + w - 1 && key.strip_suffix('s') == Some(rest))
+                            if !protected[k] {
+                                return true;
+                            }
+                            let last = k == i + w - 1;
+                            // The name goes on past this word ("Baney" + "space").
+                            let inside = w >= 2 && rest.len() > key.len() && rest.starts_with(&key);
+                            // The word ends a multi-word name.
+                            let ends = w >= 2 && last && rest == key;
+                            // Its own ending: "ghostty's" for "Ghostty".
+                            let own_ending = last && key.strip_suffix('s') == Some(rest);
+                            // A word that already completes the name never takes the next word
+                            // with it ("Tailscale a" is not "Tailscale").
+                            inside || ends || own_ending
                         })
                     };
                     if guarded && !exact && !protected_fits {
@@ -560,6 +570,12 @@ impl Dictionary {
                     let stem = joined
                         .strip_suffix('s')
                         .filter(|s| w == term_words && !target.ends_with('s') && !is_common(s));
+                    // Numbers name different machines: "abby2" is abbey2, never abbey1.
+                    let digits = |s: &str| s.chars().filter(char::is_ascii_digit).collect::<String>();
+                    let (heard_digits, term_digits) = (digits(&joined), digits(&target));
+                    if !heard_digits.is_empty() && !term_digits.is_empty() && heard_digits != term_digits {
+                        continue;
+                    }
                     let score = sounds_like_term(&joined, &target)
                         .max(stem.map_or(0.0, |s| similarity(s, &target)));
                     // A shared sound code alone is not enough: "Obsidian" and "Waypost" both
@@ -1127,6 +1143,13 @@ mod tests {
         // A name's own plural or possessive is still recased.
         assert_eq!(d.apply("check ghostty's config", true), "check Ghostty's config");
         assert_eq!(d.apply("push to github's api", true), "push to GitHub's api");
+        // A protected name never swallows the next word, or grows into a longer twin.
+        assert_eq!(d.apply("check Tailscale a lot", true), "check Tailscale a lot");
+        assert_eq!(d.apply("restart Tailscale two times", true), "restart Tailscale two times");
+        d.add_term("Parish10", "user");
+        assert_eq!(d.apply("ssh into Parish1 now", true), "ssh into Parish1 now");
+        // The digit picks the twin.
+        assert_eq!(d.apply("reboot abby2", true), "reboot abbey2");
         assert_eq!(d.apply("we cloud code it later and make sure it works.", true), "we cloud code it later and make sure it works.");
     }
 
