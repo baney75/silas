@@ -492,10 +492,21 @@ impl Dictionary {
                         hit = Some(0);
                         break;
                     }
-                    // A protected word may only stay put inside a longer name ("Claude" in
-                    // "Claude Kode" → "Claude Code"), never be bent.
-                    let protected_fits = w == term_words
-                        && (i..i + w).all(|k| !protected[k] || toks[k].key() == term_keys[k - i]);
+                    // A protected word may only stay put inside a longer name, spelled as it sits
+                    // there ("Claude" in "Claude Kode" → "Claude Code", "Baney" in "Baney space" →
+                    // "BaneySpaces"), or take its own name's ending ("ghostty's" → "Ghostty's").
+                    // It is never bent into a different spelling.
+                    let protected_fits = {
+                        let mut at = 0;
+                        (i..i + w).all(|k| {
+                            let key = toks[k].key();
+                            let rest = target.get(at..).unwrap_or("");
+                            at += key.len();
+                            !protected[k]
+                                || rest.starts_with(&key)
+                                || (k == i + w - 1 && key.strip_suffix('s') == Some(rest))
+                        })
+                    };
                     if guarded && !exact && !protected_fits {
                         continue;
                     }
@@ -1112,6 +1123,10 @@ mod tests {
         d.add_term("BaneySpaces", "user");
         d.add_correction("Bainey", "Baney", "import");
         assert_eq!(d.apply("the dock of the Baney Spaces app", true), "the dock of the BaneySpaces app");
+        assert_eq!(d.apply("open Baney space now", true), "open BaneySpaces now");
+        // A name's own plural or possessive is still recased.
+        assert_eq!(d.apply("check ghostty's config", true), "check Ghostty's config");
+        assert_eq!(d.apply("push to github's api", true), "push to GitHub's api");
         assert_eq!(d.apply("we cloud code it later and make sure it works.", true), "we cloud code it later and make sure it works.");
     }
 
