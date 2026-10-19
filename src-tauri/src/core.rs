@@ -51,6 +51,8 @@ pub struct Core {
     typed_over: AtomicBool,
     /// Bumped per recording so the length limit only stops the one it was set for.
     recording_gen: std::sync::atomic::AtomicU64,
+    /// Bumped when a press starts from an error, so that error's recovery timer stands down.
+    recover_gen: std::sync::atomic::AtomicU64,
     pub capture: Mutex<Option<std::sync::mpsc::Sender<String>>>,
     pub last_activity: Mutex<Instant>,
     downloading: Mutex<Vec<String>>,
@@ -97,6 +99,7 @@ impl Core {
             listener_ok: AtomicBool::new(false),
             typed_over: AtomicBool::new(false),
             recording_gen: std::sync::atomic::AtomicU64::new(0),
+            recover_gen: std::sync::atomic::AtomicU64::new(0),
             capture: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
             downloading: Mutex::new(vec![]),
@@ -376,7 +379,9 @@ impl Core {
             Status::Ready => {}
             // Errors clear on their own after a few seconds; a retry right away shouldn't
             // be ignored while a model is loaded and the key listener works.
-            Status::Error if self.active_model().is_some() && self.listener_ok.load(Ordering::Relaxed) => {}
+            Status::Error if self.active_model().is_some() && self.listener_ok.load(Ordering::Relaxed) => {
+                self.recover_gen.fetch_add(1, Ordering::Relaxed);
+            }
             Status::NeedsModel => {
                 self.machine.lock().reset();
                 crate::show_main(&self.app);
@@ -387,6 +392,8 @@ impl Core {
                 return;
             }
         }
+        // Note where the keyboard is now, at key-down, without making the mic wait for it.
+        let capture = std::thread::spawn(crate::focus::Target::capture);
         let device = self.settings.lock().microphone.clone();
         let app = self.app.clone();
         match Recording::start(device.as_deref(), move |lvl| {
@@ -397,9 +404,7 @@ impl Core {
                 let gen = self.recording_gen.fetch_add(1, Ordering::Relaxed) + 1;
                 self.cue("start");
                 self.set_status(Status::Recording, None);
-                // After the mic is open, so a slow app can't cost the first words, and after
-                // the status leaves Error, so an error's recovery timer can't reset this press.
-                *self.target.lock() = crate::focus::Target::capture();
+                *self.target.lock() = capture.join().ok().flatten();
                 // Hands-free mode left on by mistake would grow without end; stop at 5 minutes.
                 let me = self.clone();
                 std::thread::spawn(move || {
@@ -456,6 +461,7 @@ impl Core {
             let raw = match raw {
                 Ok(t) => t,
                 Err(e) => {
+                    me.target.lock().take();
                     me.set_status(Status::Error, Some(format!("Transcription failed: {e}")));
                     me.recover_soon();
                     return;
@@ -543,9 +549,10 @@ impl Core {
 
     fn recover_soon(self: &Shared) {
         let me = self.clone();
+        let gen = self.recover_gen.load(Ordering::Relaxed);
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(4));
-            if me.status().0 == Status::Error {
+            if me.status().0 == Status::Error && me.recover_gen.load(Ordering::Relaxed) == gen {
                 me.machine.lock().reset();
                 if me.active_model().is_some() {
                     me.set_status(Status::Ready, None);

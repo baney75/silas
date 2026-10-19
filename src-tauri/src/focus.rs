@@ -33,10 +33,11 @@ pub fn focused() -> Option<u64> {
     None
 }
 
-/// The text field that had the keyboard when the hotkey went down. A window that opens
-/// mid-dictation steals focus without the user asking, so Silas puts the keyboard back here
-/// before it types, unless the user clicked into another text field to choose a new place.
-/// Only a click counts as choosing; switching apps from the keyboard does not.
+/// Where a dictation's text goes: the text field that had the keyboard when the hotkey went
+/// down, or the one the user clicked into since. A window that opens mid-dictation steals
+/// focus without the user asking, so Silas puts the keyboard back here before it types and
+/// stops typing if it leaves. Only a click on a text field counts as choosing; switching apps
+/// from the keyboard does not.
 pub struct Target {
     #[cfg(target_os = "macos")]
     mac: mac::Target,
@@ -78,7 +79,8 @@ pub enum Restore {
     InPlace,
     /// Focus was taken and Silas put it back.
     Restored,
-    /// The user clicked into another field, or Silas can't tell: type where focus is now.
+    /// The target window is gone and another window of the same app has the keyboard: type
+    /// where focus is now.
     Elsewhere,
     /// Focus was taken and Silas couldn't put it back; typing now would hit the wrong window.
     Failed,
@@ -114,6 +116,8 @@ mod mac {
         fn AXUIElementCopyElementAtPosition(app: AXUIElementRef, x: f32, y: f32, out: *mut AXUIElementRef) -> i32;
         fn GetProcessForPID(pid: i32, psn: *mut Psn) -> i32;
         fn GetProcessPID(psn: *const Psn, pid: *mut i32) -> i32;
+        fn AXUIElementCreateSystemWide() -> AXUIElementRef;
+        fn AXUIElementGetPid(el: AXUIElementRef, pid: *mut i32) -> i32;
     }
 
     #[link(name = "CoreGraphics", kind = "framework")]
@@ -235,27 +239,30 @@ mod mac {
         matches!(role.as_deref(), Some("AXTextField" | "AXTextArea" | "AXComboBox" | "AXSearchField"))
     }
 
-    /// The element under the mouse, in the given app.
-    fn under_mouse(pid: i32) -> Option<CFType> {
+    /// The element under the mouse and the app it belongs to.
+    fn under_mouse() -> Option<(i32, CFType)> {
         use core_graphics::event::CGEvent;
         use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
         let at = CGEvent::new(CGEventSource::new(CGEventSourceStateID::HIDSystemState).ok()?).ok()?.location();
+        let system = wrap(unsafe { AXUIElementCreateSystemWide() })?;
         let mut out: AXUIElementRef = std::ptr::null();
-        let err = unsafe { AXUIElementCopyElementAtPosition(app(pid)?.as_CFTypeRef(), at.x as f32, at.y as f32, &mut out) };
-        if err == 0 { wrap(out) } else { None }
+        let err = unsafe { AXUIElementCopyElementAtPosition(system.as_CFTypeRef(), at.x as f32, at.y as f32, &mut out) };
+        let el = if err == 0 { wrap(out)? } else { return None };
+        let mut pid = 0;
+        (unsafe { AXUIElementGetPid(el.as_CFTypeRef(), &mut pid) } == 0).then_some((pid, el))
     }
 
-    /// `el` is `field` or sits inside it (a browser reports the text run under the mouse).
-    fn within(el: CFType, field: &CFType) -> bool {
+    /// The text field `el` is, or sits inside (a browser reports the text run under the mouse).
+    fn text_field_of(el: CFType) -> Option<CFType> {
         let mut cur = Some(el);
         for _ in 0..8 {
-            match cur {
-                Some(c) if same(&c, field) => return true,
-                Some(c) => cur = attr(&c, "AXParent"),
-                None => return false,
+            let c = cur?;
+            if editable(&c) {
+                return Some(c);
             }
+            cur = attr(&c, "AXParent");
         }
-        false
+        None
     }
 
     fn focused_window_id(pid: i32) -> Option<u32> {
@@ -279,75 +286,98 @@ mod mac {
         app(pid).and_then(|a| attr(&a, "AXFocusedUIElement"))
     }
 
-    /// What the watcher and the restore both need to know about the starting field.
-    struct Origin {
+    /// A place text can go: an app, one of its windows, and the text field in it.
+    #[derive(Clone)]
+    struct Spot {
         pid: i32,
-        /// The text field; None when the app reported no text field (a browser still
-        /// building its tree, or a button had focus), so Silas never focuses a container.
+        window: CFType,
+        wid: u32,
+        /// None when the app reported no text field (a browser still building its tree, or
+        /// a button had focus), so Silas never focuses a container.
         element: Option<CFType>,
-        /// The user clicked into another text field during the dictation.
-        chose: AtomicBool,
-        stop: AtomicBool,
+        /// Where the caret sat, put back after refocusing (AppKit selects a field's whole
+        /// text when it takes focus, and typing would replace it).
+        selection: Option<CFType>,
     }
 
-    // AXUIElement is a CoreFoundation type that may be used from any thread.
-    unsafe impl Send for Origin {}
-    unsafe impl Sync for Origin {}
+    impl Spot {
+        /// Where the keyboard is in `pid` right now.
+        fn focused_in(pid: i32) -> Option<Self> {
+            let app = app(pid)?;
+            let window = attr(&app, "AXFocusedWindow")?;
+            let element = attr(&app, "AXFocusedUIElement").filter(editable);
+            Some(Self {
+                pid,
+                wid: window_id(&window)?,
+                window,
+                selection: element.as_ref().and_then(|e| attr(e, "AXSelectedTextRange")),
+                element,
+            })
+        }
 
-    impl Origin {
-        fn is_original(&self, pid: i32, el: &CFType) -> bool {
+        fn has(&self, pid: i32, el: &CFType) -> bool {
             pid == self.pid && self.element.as_ref().is_some_and(|e| same(e, el))
         }
     }
 
-    /// Judges each click when it happens, not at release: by then the mouse has moved on.
-    /// A click into a text field other than the starting one means the user chose it; a
-    /// click back into the starting field undoes that; any other click (dismissing or
-    /// dragging a pop-up) changes nothing.
-    fn watch_clicks(origin: Arc<Origin>) {
-        let mut last = clicks();
-        let mut before: Option<(i32, CFType)> = None;
+    /// Shared between the target and its click watcher.
+    struct Shared {
+        /// Where the text goes: the field focused at key-down, or the one the user clicked
+        /// into since.
+        spot: parking_lot::Mutex<Spot>,
+        stop: AtomicBool,
+    }
+
+    // AXUIElement is a CoreFoundation type that may be used from any thread.
+    unsafe impl Send for Shared {}
+    unsafe impl Sync for Shared {}
+
+    /// Judges each click as it happens, by what is under the mouse at that moment: a press on
+    /// a text field makes it the place for the text; a press on anything else (closing or
+    /// dragging a pop-up, a button) changes nothing, even if it moves focus as a side effect.
+    fn watch_clicks(shared: Arc<Shared>, mut last: u32) {
         // Recordings stop at 5 minutes; never outlive one by much even if nobody stops us.
         let give_up = Instant::now() + Duration::from_secs(330);
-        while !origin.stop.load(Ordering::Relaxed) && Instant::now() < give_up {
-            std::thread::sleep(Duration::from_millis(40));
-            let now_clicks = clicks();
-            if now_clicks == last {
-                before = front_pid().and_then(|p| focused_element(p).map(|e| (p, e)));
+        while !shared.stop.load(Ordering::Relaxed) && Instant::now() < give_up {
+            std::thread::sleep(Duration::from_millis(30));
+            let now = clicks();
+            if now == last {
                 continue;
             }
-            last = now_clicks;
-            std::thread::sleep(Duration::from_millis(60)); // let the click move focus
-            let Some(pid) = front_pid() else { continue };
-            let Some(now) = focused_element(pid) else { continue };
-            if origin.is_original(pid, &now) {
-                origin.chose.store(false, Ordering::Relaxed);
-            } else if editable(&now) {
-                // A pop-up's field may have been focused before the click; it only counts
-                // if the click moved focus there or landed on it.
-                let moved = before.as_ref().is_none_or(|(p, e)| *p != pid || !same(e, &now));
-                if moved || under_mouse(pid).is_some_and(|el| within(el, &now)) {
-                    origin.chose.store(true, Ordering::Relaxed);
-                }
+            last = now;
+            // Finish judging this click even if Silas is told to stop meanwhile.
+            let Some((pid, field)) = under_mouse().and_then(|(p, el)| Some((p, text_field_of(el)?))) else {
+                continue;
+            };
+            if shared.spot.lock().has(pid, &field) {
+                continue;
             }
-            before = Some((pid, now));
+            // The app moves its keyboard focus to the field shortly after the click.
+            let deadline = Instant::now() + Duration::from_millis(400);
+            loop {
+                let focused = Spot::focused_in(pid);
+                if let Some(spot) = focused.filter(|s| s.has(pid, &field)) {
+                    *shared.spot.lock() = spot;
+                    break;
+                }
+                if Instant::now() > deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
         }
     }
 
     pub struct Target {
-        origin: Arc<Origin>,
-        window: CFType,
-        wid: u32,
-        /// Where the caret sat in the field, put back after refocusing (AppKit selects a
-        /// field's whole text when it takes focus, and typing would replace it).
-        selection: Option<CFType>,
+        shared: Arc<Shared>,
+        watcher: parking_lot::Mutex<Option<std::thread::JoinHandle<()>>>,
     }
 
     unsafe impl Send for Target {}
 
     impl Drop for Target {
         fn drop(&mut self) {
-            self.origin.stop.store(true, Ordering::Relaxed);
+            self.shared.stop.store(true, Ordering::Relaxed);
         }
     }
 
@@ -356,51 +386,39 @@ mod mac {
             // Without SkyLight Silas can't move focus back, so it doesn't try: it types where
             // focus is, as it did before.
             skylight()?;
+            let baseline = clicks();
             let pid = super::focused()? as i32;
-            let app = app(pid)?;
-            let window = attr(&app, "AXFocusedWindow")?;
-            let element = attr(&app, "AXFocusedUIElement").filter(editable);
-            let selection = element.as_ref().and_then(|e| attr(e, "AXSelectedTextRange"));
-            let origin = Arc::new(Origin {
-                pid,
-                element,
-                chose: AtomicBool::new(false),
-                stop: AtomicBool::new(false),
-            });
-            let watcher = origin.clone();
-            std::thread::spawn(move || watch_clicks(watcher));
-            Some(Self {
-                origin,
-                wid: window_id(&window)?,
-                window,
-                selection,
-            })
+            let spot = Spot::focused_in(pid)?;
+            let shared = Arc::new(Shared { spot: parking_lot::Mutex::new(spot), stop: AtomicBool::new(false) });
+            let watcher = shared.clone();
+            let handle = std::thread::spawn(move || watch_clicks(watcher, baseline));
+            Some(Self { shared, watcher: parking_lot::Mutex::new(Some(handle)) })
         }
 
-        /// Keystrokes would land in the captured window, or the app is too slow to say
+        fn spot(&self) -> Spot {
+            self.shared.spot.lock().clone()
+        }
+
+        /// Keystrokes would land in the target window, or the app is too slow to say
         /// otherwise. Only a clear sign (another app in front, another window focused) is No.
         pub(super) fn in_place(&self) -> bool {
-            let pid = self.origin.pid;
-            front_pid().is_none_or(|p| p == pid) && focused_window_id(pid).is_none_or(|w| w == self.wid)
+            let spot = self.spot();
+            front_pid().is_none_or(|p| p == spot.pid) && focused_window_id(spot.pid).is_none_or(|w| w == spot.wid)
         }
 
         pub fn still_here(&self) -> bool {
             self.in_place()
         }
 
-        fn user_chose_elsewhere(&self) -> bool {
-            self.origin.chose.load(Ordering::Relaxed)
-        }
-
-        /// Ask the app to focus the captured field if something else in it has focus, and
-        /// put the caret back where it was.
-        fn refocus_field(&self) {
-            let Some(e) = &self.origin.element else { return };
-            if focused_element(self.origin.pid).is_some_and(|f| same(&f, e)) {
+        /// Ask the app to focus the target field if something else in it has focus, and put
+        /// the caret back where it was.
+        fn refocus_field(spot: &Spot) {
+            let Some(e) = &spot.element else { return };
+            if focused_element(spot.pid).is_some_and(|f| same(&f, e)) {
                 return;
             }
             set_true(e, "AXFocused");
-            if let Some(range) = &self.selection {
+            if let Some(range) = &spot.selection {
                 unsafe {
                     AXUIElementSetAttributeValue(
                         e.as_CFTypeRef(),
@@ -412,34 +430,35 @@ mod mac {
         }
 
         pub fn restore(&self) -> Restore {
-            self.origin.stop.store(true, Ordering::Relaxed);
-            if self.user_chose_elsewhere() {
-                return Restore::Elsewhere;
+            // Let the watcher finish judging a click it has already seen, then stop it.
+            self.shared.stop.store(true, Ordering::Relaxed);
+            if let Some(h) = self.watcher.lock().take() {
+                let _ = h.join();
             }
+            let spot = self.spot();
             if self.in_place() {
                 // Same window. Don't re-activate it (that can clear a browser's own focus),
                 // but a sheet or dialog inside it may have taken the field.
-                self.refocus_field();
+                Self::refocus_field(&spot);
                 return Restore::InPlace;
             }
-            let pid = self.origin.pid;
-            if let Err(AX_INVALID_ELEMENT) = attr_err(&self.window, "AXRole") {
+            if let Err(AX_INVALID_ELEMENT) = attr_err(&spot.window, "AXRole") {
                 // The window is gone. Another window of the same app is a fine home for the
                 // text; anything else would be a stranger's window.
-                log::info!("the window the dictation started in is gone");
-                return if front_pid() == Some(pid) { Restore::Elsewhere } else { Restore::Failed };
+                log::info!("the window the dictation was going to is gone");
+                return if front_pid() == Some(spot.pid) { Restore::Elsewhere } else { Restore::Failed };
             }
             let Some(sl) = skylight() else { return Restore::Failed };
             let mut psn: Psn = [0; 8];
-            if unsafe { GetProcessForPID(pid, &mut psn) } != 0 {
+            if unsafe { GetProcessForPID(spot.pid, &mut psn) } != 0 {
                 return Restore::Failed;
             }
             for _ in 0..2 {
                 // kCPSUserGenerated lets the app install its key window before it handles keys.
-                unsafe { (sl.set_front)(&psn, self.wid, 0x200) };
-                make_key(sl, &psn, self.wid);
+                unsafe { (sl.set_front)(&psn, spot.wid, 0x200) };
+                make_key(sl, &psn, spot.wid);
                 unsafe {
-                    AXUIElementPerformAction(self.window.as_CFTypeRef(), CFString::new("AXRaise").as_concrete_TypeRef());
+                    AXUIElementPerformAction(spot.window.as_CFTypeRef(), CFString::new("AXRaise").as_concrete_TypeRef());
                 }
                 let deadline = Instant::now() + Duration::from_millis(400);
                 while !self.in_place() && Instant::now() < deadline {
@@ -451,12 +470,12 @@ mod mac {
                 }
             }
             if !self.in_place() {
-                log::warn!("could not put the keyboard back where the dictation started");
+                log::warn!("could not put the keyboard back where the dictation was going");
                 return Restore::Failed;
             }
             // The app restores its own last field on activation; nudge it in case it didn't.
-            self.refocus_field();
-            log::info!("put the keyboard back where the dictation started");
+            Self::refocus_field(&spot);
+            log::info!("put the keyboard back where the dictation was going");
             Restore::Restored
         }
 
