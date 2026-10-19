@@ -263,6 +263,16 @@ pub fn sound_alike(heard: &str, intended: &str) -> f32 {
     score
 }
 
+fn edits(a: &str, b: &str) -> usize {
+    levenshtein(&a.chars().collect::<Vec<_>>(), &b.chars().collect::<Vec<_>>())
+}
+
+/// Some full-length sound code of `a` equals one of `b`.
+fn same_sound(a: &str, b: &str) -> bool {
+    let (pa, pb) = (phonetic(a), phonetic(b));
+    pa.iter().any(|x| !x.is_empty() && pb.contains(x))
+}
+
 /// The "s" or "'s" a heard word adds to a term ("GitHubs" → "GitHub" + "s"), so snapping
 /// to the term does not drop it.
 fn plural_suffix(heard: &str, term: &str) -> String {
@@ -404,9 +414,24 @@ impl Dictionary {
     fn snap_terms(&mut self, toks: &mut Vec<Tok>, locked: &mut Vec<bool>) {
         let mut targets = self.snap_targets();
         targets.sort_by_key(|(t, _)| std::cmp::Reverse(t.len()));
+        // Protect every name already spelled right before any matching, so a near twin
+        // ("Parish1" next to "Parish2") can never bend it, whatever order they run in. Only an
+        // exact longer name may still claim it ("Baney Spaces" → "BaneySpaces").
+        let mut protected = vec![false; toks.len()];
+        for (term, _) in &targets {
+            let n = term.split_whitespace().count();
+            for i in 0..toks.len().saturating_sub(n.max(1) - 1) {
+                let span = (i..i + n).map(|k| toks[k].core.as_str()).collect::<Vec<_>>().join(" ");
+                if n > 0 && span == *term {
+                    protected[i..i + n].fill(true);
+                }
+            }
+        }
         for (term, ti) in targets {
             let target: String = norm_phrase(&term).concat();
-            if target.len() < 3 {
+            // Names known only from a correction need some length to be safe to listen for:
+            // "Isa" would turn "is a" into a name.
+            if target.len() < 3 || (ti.is_none() && target.len() < 5) {
                 continue;
             }
             let term_words = norm_phrase(&term).len();
@@ -418,6 +443,7 @@ impl Dictionary {
                     if i + w > toks.len() || (i..i + w).any(|k| locked[k]) {
                         continue;
                     }
+                    let guarded = (i..i + w).any(|k| protected[k]);
                     // Don't fuse across a sentence break or a comma.
                     if (i..i + w - 1).any(|k| !toks[k].post.is_empty()) {
                         continue;
@@ -438,12 +464,15 @@ impl Dictionary {
                         hit = Some(0);
                         break;
                     }
+                    if guarded && !exact {
+                        continue;
+                    }
                     // A one-word term that is also an everyday word ("Actor", "Leading") only
                     // keeps its casing when spoken as such; never recase "the actor".
                     // A name known only from a correction ("Martyr") is a spelling to reach, not a
                     // casing to force: "a martyr died" stays as spoken.
-                    let ordinary = if ti.is_some() { is_everyday(&toks[i].core) } else { is_common(&toks[i].core) };
-                    if exact && !(w == 1 && ordinary) {
+                    let ordinary = if ti.is_some() { w == 1 && is_everyday(&toks[i].core) } else { all_common };
+                    if exact && !ordinary {
                         hit = Some(w);
                         break;
                     }
@@ -452,16 +481,18 @@ impl Dictionary {
                     // Never bend an address or file name ("claude.ai", "notes/plan.md").
                     let addressy = (i..i + w).any(|k| toks[k].core.contains(['.', '@', '/', '\\']));
                     // Two ordinary words can still spell a one-word name almost letter for letter
-                    // ("Bane spaces" → "BaneySpaces"). Long names only, nearly exact, same first
-                    // letter, and not just the name plus a plural "s".
+                    // ("Bane spaces" → "BaneySpaces"): names of 8+ letters, one edit away, same
+                    // first letter, not the name plus a plural "s", and never two everyday words
+                    // ("what matters most" is not "Mattermost").
                     let fused = all_common
                         && w == 2
                         && term_words == 1
                         && !addressy
                         && target.len() >= 8
+                        && !(is_everyday(&toks[i].core) && is_everyday(&toks[i + 1].core))
                         && joined.chars().next() == target.chars().next()
                         && joined != format!("{target}s")
-                        && similarity(&joined, &target) >= 0.9;
+                        && edits(&joined, &target) <= 1;
                     if fused {
                         hit = Some(w);
                         break;
@@ -480,7 +511,10 @@ impl Dictionary {
                         .max(stem.map_or(0.0, |s| similarity(s, &target)));
                     // A shared sound code alone is not enough: "Obsidian" and "Waypost" both
                     // encode as APST. Half the letters must agree too.
-                    let spelled_close = similarity(stem.unwrap_or(&joined), &target) >= 0.5;
+                    // Full-length codes that match exactly are trustworthy on their own ("Towery"
+                    // and "Tauri" are both TR); they now tell Obsidian (APSTN) from Waypost (APST).
+                    let spelled = similarity(stem.unwrap_or(&joined), &target);
+                    let spelled_close = spelled >= 0.5 || (spelled >= 0.3 && same_sound(&joined, &target));
                     if spelled_close && score >= 0.82 && (w == term_words || score >= 0.88) {
                         hit = Some(w);
                         fuzzy = true;
@@ -506,6 +540,7 @@ impl Dictionary {
                         };
                         let with = term.clone() + &suffix;
                         let n = replace_span(toks, locked, i, w, &with, sentence_start);
+                        protected.splice(i..i + w, std::iter::repeat_n(false, n));
                         if let Some(ti) = ti {
                             self.terms[ti].uses += 1;
                         }
@@ -924,6 +959,22 @@ mod tests {
         let s = "the Taurus constellation, the ghosts and the hosts.";
         assert_eq!(d.apply(s, true), s);
         assert_eq!(d.apply("shop at macy's and trader joe's", true), "shop at Macy's and Trader Joe's");
+        // Fusing two words into a name, and names known only from corrections.
+        for t in ["BaneySpaces", "Mattermost"] {
+            d.add_term(t, "user");
+        }
+        d.add_correction("martry", "Martyr", "import");
+        d.add_correction("eesa", "Isa", "import");
+        d.add_correction("eena", "Ina", "import");
+        for s in [
+            "she found the bane of spaces everywhere.",
+            "a martyr died for the faith.",
+            "the fish has tail scales.",
+            "what matters most is speed.",
+            "this is a test, back in a minute.",
+        ] {
+            assert_eq!(d.apply(s, true), s);
+        }
     }
 
     #[test]
@@ -1002,18 +1053,26 @@ mod tests {
     }
 
     #[test]
-    fn fusing_ordinary_words_stays_rare() {
+    fn near_twin_names_keep_their_own_spelling() {
         let mut d = dict();
-        d.add_term("BaneySpaces", "user");
-        d.add_correction("martry", "Martyr", "import");
-        for s in [
-            "the fish has tail scales.",
-            "a martyr died for the faith.",
-            "she found the bane of spaces everywhere.",
-            "we cloud code it later and make sure it works.",
-        ] {
-            assert_eq!(d.apply(s, true), s);
+        for t in ["Parish2", "abbey1", "abbey2"] {
+            d.add_term(t, "user");
         }
+        let s = "ssh into Parish2 now, then Parish1, abbey1 and abbey2.";
+        assert_eq!(d.apply(s, true), s);
+        // A protected name can still be part of a longer name spoken exactly.
+        d.add_term("BaneySpaces", "user");
+        d.add_correction("Bainey", "Baney", "import");
+        assert_eq!(d.apply("the dock of the Baney Spaces app", true), "the dock of the BaneySpaces app");
+        assert_eq!(d.apply("we cloud code it later and make sure it works.", true), "we cloud code it later and make sure it works.");
+    }
+
+    #[test]
+    fn sound_alike_names_still_snap() {
+        let mut d = dict();
+        d.add_term("Tauri", "user");
+        // Spelled far apart, but the full sound codes match exactly (TR).
+        assert_eq!(d.apply("build it with Towery", true), "build it with Tauri");
     }
 
     #[test]
