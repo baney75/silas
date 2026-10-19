@@ -277,8 +277,11 @@ fn sound_alike_codes(heard: &str, intended: &str, max: Option<usize>) -> f32 {
     score
 }
 
-fn edits(a: &str, b: &str) -> usize {
-    levenshtein(&a.chars().collect::<Vec<_>>(), &b.chars().collect::<Vec<_>>())
+/// `target` is `first`, at most one more letter, then `second`.
+fn halves_of(first: &str, second: &str, target: &str) -> bool {
+    target.len() <= first.len() + second.len() + 1
+        && target.starts_with(first)
+        && target[first.len()..].ends_with(second)
 }
 
 /// Some full-length sound code of `a` equals one of `b`.
@@ -432,11 +435,21 @@ impl Dictionary {
         // ("Parish1" next to "Parish2") can never bend it, whatever order they run in. Only an
         // exact longer name may still claim it ("Baney Spaces" → "BaneySpaces").
         let mut protected = vec![false; toks.len()];
+        // Matched by spelling, ignoring case and a plural or possessive ending ("parish2",
+        // "Parish2's").
         for (term, _) in &targets {
-            let n = term.split_whitespace().count();
-            for i in 0..toks.len().saturating_sub(n.max(1) - 1) {
-                let span = (i..i + n).map(|k| toks[k].core.as_str()).collect::<Vec<_>>().join(" ");
-                if n > 0 && span == *term {
+            let keys = norm_phrase(term);
+            let n = keys.len();
+            if n == 0 {
+                continue;
+            }
+            for i in 0..toks.len().saturating_sub(n - 1) {
+                let fits = (0..n).all(|k| {
+                    let key = toks[i + k].key();
+                    key == keys[k]
+                        || (k == n - 1 && key.strip_suffix('s').is_some_and(|s| s == keys[k]))
+                });
+                if fits {
                     protected[i..i + n].fill(true);
                 }
             }
@@ -502,19 +515,18 @@ impl Dictionary {
                     // keeps "better" from becoming "Bezier" and "make sure" from "make Azure".
                     // Never bend an address or file name ("claude.ai", "notes/plan.md").
                     let addressy = (i..i + w).any(|k| toks[k].core.contains(['.', '@', '/', '\\']));
-                    // Two ordinary words can still spell a one-word name almost letter for letter
-                    // ("Bane spaces" → "BaneySpaces"): names of 8+ letters, one edit away, same
-                    // first letter, not the name plus a plural "s", and never two everyday words
-                    // ("what matters most" is not "Mattermost").
+                    // Two ordinary words can still be the two halves of a one-word name, with at
+                    // most one letter lost at the seam ("Bane spaces" → "BaneySpaces"): names of
+                    // 8+ letters, never two everyday words ("what matters most" is not
+                    // "Mattermost"), and never a word that only resembles a half ("the sun shone"
+                    // is not "Sunshine").
                     let fused = all_common
                         && w == 2
                         && term_words == 1
                         && !addressy
                         && target.len() >= 8
                         && !(is_everyday(&toks[i].core) && is_everyday(&toks[i + 1].core))
-                        && joined.chars().next() == target.chars().next()
-                        && joined != format!("{target}s")
-                        && edits(&joined, &target) <= 1;
+                        && halves_of(&toks[i].key(), &toks[i + 1].key(), &target);
                     if fused {
                         hit = Some(w);
                         break;
@@ -990,7 +1002,7 @@ mod tests {
         assert_eq!(d.apply(s, true), s);
         assert_eq!(d.apply("shop at macy's and trader joe's", true), "shop at Macy's and Trader Joe's");
         // Fusing two words into a name, and names known only from corrections.
-        for t in ["BaneySpaces", "Mattermost"] {
+        for t in ["BaneySpaces", "Mattermost", "Sunshine"] {
             d.add_term(t, "user");
         }
         d.add_correction("martry", "Martyr", "import");
@@ -1005,6 +1017,7 @@ mod tests {
             "this is a test, back in a minute.",
             "we visited the martyr's grave and the martyrs.",
             "put it on the book shelf.",
+            "the sun shone all day.",
         ] {
             assert_eq!(d.apply(s, true), s);
         }
@@ -1093,6 +1106,8 @@ mod tests {
         }
         let s = "ssh into Parish2 now, then Parish1, abbey1 and abbey2.";
         assert_eq!(d.apply(s, true), s);
+        assert_eq!(d.apply("ssh into parish2 now", true), "ssh into Parish2 now");
+        assert_eq!(d.apply("Parish2's disk is full", true), "Parish2's disk is full");
         // A protected name can still be part of a longer name spoken exactly.
         d.add_term("BaneySpaces", "user");
         d.add_correction("Bainey", "Baney", "import");
