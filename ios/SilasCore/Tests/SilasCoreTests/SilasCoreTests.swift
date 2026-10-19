@@ -94,6 +94,30 @@ final class FillerSafetyTests: XCTestCase {
     }
 }
 
+final class RoundTwoCleanupTests: XCTestCase {
+    func testDigitRunsNeverCollapse() {
+        XCTAssertEqual(Cleanup.apply("call five five five one two"), "call five five five one two")
+        XCTAssertEqual(Cleanup.apply("code 5 5 5 1"), "code 5 5 5 1")
+        XCTAssertEqual(Cleanup.apply("5 5 50"), "5 5 50")
+    }
+
+    func testFillersAfterNumbersGoExceptUnits() {
+        XCTAssertEqual(Cleanup.apply("I have 3 uh questions"), "I have 3 questions")
+        XCTAssertEqual(Cleanup.apply("about 20 um people"), "about 20 people")
+        XCTAssertEqual(Cleanup.apply("We need 5, um, chairs"), "We need 5, chairs")
+        XCTAssertEqual(Cleanup.apply("Use a 5 mm bolt"), "Use a 5 mm bolt")
+    }
+
+    func testGermanErAndUmAreWords() {
+        XCTAssertEqual(Cleanup.apply("Er ist hier."), "Er ist hier.")
+        XCTAssertEqual(Cleanup.apply("Um zu gehen, brauche ich Zeit."), "Um zu gehen, brauche ich Zeit.")
+        // Unambiguous English fillers still go in German text, and English "um" still goes.
+        XCTAssertEqual(Cleanup.apply("Er ist, uh, hier."), "Er ist, hier.")
+        XCTAssertEqual(Cleanup.apply("Um, so we start."), "So we start.")
+        XCTAssertEqual(Cleanup.apply("Er, I think so."), "I think so.")
+    }
+}
+
 final class HistoryFileTests: XCTestCase {
     private func tmp() -> URL {
         let d = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -136,6 +160,26 @@ final class HistoryFileTests: XCTestCase {
         XCTAssertEqual(found.count, 1)
         XCTAssertEqual(found[0].id, id)
         XCTAssertEqual(found[0].samples, [0.5, -0.25, 1])
+        PendingAudio.remove(id: id, in: dir)
+        XCTAssertTrue(PendingAudio.list(in: dir).isEmpty)
+    }
+
+    func testPendingAudioIsExcludedFromBackup() throws {
+        let dir = tmp()
+        let id = UUID()
+        try PendingAudio.write([0.1, 0.2], id: id, in: dir)
+        let folder = PendingAudio.folder(in: dir)
+        XCTAssertEqual(try folder.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+        let file = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil).first)
+        XCTAssertEqual(try file.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+    }
+
+    func testPendingAudioKeepsItsRecordedDate() throws {
+        let dir = tmp()
+        let id = UUID()
+        let monday = Date(timeIntervalSince1970: 1_792_000_000)
+        try PendingAudio.write([0.3], id: id, date: monday, in: dir)
+        XCTAssertEqual(PendingAudio.list(in: dir).first?.date, monday)
         PendingAudio.remove(id: id, in: dir)
         XCTAssertTrue(PendingAudio.list(in: dir).isEmpty)
     }

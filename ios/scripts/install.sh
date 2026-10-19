@@ -1,9 +1,15 @@
 #!/bin/sh
 # Build Silas for the iPad, install it over USB and launch it.
-# Usage: ios/scripts/install.sh [device-udid]   (defaults to vestry1)
+# Usage: ios/scripts/install.sh <device-udid>   (or set SILAS_DEVICE)
+# List devices with: xcrun devicectl list devices
 set -eu
 cd "$(dirname "$0")/.."
-DEVICE="${1:-00008103-001824281469401E}"
+DEVICE="${1:-${SILAS_DEVICE:-}}"
+if [ -z "$DEVICE" ]; then
+  echo "usage: ios/scripts/install.sh <device-udid>   (or set SILAS_DEVICE)" >&2
+  echo "find it with: xcrun devicectl list devices" >&2
+  exit 2
+fi
 
 xcodegen generate --quiet
 xcodebuild -project Silas.xcodeproj -scheme Silas -configuration Release \

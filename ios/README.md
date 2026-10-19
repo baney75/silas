@@ -38,7 +38,7 @@ Needs Xcode signed in to the Apple ID behind the free Personal Team (`54H7JX2PD4
 Xcode › Settings › Accounts. Then, with the iPad on USB:
 
 ```sh
-ios/scripts/install.sh            # vestry1; pass another UDID to target a different iPad
+ios/scripts/install.sh <udid>     # or SILAS_DEVICE=<udid>; list with: xcrun devicectl list devices
 ```
 
 Free Personal Team profiles expire after 7 days. When Silas stops opening, run the same

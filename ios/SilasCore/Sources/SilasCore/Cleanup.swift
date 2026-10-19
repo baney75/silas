@@ -2,6 +2,7 @@
 // (`drop_fillers`, `drop_stutters` and the tokenizer they share). Pure and deterministic.
 
 import Foundation
+import NaturalLanguage
 
 public enum Cleanup {
     public static let defaultFillers = [
@@ -12,7 +13,13 @@ public enum Cleanup {
     /// sentence case kept.
     public static func apply(_ text: String, fillers: [String] = defaultFillers) -> String {
         var toks = tokenize(text)
-        toks = dropFillers(toks, fillers: Set(fillers.map(norm)))
+        var set = Set(fillers.map(norm))
+        // "er" and "um" are English hesitations but ordinary German words ("Er ist hier",
+        // "um zu"). Skip them when the rest of the text is confidently another language.
+        if !set.isDisjoint(with: ambiguousFillers) && looksNonEnglish(toks, ignoring: ambiguousFillers) {
+            set.subtract(ambiguousFillers)
+        }
+        toks = dropFillers(toks, fillers: set)
         toks = dropStutters(toks)
         return render(toks)
     }
@@ -62,6 +69,20 @@ func norm(_ word: String) -> String {
         "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
     ]
     return digits[lower] ?? lower
+}
+
+/// Filler words that are real words in other languages.
+let ambiguousFillers: Set<String> = ["er", "um"]
+
+/// True when the text, without the ambiguous fillers, is confidently not English. Short or
+/// unclear text counts as English, so "Um" alone is still dropped.
+func looksNonEnglish(_ toks: [Tok], ignoring: Set<String>) -> Bool {
+    let rest = toks.filter { !ignoring.contains($0.key) }.map(\.rendered).joined(separator: " ")
+    guard rest.contains(where: \.isLetter) else { return false }
+    let recognizer = NLLanguageRecognizer()
+    recognizer.processString(rest)
+    guard let (lang, p) = recognizer.languageHypotheses(withMaximum: 1).first else { return false }
+    return lang != .english && p >= 0.6
 }
 
 private func startsUpper(_ s: String) -> Bool { s.first?.isUppercase ?? false }
@@ -118,17 +139,20 @@ func dropFillers(_ toks: [Tok], fillers: Set<String>) -> [Tok] {
     return out
 }
 
-/// "ER" (emergency room) and "5 mm" are words, not hesitations.
+/// "ER" (emergency room) and "5 mm" are words, not hesitations. Only a unit-like filler
+/// ("mm") survives after a number: "3 uh questions" and "5, um, chairs" still lose the filler.
 private func looksLikeRealWord(_ t: Tok, after prev: Tok?) -> Bool {
     if t.core.count > 1 && t.core.allSatisfy({ $0.isUppercase }) && t.core.contains(where: { $0.isLetter }) {
         // "UM" typed in caps is rare; "ER", "AH" in caps are acronyms. Keep them.
         return true
     }
-    if let prev, prev.post.isEmpty || prev.post == ",", !prev.key.isEmpty, prev.key.allSatisfy({ $0.isNumber }) {
+    if t.key == "mm", let prev, prev.post.isEmpty, isNumberKey(prev.key) {
         return true
     }
     return false
 }
+
+private func isNumberKey(_ k: String) -> Bool { !k.isEmpty && k.allSatisfy({ $0.isNumber }) }
 
 private func trimTrailingCommas(_ s: String) -> String {
     var s = s
@@ -159,7 +183,8 @@ func dropStutters(_ input: [Tok]) -> [Tok] {
         while j < toks.count && toks[j].key == key && toks[j - 1].post.isEmpty && !key.isEmpty {
             j += 1
         }
-        let run = j - i
+        // Digits are never stutters: "five five five one two" is a number, "5 5 50" is three.
+        let run = isNumberKey(key) ? 1 : j - i
         // "b b b both" → "both": a run of one letter that starts the next word is a false start.
         let falseStart = run >= 2
             && key.count == 1

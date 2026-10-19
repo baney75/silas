@@ -30,7 +30,7 @@ final class Recorder {
     /// Called on the audio thread with a 0...1 loudness for the button's glow.
     var onLevel: ((Float) -> Void)?
 
-    /// Called on the main queue when the capture was cut off (call, Siri, route change).
+    /// Called on the main queue when the capture was cut off (a call or Siri took the microphone).
     /// The recorder is already halted; `stop()` still returns what was heard.
     var onInterrupted: (() -> Void)?
 
@@ -40,15 +40,28 @@ final class Recorder {
         try session.setActive(true)
 
         engine = AVAudioEngine()
+        lock.withLock { samples.removeAll(keepingCapacity: true) }
+        do {
+            try attach()
+        } catch {
+            // Don't leave the record session active (it would keep other apps' audio silenced).
+            engine.inputNode.removeTap(onBus: 0)
+            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+            throw error
+        }
+        isRunning = true
+        observe()
+    }
+
+    /// Install the tap against the input's current format and start the engine.
+    private func attach() throws {
         let input = engine.inputNode
         let inFormat = input.outputFormat(forBus: 0)
         guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else { throw RecorderError.noMicrophone }
         guard let converter = AVAudioConverter(from: inFormat, to: outFormat) else {
             throw RecorderError.formatUnsupported
         }
-        self.converter = converter
-        lock.withLock { samples.removeAll(keepingCapacity: true) }
-
+        lock.withLock { self.converter = converter }
         // Deprecated in iOS 27 for a throwing form that the Swift SDK doesn't expose yet.
         input.installTap(onBus: 0, bufferSize: 4096, format: inFormat) { [weak self] buffer, _ in
             self?.append(buffer)
@@ -60,15 +73,14 @@ final class Recorder {
             input.removeTap(onBus: 0)
             throw error
         }
-        isRunning = true
-        observe()
     }
 
     private func observe() {
         let nc = NotificationCenter.default
-        let cut: (Notification) -> Void = { [weak self] _ in self?.interrupted() }
         observers = [
-            nc.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main, using: cut),
+            nc.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) {
+                [weak self] _ in self?.routeChanged()
+            },
             nc.addObserver(
                 forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
             ) { [weak self] note in
@@ -76,6 +88,20 @@ final class Recorder {
                 if raw == AVAudioSession.InterruptionType.began.rawValue { self?.interrupted() }
             },
         ]
+    }
+
+    /// The input format changed (AirPods connected or switched to HFP, a route change). The engine
+    /// has stopped: rebuild the tap on the new format and keep recording, keeping what was captured.
+    /// Only if that fails does the recording end.
+    private func routeChanged() {
+        guard isRunning else { return }
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        do {
+            try attach()
+        } catch {
+            interrupted()
+        }
     }
 
     private func interrupted() {
@@ -110,7 +136,7 @@ final class Recorder {
     }
 
     private func append(_ buffer: AVAudioPCMBuffer) {
-        guard let converter else { return }
+        guard let converter = lock.withLock({ self.converter }) else { return }
         let ratio = Recorder.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
         guard let out = AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: capacity) else { return }

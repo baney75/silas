@@ -49,7 +49,7 @@ struct DictatePane: View {
             .frame(maxWidth: .infinity)
             TranscriptCard(model: model)
         }
-        .padding(.horizontal, 40)
+        .padding(.horizontal, wide ? 40 : 24)
         .padding(.top, 24)
         .padding(.bottom, 28)
     }
@@ -191,10 +191,21 @@ struct StatusLine: View {
                         .buttonStyle(.bordered)
                 }
             default:
-                Text(model.notice ?? " ")
-                    .font(.system(size: 15))
-                    .foregroundStyle(Theme.text3)
-                    .animation(.default, value: model.notice)
+                if model.hasFailedClip {
+                    HStack(spacing: 12) {
+                        Text("A recording couldn't be transcribed.")
+                            .font(.system(size: 15)).foregroundStyle(Theme.red)
+                        Button("Try again") { model.retryFailedClip() }
+                            .buttonStyle(.bordered)
+                        Button("Discard", role: .destructive) { model.discardFailedClip() }
+                            .buttonStyle(.bordered)
+                    }
+                } else {
+                    Text(model.notice ?? " ")
+                        .font(.system(size: 15))
+                        .foregroundStyle(Theme.text3)
+                        .animation(.default, value: model.notice)
+                }
             }
         }
     }
@@ -212,7 +223,7 @@ struct StatusLine: View {
 
 struct TranscriptCard: View {
     @Bindable var model: DictationModel
-    @Environment(\.openURL) private var openURL
+    @Environment(\.openURL) fileprivate var openURL
     @FocusState private var editing: Bool
 
     var body: some View {
@@ -245,36 +256,57 @@ struct TranscriptCard: View {
             }
             .frame(maxHeight: .infinity)
 
-            HStack(spacing: 12) {
-                Button {
-                    model.copy()
-                } label: {
-                    Label("Copy", systemImage: "doc.on.doc")
+            // Wide: one row. Narrow multitasking window: Copy and Share above, Save to Obsidian below.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    copyButton
+                    shareButton
+                    Spacer()
+                    obsidianButton
                 }
-                .buttonStyle(SecondaryButton())
-
-                ShareLink(item: model.text) {
-                    Label("Share", systemImage: "square.and.arrow.up")
-                }
-                .buttonStyle(SecondaryButton())
-
-                Spacer()
-
-                Button {
-                    guard let url = model.obsidianURL else { return }
-                    openURL(url) { accepted in
-                        if !accepted { model.show("Obsidian didn't open. Is it installed?") }
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 12) {
+                        copyButton
+                        shareButton
                     }
-                } label: {
-                    Label("Save to Obsidian", systemImage: "square.and.arrow.down")
+                    obsidianButton
                 }
-                .buttonStyle(PrimaryButton())
             }
             .disabled(model.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        .padding(22)
+        .padding(18)
         .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Theme.surface))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Theme.line))
+    }
+}
+
+extension TranscriptCard {
+    fileprivate var copyButton: some View {
+        Button {
+            model.copy()
+        } label: {
+            Label("Copy", systemImage: "doc.on.doc")
+        }
+        .buttonStyle(SecondaryButton())
+    }
+
+    fileprivate var shareButton: some View {
+        ShareLink(item: model.text) {
+            Label("Share", systemImage: "square.and.arrow.up")
+        }
+        .buttonStyle(SecondaryButton())
+    }
+
+    fileprivate var obsidianButton: some View {
+        Button {
+            guard let url = model.obsidianURL else { return }
+            openURL(url) { accepted in
+                if !accepted { model.show("Obsidian didn't open. Is it installed?") }
+            }
+        } label: {
+            Label("Save to Obsidian", systemImage: "square.and.arrow.down")
+        }
+        .buttonStyle(PrimaryButton())
     }
 }
 
