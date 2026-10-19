@@ -374,6 +374,9 @@ impl Core {
         }
         match self.status().0 {
             Status::Ready => {}
+            // Errors clear on their own after a few seconds; a retry right away shouldn't
+            // be ignored while a model is loaded and the key listener works.
+            Status::Error if self.active_model().is_some() && self.listener_ok.load(Ordering::Relaxed) => {}
             Status::NeedsModel => {
                 self.machine.lock().reset();
                 crate::show_main(&self.app);
@@ -464,11 +467,15 @@ impl Core {
             if s.trailing_space && !text.ends_with(char::is_whitespace) {
                 text.push(' ');
             }
+            use crate::focus::Restore;
             let target = me.target.lock().take();
-            let restored = target.map_or(crate::focus::Restore::Untouched, |t| t.restore());
+            let restored = target.as_ref().map_or(Restore::Elsewhere, |t| t.restore());
             let latency = released.elapsed().as_millis() as u64;
             // Typing into the window that stole focus is the bug; keep the text in History.
-            let lost_focus = restored == crate::focus::Restore::Failed;
+            let mut lost_focus = restored == Restore::Failed;
+            // Guard the typing only when Silas knows where the text belongs.
+            let guarded = matches!(restored, Restore::InPlace | Restore::Restored);
+            let still_here = || !guarded || target.as_ref().is_none_or(|t| t.still_here());
             if !lost_focus {
                 me.set_status(Status::Typing, None);
                 me.typed_over.store(false, Ordering::Relaxed);
@@ -477,14 +484,18 @@ impl Core {
                     &text,
                     typer::Pace::from_setting(&s.typing_speed),
                     s.newline_as_shift_enter,
+                    &still_here,
                 );
                 // Let the last synthetic events drain before reading the keyboard again.
                 std::thread::sleep(Duration::from_millis(60));
                 me.typing.store(false, Ordering::Relaxed);
-                if let Err(e) = typed {
-                    me.set_status(Status::Error, Some(e.to_string()));
-                    me.recover_soon();
-                    return;
+                match typed {
+                    Ok(finished) => lost_focus = !finished,
+                    Err(e) => {
+                        me.set_status(Status::Error, Some(e.to_string()));
+                        me.recover_soon();
+                        return;
+                    }
                 }
             }
             let typed_over = me.typed_over.load(Ordering::Relaxed);
@@ -517,7 +528,7 @@ impl Core {
             if lost_focus {
                 me.set_status(
                     Status::Error,
-                    Some("Another window took the keyboard and Silas couldn't get back. Your text is in History.".into()),
+                    Some("Another window took the keyboard, so Silas stopped typing. Your full text is in History.".into()),
                 );
                 me.recover_soon();
             } else {

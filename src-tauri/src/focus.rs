@@ -59,16 +59,27 @@ impl Target {
         #[cfg(target_os = "macos")]
         return self.mac.restore();
         #[cfg(not(target_os = "macos"))]
-        Restore::Untouched
+        Restore::Elsewhere
+    }
+
+    /// False once something else has clearly taken the keyboard from the captured window.
+    /// An app that can't answer counts as still here, so a slow reply never cuts typing short.
+    pub fn still_here(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        return self.mac.still_here();
+        #[cfg(not(target_os = "macos"))]
+        true
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Restore {
-    /// Focus is where the text should go: it never moved, or the user moved it on purpose.
-    Untouched,
+    /// Focus never left the captured window.
+    InPlace,
     /// Focus was taken and Silas put it back.
     Restored,
+    /// The user clicked into another field, or Silas can't tell: type where focus is now.
+    Elsewhere,
     /// Focus was taken and Silas couldn't put it back; typing now would hit the wrong window.
     Failed,
 }
@@ -98,7 +109,8 @@ mod mac {
         fn AXUIElementPerformAction(el: AXUIElementRef, action: CFStringRef) -> i32;
         fn _AXUIElementGetWindow(el: AXUIElementRef, wid: *mut u32) -> i32;
         fn AXUIElementSetMessagingTimeout(el: AXUIElementRef, seconds: f32) -> i32;
-        fn AXUIElementIsAttributeSettable(el: AXUIElementRef, attr: CFStringRef, settable: *mut u8) -> i32;
+        fn AXUIElementGetTypeID() -> core_foundation::base::CFTypeID;
+        fn AXUIElementCopyElementAtPosition(app: AXUIElementRef, x: f32, y: f32, out: *mut AXUIElementRef) -> i32;
         fn GetProcessForPID(pid: i32, psn: *mut Psn) -> i32;
         fn GetProcessPID(psn: *const Psn, pid: *mut i32) -> i32;
     }
@@ -163,16 +175,34 @@ mod mac {
             .fold(0u32, u32::wrapping_add)
     }
 
+    /// Takes ownership of an element. A hung app must not stall a dictation, so every call
+    /// into it gives up after a quarter second instead of the default six.
     fn wrap(el: AXUIElementRef) -> Option<CFType> {
-        (!el.is_null()).then(|| unsafe { CFType::wrap_under_create_rule(el) })
+        if el.is_null() {
+            return None;
+        }
+        let el = unsafe { CFType::wrap_under_create_rule(el) };
+        if el.type_of() == unsafe { AXUIElementGetTypeID() } {
+            unsafe { AXUIElementSetMessagingTimeout(el.as_CFTypeRef(), 0.25) };
+        }
+        Some(el)
     }
 
-    fn attr(el: &CFType, name: &str) -> Option<CFType> {
+    const AX_INVALID_ELEMENT: i32 = -25202;
+
+    fn attr_err(el: &CFType, name: &str) -> Result<CFType, i32> {
         let mut out: CFTypeRef = std::ptr::null();
         let err = unsafe {
             AXUIElementCopyAttributeValue(el.as_CFTypeRef(), CFString::new(name).as_concrete_TypeRef(), &mut out)
         };
-        if err == 0 { wrap(out) } else { None }
+        if err != 0 {
+            return Err(err);
+        }
+        wrap(out).ok_or(err)
+    }
+
+    fn attr(el: &CFType, name: &str) -> Option<CFType> {
+        attr_err(el, name).ok()
     }
 
     fn set_true(el: &CFType, name: &str) {
@@ -190,29 +220,41 @@ mod mac {
         (unsafe { _AXUIElementGetWindow(window.as_CFTypeRef(), &mut wid) } == 0 && wid != 0).then_some(wid)
     }
 
-    /// The app's Accessibility element. A hung app must not stall a dictation, so calls into
-    /// it give up after a quarter second instead of the default six.
     fn app(pid: i32) -> Option<CFType> {
-        let app = wrap(unsafe { AXUIElementCreateApplication(pid) })?;
-        unsafe { AXUIElementSetMessagingTimeout(app.as_CFTypeRef(), 0.25) };
-        Some(app)
+        wrap(unsafe { AXUIElementCreateApplication(pid) })
     }
 
     fn same(a: &CFType, b: &CFType) -> bool {
         unsafe { CFEqual(a.as_CFTypeRef(), b.as_CFTypeRef()) != 0 }
     }
 
-    /// A field the user can type into.
+    /// A text field (sliders and pop-up menus also take focus on click, but aren't).
     fn editable(el: &CFType) -> bool {
         let role = attr(el, "AXRole").and_then(|r| r.downcast::<CFString>()).map(|r| r.to_string());
-        if matches!(role.as_deref(), Some("AXTextField" | "AXTextArea" | "AXComboBox" | "AXSearchField")) {
-            return true;
+        matches!(role.as_deref(), Some("AXTextField" | "AXTextArea" | "AXComboBox" | "AXSearchField"))
+    }
+
+    /// The element under the mouse, in the given app.
+    fn under_mouse(pid: i32) -> Option<CFType> {
+        use core_graphics::event::CGEvent;
+        use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+        let at = CGEvent::new(CGEventSource::new(CGEventSourceStateID::HIDSystemState).ok()?).ok()?.location();
+        let mut out: AXUIElementRef = std::ptr::null();
+        let err = unsafe { AXUIElementCopyElementAtPosition(app(pid)?.as_CFTypeRef(), at.x as f32, at.y as f32, &mut out) };
+        if err == 0 { wrap(out) } else { None }
+    }
+
+    /// `el` is `field` or sits inside it (a browser reports the text run under the mouse).
+    fn within(el: CFType, field: &CFType) -> bool {
+        let mut cur = Some(el);
+        for _ in 0..8 {
+            match cur {
+                Some(c) if same(&c, field) => return true,
+                Some(c) => cur = attr(&c, "AXParent"),
+                None => return false,
+            }
         }
-        let mut settable = 0u8;
-        let err = unsafe {
-            AXUIElementIsAttributeSettable(el.as_CFTypeRef(), CFString::new("AXValue").as_concrete_TypeRef(), &mut settable)
-        };
-        err == 0 && settable != 0
+        false
     }
 
     fn focused_window_id(pid: i32) -> Option<u32> {
@@ -246,6 +288,9 @@ mod mac {
 
     impl Target {
         pub fn capture() -> Option<Self> {
+            // Without SkyLight Silas can't move focus back, so it doesn't try: it types where
+            // focus is, as it did before.
+            skylight()?;
             let pid = super::focused()? as i32;
             let app = app(pid)?;
             let window = attr(&app, "AXFocusedWindow")?;
@@ -263,8 +308,14 @@ mod mac {
             front_pid() == Some(self.pid) && focused_window_id(self.pid) == Some(self.wid)
         }
 
+        pub fn still_here(&self) -> bool {
+            let front_ok = front_pid().is_none_or(|p| p == self.pid);
+            front_ok && focused_window_id(self.pid).is_none_or(|w| w == self.wid)
+        }
+
         /// The user clicked into a different text field since key-down: that's where they
-        /// want the text. A click that only dismissed a pop-up or moved the caret is not.
+        /// want the text. A click that dismissed a pop-up, dragged it or moved the caret is not,
+        /// and neither is a field that was already focused when they clicked somewhere else.
         fn user_chose_elsewhere(&self) -> bool {
             if clicks() == self.clicks {
                 return false;
@@ -274,7 +325,7 @@ mod mac {
                 return false;
             };
             let original = pid == self.pid && self.element.as_ref().is_some_and(|e| same(e, &now));
-            !original && editable(&now)
+            !original && editable(&now) && under_mouse(pid).is_some_and(|el| within(el, &now))
         }
 
         /// Ask the app to focus the captured field if something else in it has focus.
@@ -289,17 +340,19 @@ mod mac {
 
         pub fn restore(&self) -> Restore {
             if self.user_chose_elsewhere() {
-                return Restore::Untouched;
+                return Restore::Elsewhere;
             }
             if self.in_place() {
                 // Same window. Don't re-activate it (that can clear a browser's own focus),
                 // but a sheet or dialog inside it may have taken the field.
                 self.refocus_field();
-                return Restore::Untouched;
+                return Restore::InPlace;
             }
-            if attr(&self.window, "AXRole").is_none() {
-                log::info!("the window focus was taken from is gone; typing where focus is now");
-                return Restore::Untouched;
+            if let Err(AX_INVALID_ELEMENT) = attr_err(&self.window, "AXRole") {
+                // The window is gone. Another window of the same app is a fine home for the
+                // text; anything else would be a stranger's window.
+                log::info!("the window the dictation started in is gone");
+                return if front_pid() == Some(self.pid) { Restore::Elsewhere } else { Restore::Failed };
             }
             let Some(sl) = skylight() else { return Restore::Failed };
             let mut psn: Psn = [0; 8];
@@ -316,11 +369,12 @@ mod mac {
                 let deadline = Instant::now() + Duration::from_millis(400);
                 while !self.in_place() && Instant::now() < deadline {
                     if self.user_chose_elsewhere() {
-                        return Restore::Untouched;
+                        return Restore::Elsewhere;
                     }
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                if self.in_place() {
+                // A window still opening can take focus right back; wait until it stays put.
+                if self.settled() {
                     break;
                 }
             }
@@ -332,6 +386,18 @@ mod mac {
             self.refocus_field();
             log::info!("put the keyboard back where the dictation started");
             Restore::Restored
+        }
+
+        /// In place now and still in place 150 ms later.
+        fn settled(&self) -> bool {
+            let until = Instant::now() + Duration::from_millis(150);
+            while Instant::now() < until {
+                if !self.in_place() {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(15));
+            }
+            self.in_place()
         }
     }
 
@@ -406,6 +472,21 @@ mod tests {
     use std::process::Command;
     use std::time::{Duration, Instant};
 
+    /// The typing guard asks this every 16 key events; it must stay well under their pace.
+    /// Reads focus only. `cargo test --lib focus -- --ignored`
+    #[test]
+    #[ignore]
+    fn checking_focus_is_cheap() {
+        let target = Target::capture().expect("a focused window and Accessibility access");
+        let t = Instant::now();
+        for _ in 0..50 {
+            assert!(target.still_here());
+        }
+        let each = t.elapsed() / 50;
+        eprintln!("still_here: {each:?} per call");
+        assert!(each < Duration::from_millis(5), "{each:?}");
+    }
+
     /// Live check for the window-steals-focus bug. Needs a Mac session and Accessibility
     /// access for the terminal: `cargo test --lib focus -- --ignored`. It opens Calculator
     /// for a moment, then quits it.
@@ -442,6 +523,8 @@ mod tests {
         assert_eq!(mac::front(), Some(calc), "Calculator never took focus");
         assert_eq!(target.restore(), Restore::Restored);
         assert_eq!(mac::front(), before);
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(target.still_here(), "focus left again after the restore");
         assert!(target.mac.in_place());
     }
 }
