@@ -1,4 +1,5 @@
-//! Which app has the keyboard, and whether its layout is one the edit watcher can read.
+//! Which app has the keyboard, where a dictation should land, and whether the layout is one
+//! the edit watcher can read.
 //!
 //! The edit watcher replays keys against its copy of the typed text. That only works while
 //! the same app keeps focus (handy-keys reports no plain mouse clicks) and the layout maps
@@ -27,6 +28,261 @@ pub fn focused() -> Option<u64> {
 #[cfg(target_os = "linux")]
 pub fn focused() -> Option<u64> {
     None
+}
+
+/// The text field that had the keyboard when the hotkey went down. A window that opens
+/// mid-dictation steals focus without the user asking, so Silas puts the keyboard back here
+/// before it types, unless the user clicked somewhere meanwhile to choose a new place.
+pub struct Target {
+    #[cfg(target_os = "macos")]
+    mac: mac::Target,
+}
+
+impl Target {
+    #[cfg(target_os = "macos")]
+    pub fn capture() -> Option<Self> {
+        mac::Target::capture().map(|mac| Self { mac })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn capture() -> Option<Self> {
+        None
+    }
+
+    /// Puts the keyboard back on the captured field if something else took it and the user
+    /// didn't click. Returns true when it had to move focus.
+    pub fn restore(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        return self.mac.restore();
+        #[cfg(not(target_os = "macos"))]
+        false
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod mac {
+    //! macOS ignores activation requests from background apps, Accessibility's AXFrontmost
+    //! included. Window managers move focus through WindowServer (SkyLight) instead: make the
+    //! process frontmost, then tell it which exact window is key. Silas does the same.
+
+    use core_foundation::base::{CFEqual, CFType, CFTypeRef, TCFType};
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::string::{CFString, CFStringRef};
+    use std::ffi::{c_char, c_int, c_void};
+    use std::sync::OnceLock;
+    use std::time::{Duration, Instant};
+
+    type AXUIElementRef = *const c_void;
+    type Psn = [u8; 8];
+
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
+        fn AXUIElementCopyAttributeValue(el: AXUIElementRef, attr: CFStringRef, out: *mut CFTypeRef) -> i32;
+        fn AXUIElementSetAttributeValue(el: AXUIElementRef, attr: CFStringRef, value: CFTypeRef) -> i32;
+        fn AXUIElementPerformAction(el: AXUIElementRef, action: CFStringRef) -> i32;
+        fn _AXUIElementGetWindow(el: AXUIElementRef, wid: *mut u32) -> i32;
+        fn GetProcessForPID(pid: i32, psn: *mut Psn) -> i32;
+        fn GetProcessPID(psn: *const Psn, pid: *mut i32) -> i32;
+    }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventSourceCounterForEventType(state: i32, event_type: u32) -> u32;
+    }
+
+    extern "C" {
+        fn dlopen(path: *const c_char, mode: c_int) -> *mut c_void;
+        fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
+    }
+
+    /// `SLPSSetFrontProcessWithOptions(psn, window id, options)`
+    type SetFront = unsafe extern "C" fn(*const Psn, u32, u32) -> i32;
+    /// `SLPSPostEventRecordTo(psn, 248-byte record)`
+    type PostRecord = unsafe extern "C" fn(*const Psn, *const u8) -> i32;
+    /// `_SLPSGetFrontProcess(psn)`
+    type GetFront = unsafe extern "C" fn(*mut Psn) -> i32;
+
+    struct SkyLight {
+        set_front: SetFront,
+        post_record: PostRecord,
+        get_front: GetFront,
+    }
+
+    fn skylight() -> Option<&'static SkyLight> {
+        static SL: OnceLock<Option<SkyLight>> = OnceLock::new();
+        SL.get_or_init(|| unsafe {
+            const RTLD_LAZY: c_int = 1;
+            const RTLD_GLOBAL: c_int = 8;
+            let h = dlopen(c"/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight".as_ptr(), RTLD_LAZY | RTLD_GLOBAL);
+            if h.is_null() {
+                return None;
+            }
+            let sym = |name: &std::ffi::CStr| Some(dlsym(h, name.as_ptr())).filter(|p| !p.is_null());
+            Some(SkyLight {
+                set_front: std::mem::transmute::<*mut c_void, SetFront>(sym(c"SLPSSetFrontProcessWithOptions")?),
+                post_record: std::mem::transmute::<*mut c_void, PostRecord>(sym(c"SLPSPostEventRecordTo")?),
+                get_front: std::mem::transmute::<*mut c_void, GetFront>(sym(c"_SLPSGetFrontProcess")?),
+            })
+        })
+        .as_ref()
+    }
+
+    /// The process WindowServer has in front. NSWorkspace lags behind SkyLight changes.
+    fn front_pid() -> Option<i32> {
+        let sl = skylight()?;
+        let mut psn: Psn = [0; 8];
+        let mut pid = 0;
+        unsafe { ((sl.get_front)(&mut psn) == 0 && GetProcessPID(&psn, &mut pid) == 0).then_some(pid) }
+    }
+
+    /// Mouse-down presses since boot, any button. A change means the user clicked.
+    fn clicks() -> u32 {
+        const HID_SYSTEM_STATE: i32 = 1;
+        // kCGEventLeftMouseDown, kCGEventRightMouseDown, kCGEventOtherMouseDown.
+        [1u32, 3, 25]
+            .iter()
+            .map(|&t| unsafe { CGEventSourceCounterForEventType(HID_SYSTEM_STATE, t) })
+            .fold(0u32, u32::wrapping_add)
+    }
+
+    fn wrap(el: AXUIElementRef) -> Option<CFType> {
+        (!el.is_null()).then(|| unsafe { CFType::wrap_under_create_rule(el) })
+    }
+
+    fn attr(el: &CFType, name: &str) -> Option<CFType> {
+        let mut out: CFTypeRef = std::ptr::null();
+        let err = unsafe {
+            AXUIElementCopyAttributeValue(el.as_CFTypeRef(), CFString::new(name).as_concrete_TypeRef(), &mut out)
+        };
+        if err == 0 { wrap(out) } else { None }
+    }
+
+    fn set_true(el: &CFType, name: &str) {
+        unsafe {
+            AXUIElementSetAttributeValue(
+                el.as_CFTypeRef(),
+                CFString::new(name).as_concrete_TypeRef(),
+                CFBoolean::true_value().as_CFTypeRef(),
+            );
+        }
+    }
+
+    fn window_id(window: &CFType) -> Option<u32> {
+        let mut wid = 0;
+        (unsafe { _AXUIElementGetWindow(window.as_CFTypeRef(), &mut wid) } == 0 && wid != 0).then_some(wid)
+    }
+
+    fn app(pid: i32) -> Option<CFType> {
+        wrap(unsafe { AXUIElementCreateApplication(pid) })
+    }
+
+    fn focused_window_id(pid: i32) -> Option<u32> {
+        window_id(&attr(&app(pid)?, "AXFocusedWindow")?)
+    }
+
+    /// Tell the app which window is key: the paired focus records window managers send.
+    fn make_key(sl: &SkyLight, psn: &Psn, wid: u32) {
+        for kind in [0x01u8, 0x02] {
+            let mut record = [0u8; 0xF8];
+            record[0x04] = 0xF8;
+            record[0x08] = kind;
+            record[0x3A] = 0x10;
+            record[0x3C..0x40].copy_from_slice(&wid.to_le_bytes());
+            record[0x20..0x30].fill(0xFF);
+            unsafe { (sl.post_record)(psn, record.as_ptr()) };
+        }
+    }
+
+    pub struct Target {
+        pid: i32,
+        window: CFType,
+        wid: u32,
+        /// The text field; browsers and Electron apps may not report one.
+        element: Option<CFType>,
+        clicks: u32,
+    }
+
+    // AXUIElement is a CoreFoundation type that may be used from any thread.
+    unsafe impl Send for Target {}
+
+    impl Target {
+        pub fn capture() -> Option<Self> {
+            let pid = front_pid().or_else(|| super::focused().map(|p| p as i32))?;
+            let app = app(pid)?;
+            let window = attr(&app, "AXFocusedWindow")?;
+            Some(Self {
+                pid,
+                wid: window_id(&window)?,
+                window,
+                element: attr(&app, "AXFocusedUIElement"),
+                clicks: clicks(),
+            })
+        }
+
+        /// Keystrokes would land in the captured window.
+        pub(super) fn in_place(&self) -> bool {
+            front_pid() == Some(self.pid) && focused_window_id(self.pid) == Some(self.wid)
+        }
+
+        pub fn restore(&self) -> bool {
+            if clicks() != self.clicks {
+                return false; // the user picked a new place to type
+            }
+            if self.in_place() {
+                // Same window. Don't re-activate it: that can clear a browser's own focus.
+                return false;
+            }
+            if attr(&self.window, "AXRole").is_none() {
+                log::info!("the window focus was taken from is gone; typing where focus is now");
+                return false;
+            }
+            let Some(sl) = skylight() else { return false };
+            let mut psn: Psn = [0; 8];
+            if unsafe { GetProcessForPID(self.pid, &mut psn) } != 0 {
+                return false;
+            }
+            for _ in 0..2 {
+                // kCPSUserGenerated lets the app install its key window before it handles keys.
+                unsafe { (sl.set_front)(&psn, self.wid, 0x200) };
+                make_key(sl, &psn, self.wid);
+                unsafe {
+                    AXUIElementPerformAction(self.window.as_CFTypeRef(), CFString::new("AXRaise").as_concrete_TypeRef());
+                }
+                let deadline = Instant::now() + Duration::from_millis(400);
+                while !self.in_place() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                if self.in_place() {
+                    break;
+                }
+            }
+            // The app restores its own last field on activation; nudge it in case it didn't.
+            if let Some(e) = &self.element {
+                let focused = app(self.pid).and_then(|a| attr(&a, "AXFocusedUIElement"));
+                if focused.is_none_or(|f| unsafe { CFEqual(f.as_CFTypeRef(), e.as_CFTypeRef()) } == 0) {
+                    set_true(e, "AXFocused");
+                }
+            }
+            log::info!("put the keyboard back where the dictation started");
+            true
+        }
+    }
+
+    #[cfg(test)]
+    pub fn front() -> Option<i32> {
+        front_pid()
+    }
+
+    #[cfg(test)]
+    pub fn steal(pid: i32) -> bool {
+        let (Some(sl), Some(wid)) = (skylight(), focused_window_id(pid)) else { return false };
+        let mut psn: Psn = [0; 8];
+        unsafe { GetProcessForPID(pid, &mut psn) };
+        unsafe { (sl.set_front)(&psn, wid, 0x200) };
+        make_key(sl, &psn, wid);
+        true
+    }
 }
 
 /// True when the active keyboard layout is US English (or Apple's "ABC").
@@ -76,4 +332,50 @@ pub fn us_layout() -> bool {
     std::env::var("LANG")
         .map(|l| l.starts_with("en_US"))
         .unwrap_or(false)
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    /// Live check for the window-steals-focus bug. Needs a Mac session and Accessibility
+    /// access for the terminal: `cargo test --lib focus -- --ignored`. It opens Calculator
+    /// for a moment, then quits it.
+    #[test]
+    #[ignore]
+    fn puts_the_keyboard_back_after_a_window_steals_it() {
+        struct Quit;
+        impl Drop for Quit {
+            fn drop(&mut self) {
+                let _ = Command::new("osascript").args(["-e", "quit app \"Calculator\""]).status();
+            }
+        }
+        let target = Target::capture().expect("a focused window and Accessibility access");
+        let before = mac::front();
+        let _quit = Quit;
+        Command::new("open").args(["-g", "-a", "Calculator"]).status().unwrap();
+        let mut calc = None;
+        for _ in 0..100 {
+            calc = String::from_utf8(Command::new("pgrep").args(["-x", "Calculator"]).output().unwrap().stdout)
+                .ok()
+                .and_then(|p| p.trim().parse::<i32>().ok());
+            if calc.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let calc = calc.expect("Calculator started");
+        // Steal focus the way a new window does: Calculator comes to the front.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while mac::front() != Some(calc) && Instant::now() < deadline {
+            mac::steal(calc);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert_eq!(mac::front(), Some(calc), "Calculator never took focus");
+        assert!(target.restore());
+        assert_eq!(mac::front(), before);
+        assert!(target.mac.in_place());
+    }
 }

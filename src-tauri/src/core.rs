@@ -38,6 +38,8 @@ pub struct Core {
     status: Mutex<(Status, Option<String>)>,
     engine: Mutex<Option<(String, Engine)>>,
     recording: Mutex<Option<(Recording, Instant)>>,
+    /// Where the keyboard was when the hotkey went down; the text goes back there.
+    target: Mutex<Option<crate::focus::Target>>,
     pub machine: Mutex<Machine>,
     watch: Mutex<Option<EditWatch>>,
     /// True while Silas is typing, so its own keystrokes are not read as the user's.
@@ -88,6 +90,7 @@ impl Core {
             status: Mutex::new((Status::Loading, None)),
             engine: Mutex::new(None),
             recording: Mutex::new(None),
+            target: Mutex::new(None),
             machine: Mutex::new(machine),
             watch: Mutex::new(None),
             typing: AtomicBool::new(false),
@@ -381,6 +384,7 @@ impl Core {
                 return;
             }
         }
+        *self.target.lock() = crate::focus::Target::capture();
         let device = self.settings.lock().microphone.clone();
         let app = self.app.clone();
         match Recording::start(device.as_deref(), move |lvl| {
@@ -460,6 +464,10 @@ impl Core {
                 text.push(' ');
             }
             let latency = released.elapsed().as_millis() as u64;
+            let target = me.target.lock().take();
+            if let Some(t) = target {
+                t.restore();
+            }
             me.set_status(Status::Typing, None);
             me.typed_over.store(false, Ordering::Relaxed);
             me.typing.store(true, Ordering::Relaxed);
