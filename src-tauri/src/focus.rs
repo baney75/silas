@@ -95,7 +95,8 @@ mod mac {
     use core_foundation::boolean::CFBoolean;
     use core_foundation::string::{CFString, CFStringRef};
     use std::ffi::{c_char, c_int, c_void};
-    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, OnceLock};
     use std::time::{Duration, Instant};
 
     type AXUIElementRef = *const c_void;
@@ -274,17 +275,81 @@ mod mac {
         }
     }
 
-    pub struct Target {
+    fn focused_element(pid: i32) -> Option<CFType> {
+        app(pid).and_then(|a| attr(&a, "AXFocusedUIElement"))
+    }
+
+    /// What the watcher and the restore both need to know about the starting field.
+    struct Origin {
         pid: i32,
-        window: CFType,
-        wid: u32,
-        /// The text field; browsers and Electron apps may not report one.
+        /// The text field; None when the app reported no text field (a browser still
+        /// building its tree, or a button had focus), so Silas never focuses a container.
         element: Option<CFType>,
-        clicks: u32,
+        /// The user clicked into another text field during the dictation.
+        chose: AtomicBool,
+        stop: AtomicBool,
     }
 
     // AXUIElement is a CoreFoundation type that may be used from any thread.
+    unsafe impl Send for Origin {}
+    unsafe impl Sync for Origin {}
+
+    impl Origin {
+        fn is_original(&self, pid: i32, el: &CFType) -> bool {
+            pid == self.pid && self.element.as_ref().is_some_and(|e| same(e, el))
+        }
+    }
+
+    /// Judges each click when it happens, not at release: by then the mouse has moved on.
+    /// A click into a text field other than the starting one means the user chose it; a
+    /// click back into the starting field undoes that; any other click (dismissing or
+    /// dragging a pop-up) changes nothing.
+    fn watch_clicks(origin: Arc<Origin>) {
+        let mut last = clicks();
+        let mut before: Option<(i32, CFType)> = None;
+        // Recordings stop at 5 minutes; never outlive one by much even if nobody stops us.
+        let give_up = Instant::now() + Duration::from_secs(330);
+        while !origin.stop.load(Ordering::Relaxed) && Instant::now() < give_up {
+            std::thread::sleep(Duration::from_millis(40));
+            let now_clicks = clicks();
+            if now_clicks == last {
+                before = front_pid().and_then(|p| focused_element(p).map(|e| (p, e)));
+                continue;
+            }
+            last = now_clicks;
+            std::thread::sleep(Duration::from_millis(60)); // let the click move focus
+            let Some(pid) = front_pid() else { continue };
+            let Some(now) = focused_element(pid) else { continue };
+            if origin.is_original(pid, &now) {
+                origin.chose.store(false, Ordering::Relaxed);
+            } else if editable(&now) {
+                // A pop-up's field may have been focused before the click; it only counts
+                // if the click moved focus there or landed on it.
+                let moved = before.as_ref().is_none_or(|(p, e)| *p != pid || !same(e, &now));
+                if moved || under_mouse(pid).is_some_and(|el| within(el, &now)) {
+                    origin.chose.store(true, Ordering::Relaxed);
+                }
+            }
+            before = Some((pid, now));
+        }
+    }
+
+    pub struct Target {
+        origin: Arc<Origin>,
+        window: CFType,
+        wid: u32,
+        /// Where the caret sat in the field, put back after refocusing (AppKit selects a
+        /// field's whole text when it takes focus, and typing would replace it).
+        selection: Option<CFType>,
+    }
+
     unsafe impl Send for Target {}
+
+    impl Drop for Target {
+        fn drop(&mut self) {
+            self.origin.stop.store(true, Ordering::Relaxed);
+        }
+    }
 
     impl Target {
         pub fn capture() -> Option<Self> {
@@ -294,51 +359,60 @@ mod mac {
             let pid = super::focused()? as i32;
             let app = app(pid)?;
             let window = attr(&app, "AXFocusedWindow")?;
-            Some(Self {
+            let element = attr(&app, "AXFocusedUIElement").filter(editable);
+            let selection = element.as_ref().and_then(|e| attr(e, "AXSelectedTextRange"));
+            let origin = Arc::new(Origin {
                 pid,
+                element,
+                chose: AtomicBool::new(false),
+                stop: AtomicBool::new(false),
+            });
+            let watcher = origin.clone();
+            std::thread::spawn(move || watch_clicks(watcher));
+            Some(Self {
+                origin,
                 wid: window_id(&window)?,
                 window,
-                element: attr(&app, "AXFocusedUIElement"),
-                clicks: clicks(),
+                selection,
             })
         }
 
-        /// Keystrokes would land in the captured window.
+        /// Keystrokes would land in the captured window, or the app is too slow to say
+        /// otherwise. Only a clear sign (another app in front, another window focused) is No.
         pub(super) fn in_place(&self) -> bool {
-            front_pid() == Some(self.pid) && focused_window_id(self.pid) == Some(self.wid)
+            let pid = self.origin.pid;
+            front_pid().is_none_or(|p| p == pid) && focused_window_id(pid).is_none_or(|w| w == self.wid)
         }
 
         pub fn still_here(&self) -> bool {
-            let front_ok = front_pid().is_none_or(|p| p == self.pid);
-            front_ok && focused_window_id(self.pid).is_none_or(|w| w == self.wid)
+            self.in_place()
         }
 
-        /// The user clicked into a different text field since key-down: that's where they
-        /// want the text. A click that dismissed a pop-up, dragged it or moved the caret is not,
-        /// and neither is a field that was already focused when they clicked somewhere else.
         fn user_chose_elsewhere(&self) -> bool {
-            if clicks() == self.clicks {
-                return false;
-            }
-            let Some(pid) = front_pid() else { return false };
-            let Some(now) = app(pid).and_then(|a| attr(&a, "AXFocusedUIElement")) else {
-                return false;
-            };
-            let original = pid == self.pid && self.element.as_ref().is_some_and(|e| same(e, &now));
-            !original && editable(&now) && under_mouse(pid).is_some_and(|el| within(el, &now))
+            self.origin.chose.load(Ordering::Relaxed)
         }
 
-        /// Ask the app to focus the captured field if something else in it has focus.
+        /// Ask the app to focus the captured field if something else in it has focus, and
+        /// put the caret back where it was.
         fn refocus_field(&self) {
-            if let Some(e) = &self.element {
-                let focused = app(self.pid).and_then(|a| attr(&a, "AXFocusedUIElement"));
-                if focused.is_none_or(|f| !same(&f, e)) {
-                    set_true(e, "AXFocused");
+            let Some(e) = &self.origin.element else { return };
+            if focused_element(self.origin.pid).is_some_and(|f| same(&f, e)) {
+                return;
+            }
+            set_true(e, "AXFocused");
+            if let Some(range) = &self.selection {
+                unsafe {
+                    AXUIElementSetAttributeValue(
+                        e.as_CFTypeRef(),
+                        CFString::new("AXSelectedTextRange").as_concrete_TypeRef(),
+                        range.as_CFTypeRef(),
+                    );
                 }
             }
         }
 
         pub fn restore(&self) -> Restore {
+            self.origin.stop.store(true, Ordering::Relaxed);
             if self.user_chose_elsewhere() {
                 return Restore::Elsewhere;
             }
@@ -348,15 +422,16 @@ mod mac {
                 self.refocus_field();
                 return Restore::InPlace;
             }
+            let pid = self.origin.pid;
             if let Err(AX_INVALID_ELEMENT) = attr_err(&self.window, "AXRole") {
                 // The window is gone. Another window of the same app is a fine home for the
                 // text; anything else would be a stranger's window.
                 log::info!("the window the dictation started in is gone");
-                return if front_pid() == Some(self.pid) { Restore::Elsewhere } else { Restore::Failed };
+                return if front_pid() == Some(pid) { Restore::Elsewhere } else { Restore::Failed };
             }
             let Some(sl) = skylight() else { return Restore::Failed };
             let mut psn: Psn = [0; 8];
-            if unsafe { GetProcessForPID(self.pid, &mut psn) } != 0 {
+            if unsafe { GetProcessForPID(pid, &mut psn) } != 0 {
                 return Restore::Failed;
             }
             for _ in 0..2 {
@@ -368,9 +443,6 @@ mod mac {
                 }
                 let deadline = Instant::now() + Duration::from_millis(400);
                 while !self.in_place() && Instant::now() < deadline {
-                    if self.user_chose_elsewhere() {
-                        return Restore::Elsewhere;
-                    }
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 // A window still opening can take focus right back; wait until it stays put.

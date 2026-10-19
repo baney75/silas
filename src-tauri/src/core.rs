@@ -394,11 +394,12 @@ impl Core {
         }) {
             Ok(r) => {
                 *self.recording.lock() = Some((r, Instant::now()));
-                // After the mic is open, so a slow app can't cost the first words.
-                *self.target.lock() = crate::focus::Target::capture();
                 let gen = self.recording_gen.fetch_add(1, Ordering::Relaxed) + 1;
                 self.cue("start");
                 self.set_status(Status::Recording, None);
+                // After the mic is open, so a slow app can't cost the first words, and after
+                // the status leaves Error, so an error's recovery timer can't reset this press.
+                *self.target.lock() = crate::focus::Target::capture();
                 // Hands-free mode left on by mistake would grow without end; stop at 5 minutes.
                 let me = self.clone();
                 std::thread::spawn(move || {
@@ -420,6 +421,7 @@ impl Core {
     fn cancel_recording(self: &Shared) {
         // Release the lock before set_status, which waits on the main thread for the tray.
         let recording = self.recording.lock().take();
+        self.target.lock().take();
         if let Some((r, _)) = recording {
             drop(r);
             self.set_status(Status::Ready, None);
@@ -438,6 +440,7 @@ impl Core {
             let samples = rec.finish();
             let secs = samples.len() as f32 / 16_000.0;
             if secs < 0.35 {
+                me.target.lock().take();
                 me.set_status(Status::Ready, None);
                 return;
             }
@@ -461,6 +464,7 @@ impl Core {
             let s = me.settings.lock().clone();
             let mut text = me.dict.lock().apply(&raw, s.remove_fillers);
             if text.trim().is_empty() {
+                me.target.lock().take();
                 me.set_status(Status::Ready, None);
                 return;
             }

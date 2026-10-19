@@ -86,17 +86,16 @@ fn chunks(text: &str, size: usize) -> Vec<String> {
     out
 }
 
-/// Types `text`, asking `still_here` every few events whether the keyboard is still on the
-/// target. Returns false if it stopped because focus moved.
+/// Types `text`, asking `still_here` before every event whether the keyboard is still on the
+/// target (a check costs well under a tenth of a millisecond). Returns false if it stopped
+/// because focus moved.
 pub fn type_text(
     text: &str,
     pace: Pace,
     shift_enter: bool,
     still_here: &dyn Fn() -> bool,
 ) -> anyhow::Result<bool> {
-    const CHECK_EVERY: usize = 16;
     let mut k = Keyboard::new()?;
-    let mut sent = 0usize;
     for piece in pieces(text) {
         if !still_here() {
             return Ok(false);
@@ -104,11 +103,10 @@ pub fn type_text(
         match piece {
             Piece::Text(t) => {
                 for c in chunks(t, pace.chunk) {
-                    if sent > 0 && sent.is_multiple_of(CHECK_EVERY) && !still_here() {
+                    if !still_here() {
                         return Ok(false);
                     }
                     k.text(&c)?;
-                    sent += 1;
                     sleep(pace.gap);
                 }
             }
