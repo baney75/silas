@@ -496,7 +496,14 @@ impl Dictionary {
                     // there ("Claude" in "Claude Kode" → "Claude Code", "Baney" in "Baney space" →
                     // "BaneySpaces"), or take its own name's ending ("ghostty's" → "Ghostty's").
                     // It is never bent into a different spelling.
-                    let protected_fits = {
+                    // A multi-word name lines words up by position ("Claud Code": "Code" is the
+                    // name's second word). A one-word name lines them up by letters.
+                    let by_word = term_words > 1 && w == term_words;
+                    let protected_fits = by_word && (i..i + w).all(|k| {
+                        let key = toks[k].key();
+                        let want = &term_keys[k - i];
+                        !protected[k] || key == *want || (k == i + w - 1 && key.strip_suffix('s') == Some(want.as_str()))
+                    }) || !by_word && {
                         let mut at = 0;
                         (i..i + w).all(|k| {
                             let key = toks[k].key();
@@ -531,6 +538,13 @@ impl Dictionary {
                     }
                     if exact {
                         continue; // spoken as ordinary words: leave them
+                    }
+                    // Numbers name different machines: "abby2" is abbey2, never abbey1, and
+                    // "Parish two" is Parish2, never Parish12.
+                    let digits = |s: &str| s.chars().filter(char::is_ascii_digit).collect::<String>();
+                    let term_digits = digits(&target);
+                    if !term_digits.is_empty() && digits(&joined) != term_digits {
+                        continue;
                     }
                     // Fuzzy only for words that are not ordinary English; that guard is what
                     // keeps "better" from becoming "Bezier" and "make sure" from "make Azure".
@@ -570,12 +584,6 @@ impl Dictionary {
                     let stem = joined
                         .strip_suffix('s')
                         .filter(|s| w == term_words && !target.ends_with('s') && !is_common(s));
-                    // Numbers name different machines: "abby2" is abbey2, never abbey1.
-                    let digits = |s: &str| s.chars().filter(char::is_ascii_digit).collect::<String>();
-                    let (heard_digits, term_digits) = (digits(&joined), digits(&target));
-                    if !heard_digits.is_empty() && !term_digits.is_empty() && heard_digits != term_digits {
-                        continue;
-                    }
                     let score = sounds_like_term(&joined, &target)
                         .max(stem.map_or(0.0, |s| similarity(s, &target)));
                     // A shared sound code alone is not enough: "Obsidian" and "Waypost" both
@@ -1158,6 +1166,11 @@ mod tests {
         assert_eq!(d.apply("ssh into Parish1 now", true), "ssh into Parish1 now");
         // The digit picks the twin.
         assert_eq!(d.apply("reboot abby2", true), "reboot abbey2");
+        d.add_term("Parish12", "user");
+        assert_eq!(d.apply("ssh into Parish two now", true), "ssh into Parish2 now");
+        // A protected word inside a multi-word name lines up by word, not by letters.
+        d.add_term("Code", "user");
+        assert_eq!(d.apply("ask Claud Code to do it", true), "ask Claude Code to do it");
         assert_eq!(d.apply("we cloud code it later and make sure it works.", true), "we cloud code it later and make sure it works.");
     }
 
