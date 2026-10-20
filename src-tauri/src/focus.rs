@@ -65,11 +65,16 @@ impl Target {
 
     /// False once something else has clearly taken the keyboard from the captured window.
     /// An app that can't answer counts as still here, so a slow reply never cuts typing short.
-    pub fn still_here(&self) -> bool {
+    /// `after_focus_key`: Silas just typed a Tab or Return, which may move focus to another
+    /// field on purpose, so from then on only the window is checked.
+    pub fn still_here(&self, after_focus_key: bool) -> bool {
         #[cfg(target_os = "macos")]
-        return self.mac.still_here();
+        return self.mac.still_here(after_focus_key);
         #[cfg(not(target_os = "macos"))]
-        true
+        {
+            let _ = after_focus_key;
+            true
+        }
     }
 }
 
@@ -240,11 +245,15 @@ mod mac {
         matches!(role.as_deref(), Some("AXTextField" | "AXTextArea" | "AXComboBox" | "AXSearchField"))
     }
 
-    /// The element under the mouse and the app it belongs to.
-    fn under_mouse() -> Option<(i32, CFType)> {
+    fn mouse_location() -> Option<(f64, f64)> {
         use core_graphics::event::CGEvent;
         use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
         let at = CGEvent::new(CGEventSource::new(CGEventSourceStateID::HIDSystemState).ok()?).ok()?.location();
+        Some((at.x, at.y))
+    }
+
+    /// The element at a screen point and the app it belongs to.
+    fn element_at((x, y): (f64, f64)) -> Option<(i32, CFType)> {
         // Not through wrap(): a timeout set on the system-wide element applies process-wide.
         let raw = unsafe { AXUIElementCreateSystemWide() };
         if raw.is_null() {
@@ -252,7 +261,7 @@ mod mac {
         }
         let system = unsafe { CFType::wrap_under_create_rule(raw) };
         let mut out: AXUIElementRef = std::ptr::null();
-        let err = unsafe { AXUIElementCopyElementAtPosition(system.as_CFTypeRef(), at.x as f32, at.y as f32, &mut out) };
+        let err = unsafe { AXUIElementCopyElementAtPosition(system.as_CFTypeRef(), x as f32, y as f32, &mut out) };
         let el = if err == 0 { wrap(out)? } else { return None };
         let mut pid = 0;
         (unsafe { AXUIElementGetPid(el.as_CFTypeRef(), &mut pid) } == 0).then_some((pid, el))
@@ -343,6 +352,9 @@ mod mac {
         /// Typing started with the target field focused, so a later change of field inside
         /// the same window (a sheet, a command palette) means the keyboard left.
         field_at_start: AtomicBool,
+        /// Silas typed a Tab or Return, which can move focus to another field on purpose;
+        /// from then on only the window is checked.
+        field_checks_off: AtomicBool,
         checks: std::sync::atomic::AtomicUsize,
     }
 
@@ -350,56 +362,82 @@ mod mac {
     unsafe impl Send for Shared {}
     unsafe impl Sync for Shared {}
 
-    /// Judges each click as it happens, by what is under the mouse at that moment. A press on
-    /// a text field makes it the place for the text, once that app takes the keyboard there.
-    /// A press on anything else (closing or dragging a pop-up, a button) changes nothing,
-    /// even if it moves focus as a side effect. Editors that draw their own text (VS Code,
-    /// terminals) count when the click puts the keyboard in a text field of the clicked window.
-    fn watch_clicks(shared: Arc<Shared>, mut last: u32) {
-        // Recordings stop at 5 minutes; never outlive one by much even if nobody stops us.
-        let give_up = Instant::now() + Duration::from_secs(330);
+    /// Notes where each click happened, the moment it happens, so judging a slow click
+    /// never looks at where the mouse went afterwards.
+    fn sample_clicks(shared: Arc<Shared>, mut last: u32, tx: std::sync::mpsc::Sender<(f64, f64)>) {
+        // A dictation's recording stops at 5 minutes; transcription follows. Stop is the real
+        // exit (restore or drop); this only bounds a thread nobody stopped.
+        let give_up = Instant::now() + Duration::from_secs(900);
         while !shared.stop.load(Ordering::Relaxed) && Instant::now() < give_up {
-            std::thread::sleep(Duration::from_millis(20));
+            std::thread::sleep(Duration::from_millis(10));
             let now = clicks();
-            if now == last {
-                continue;
-            }
-            last = now;
-            // Finish judging this click even if Silas is told to stop meanwhile, but never
-            // spend more than half a second on it.
-            let deadline = Instant::now() + Duration::from_millis(500);
-            let Some((pid, hit)) = under_mouse() else { continue };
-            let clicked_wid = attr(&hit, "AXWindow").and_then(|w| window_id(&w));
-            let field = text_field_of(hit, deadline);
-            if let Some(f) = &field {
-                let mut spot = shared.spot.lock();
-                if spot.has(pid, f) {
-                    // A click inside the target field moves the caret; remember where.
-                    spot.selection = attr(f, "AXSelectedTextRange");
-                    continue;
+            if now != last {
+                last = now;
+                if let Some(at) = mouse_location() {
+                    if tx.send(at).is_err() {
+                        return;
+                    }
                 }
             }
-            loop {
-                // The clicked app must take the keyboard: clicking OK on a dialog that then
-                // closes doesn't make a background app's field the target.
-                if front_pid() == Some(pid) {
-                    if let Some(spot) = Spot::focused_in(pid) {
-                        let chosen = match (&field, &spot.element) {
-                            (Some(f), Some(_)) => spot.has(pid, f),
-                            (None, Some(_)) => clicked_wid.is_some() && spot.wid() == clicked_wid,
-                            _ => false,
-                        };
-                        if chosen {
-                            *shared.spot.lock() = spot;
-                            break;
+        }
+    }
+
+    /// Judges each click by what was under the mouse when it happened. Only a press on a text
+    /// field, after which that app takes the keyboard there, makes it the place for the text.
+    /// A press on anything else (closing or dragging a pop-up, a label, a button) changes
+    /// nothing, even if it moves focus as a side effect. Editors that draw their own text
+    /// (VS Code, some terminals) don't count, so the text goes back where it started.
+    fn judge_clicks(shared: Arc<Shared>, rx: std::sync::mpsc::Receiver<(f64, f64)>) {
+        let mut next_caret = Instant::now();
+        loop {
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(at) => judge(&shared, at),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if shared.stop.load(Ordering::Relaxed) {
+                        continue; // drain: the sampler hangs up once it has stopped
+                    }
+                    // Keep the caret position fresh while the target field has the keyboard,
+                    // so a refocus puts it back where the user left it.
+                    if Instant::now() >= next_caret {
+                        next_caret = Instant::now() + Duration::from_millis(250);
+                        let mut spot = shared.spot.lock().clone();
+                        if let Some(e) = spot.element.clone() {
+                            if front_pid() == Some(spot.pid) && focused_element(spot.pid).is_some_and(|f| same(&f, &e)) {
+                                spot.selection = attr(&e, "AXSelectedTextRange").or(spot.selection);
+                                let mut cur = shared.spot.lock();
+                                if cur.has(spot.pid, &e) {
+                                    cur.selection = spot.selection;
+                                }
+                            }
                         }
                     }
                 }
-                if Instant::now() > deadline {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(20));
+                // The sampler stopped and every click it saw has been judged.
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
             }
+        }
+    }
+
+    fn judge(shared: &Shared, at: (f64, f64)) {
+        let deadline = Instant::now() + Duration::from_millis(500);
+        let Some((pid, hit)) = element_at(at) else { return };
+        let Some(field) = text_field_of(hit, deadline) else { return };
+        if shared.spot.lock().has(pid, &field) {
+            return; // a click inside the target only moves the caret, which is sampled
+        }
+        // The clicked app must take the keyboard in that field: clicking OK on a dialog that
+        // then closes doesn't make a background app's field the target.
+        loop {
+            if front_pid() == Some(pid) {
+                if let Some(spot) = Spot::focused_in(pid).filter(|s| s.has(pid, &field)) {
+                    *shared.spot.lock() = spot;
+                    return;
+                }
+            }
+            if Instant::now() > deadline {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
 
@@ -437,10 +475,14 @@ mod mac {
                 spot: parking_lot::Mutex::new(spot),
                 stop: AtomicBool::new(false),
                 field_at_start: AtomicBool::new(false),
+                field_checks_off: AtomicBool::new(false),
                 checks: std::sync::atomic::AtomicUsize::new(0),
             });
-            let watcher = shared.clone();
-            let handle = std::thread::spawn(move || watch_clicks(watcher, baseline));
+            let (tx, rx) = std::sync::mpsc::channel();
+            let sampler = shared.clone();
+            std::thread::spawn(move || sample_clicks(sampler, baseline, tx));
+            let judge = shared.clone();
+            let handle = std::thread::spawn(move || judge_clicks(judge, rx));
             Some(Self { shared, watcher: parking_lot::Mutex::new(Some(handle)) })
         }
 
@@ -459,7 +501,10 @@ mod mac {
         /// Asked before every key event. The front app is a cheap WindowServer question and
         /// is asked every time; the window and field cost a round trip to the app and are
         /// asked every fourth time.
-        pub fn still_here(&self) -> bool {
+        pub fn still_here(&self, after_focus_key: bool) -> bool {
+            if after_focus_key {
+                self.shared.field_checks_off.store(true, Ordering::Relaxed);
+            }
             let spot = self.spot();
             if front_pid().is_some_and(|p| p != spot.pid) {
                 return false;
@@ -471,6 +516,9 @@ mod mac {
                 return false;
             }
             let Some(e) = &spot.element else { return true };
+            if self.shared.field_checks_off.load(Ordering::Relaxed) {
+                return true;
+            }
             match focused_element(spot.pid) {
                 Some(f) if same(&f, e) => {
                     self.shared.field_at_start.store(true, Ordering::Relaxed);
@@ -481,12 +529,15 @@ mod mac {
             }
         }
 
-        /// Ask the app to focus the target field if something else in it has focus, and put
-        /// the caret back where it was.
-        fn refocus_field(spot: &Spot) {
-            let Some(e) = &spot.element else { return };
-            if focused_element(spot.pid).is_some_and(|f| same(&f, e)) {
-                return;
+        /// Ask the app to focus the target field if something else in it has focus, put the
+        /// caret back where it was, and confirm it took. False when another field kept the
+        /// keyboard (a sheet or a web dialog over the field): typing would go there.
+        fn refocus_field(&self, spot: &Spot) -> bool {
+            let Some(e) = &spot.element else { return true };
+            let on_target = |f: &Option<CFType>| f.as_ref().map(|f| same(f, e));
+            if on_target(&focused_element(spot.pid)) == Some(true) {
+                self.shared.field_at_start.store(true, Ordering::Relaxed);
+                return true;
             }
             set_true(e, "AXFocused");
             if let Some(range) = &spot.selection {
@@ -496,6 +547,20 @@ mod mac {
                         CFString::new("AXSelectedTextRange").as_concrete_TypeRef(),
                         range.as_CFTypeRef(),
                     );
+                }
+            }
+            let deadline = Instant::now() + Duration::from_millis(200);
+            loop {
+                match on_target(&focused_element(spot.pid)) {
+                    Some(true) => {
+                        self.shared.field_at_start.store(true, Ordering::Relaxed);
+                        return true;
+                    }
+                    // Another field answered; give the app until the deadline to move.
+                    Some(false) if Instant::now() > deadline => return false,
+                    // Too slow to answer: trust the window check, as everywhere else.
+                    None if Instant::now() > deadline => return true,
+                    _ => std::thread::sleep(Duration::from_millis(20)),
                 }
             }
         }
@@ -510,7 +575,10 @@ mod mac {
             if self.in_place() {
                 // Same window. Don't re-activate it (that can clear a browser's own focus),
                 // but a sheet or dialog inside it may have taken the field.
-                Self::refocus_field(&spot);
+                if !self.refocus_field(&spot) {
+                    log::warn!("another field in the window kept the keyboard");
+                    return Restore::Failed;
+                }
                 return Restore::InPlace;
             }
             let Some((window, wid)) = spot.window.clone() else {
@@ -559,7 +627,10 @@ mod mac {
                 return Restore::Failed;
             }
             // The app restores its own last field on activation; nudge it in case it didn't.
-            Self::refocus_field(&spot);
+            if !self.refocus_field(&spot) {
+                log::warn!("another field in the window kept the keyboard");
+                return Restore::Failed;
+            }
             log::info!("put the keyboard back where the dictation was going");
             Restore::Restored
         }
@@ -656,7 +727,7 @@ mod tests {
         let target = Target::capture().expect("a focused window and Accessibility access");
         let t = Instant::now();
         for _ in 0..50 {
-            assert!(target.still_here());
+            assert!(target.still_here(false));
         }
         let each = t.elapsed() / 50;
         eprintln!("still_here: {each:?} per call");
@@ -700,7 +771,7 @@ mod tests {
         assert_eq!(target.restore(), Restore::Restored);
         assert_eq!(mac::front(), before);
         std::thread::sleep(Duration::from_millis(300));
-        assert!(target.still_here(), "focus left again after the restore");
+        assert!(target.still_here(false), "focus left again after the restore");
         assert!(target.mac.in_place());
     }
 }

@@ -400,11 +400,13 @@ impl Core {
             let _ = app.emit_to("overlay", "level", lvl);
         }) {
             Ok(r) => {
+                // The mic is already running; publish the target before the recording, so a
+                // release can never find a recording without its target.
+                *self.target.lock() = capture.join().ok().flatten();
                 *self.recording.lock() = Some((r, Instant::now()));
                 let gen = self.recording_gen.fetch_add(1, Ordering::Relaxed) + 1;
                 self.cue("start");
                 self.set_status(Status::Recording, None);
-                *self.target.lock() = capture.join().ok().flatten();
                 // Hands-free mode left on by mistake would grow without end; stop at 5 minutes.
                 let me = self.clone();
                 std::thread::spawn(move || {
@@ -483,7 +485,7 @@ impl Core {
             let mut lost_focus = restored == Restore::Failed;
             // Guard the typing only when Silas knows where the text belongs.
             let guarded = matches!(restored, Restore::InPlace | Restore::Restored | Restore::Elsewhere);
-            let still_here = || !guarded || target.as_ref().is_none_or(|t| t.still_here());
+            let still_here = |after_focus_key: bool| !guarded || target.as_ref().is_none_or(|t| t.still_here(after_focus_key));
             if !lost_focus {
                 me.set_status(Status::Typing, None);
                 me.typed_over.store(false, Ordering::Relaxed);
