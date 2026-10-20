@@ -38,6 +38,8 @@ pub struct Core {
     status: Mutex<(Status, Option<String>)>,
     engine: Mutex<Option<(String, Engine)>>,
     recording: Mutex<Option<(Recording, Instant)>>,
+    /// Where the keyboard was when the hotkey went down; the text goes back there.
+    target: Mutex<Option<crate::focus::Target>>,
     pub machine: Mutex<Machine>,
     watch: Mutex<Option<EditWatch>>,
     /// True while Silas is typing, so its own keystrokes are not read as the user's.
@@ -49,6 +51,8 @@ pub struct Core {
     typed_over: AtomicBool,
     /// Bumped per recording so the length limit only stops the one it was set for.
     recording_gen: std::sync::atomic::AtomicU64,
+    /// Bumped when a press starts from an error, so that error's recovery timer stands down.
+    recover_gen: std::sync::atomic::AtomicU64,
     pub capture: Mutex<Option<std::sync::mpsc::Sender<String>>>,
     pub last_activity: Mutex<Instant>,
     downloading: Mutex<Vec<String>>,
@@ -88,12 +92,14 @@ impl Core {
             status: Mutex::new((Status::Loading, None)),
             engine: Mutex::new(None),
             recording: Mutex::new(None),
+            target: Mutex::new(None),
             machine: Mutex::new(machine),
             watch: Mutex::new(None),
             typing: AtomicBool::new(false),
             listener_ok: AtomicBool::new(false),
             typed_over: AtomicBool::new(false),
             recording_gen: std::sync::atomic::AtomicU64::new(0),
+            recover_gen: std::sync::atomic::AtomicU64::new(0),
             capture: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
             downloading: Mutex::new(vec![]),
@@ -371,6 +377,17 @@ impl Core {
         }
         match self.status().0 {
             Status::Ready => {}
+            // Errors clear on their own after a few seconds; a retry right away shouldn't
+            // be ignored while a model is loaded and the key listener works.
+            Status::Error if self.active_model().is_some() && self.listener_ok.load(Ordering::Relaxed) => {
+                // Claim the error from its recovery timer; if the timer got there first it is
+                // resetting the key machine right now, so let this press go.
+                let g = self.recover_gen.load(Ordering::Relaxed);
+                if self.recover_gen.compare_exchange(g, g + 1, Ordering::AcqRel, Ordering::Relaxed).is_err() {
+                    self.machine.lock().reset();
+                    return;
+                }
+            }
             Status::NeedsModel => {
                 self.machine.lock().reset();
                 crate::show_main(&self.app);
@@ -381,12 +398,17 @@ impl Core {
                 return;
             }
         }
+        // Note where the keyboard is now, at key-down, without making the mic wait for it.
+        let capture = std::thread::spawn(crate::focus::Target::capture);
         let device = self.settings.lock().microphone.clone();
         let app = self.app.clone();
         match Recording::start(device.as_deref(), move |lvl| {
             let _ = app.emit_to("overlay", "level", lvl);
         }) {
             Ok(r) => {
+                // The mic is already running; publish the target before the recording, so a
+                // release can never find a recording without its target.
+                *self.target.lock() = capture.join().ok().flatten();
                 *self.recording.lock() = Some((r, Instant::now()));
                 let gen = self.recording_gen.fetch_add(1, Ordering::Relaxed) + 1;
                 self.cue("start");
@@ -412,6 +434,7 @@ impl Core {
     fn cancel_recording(self: &Shared) {
         // Release the lock before set_status, which waits on the main thread for the tray.
         let recording = self.recording.lock().take();
+        self.target.lock().take();
         if let Some((r, _)) = recording {
             drop(r);
             self.set_status(Status::Ready, None);
@@ -424,6 +447,8 @@ impl Core {
             return;
         };
         self.cue("stop");
+        // Carried by value: a new dictation may start before this one finishes typing.
+        let target = self.target.lock().take();
         let me = self.clone();
         std::thread::spawn(move || {
             let released = Instant::now();
@@ -459,25 +484,35 @@ impl Core {
             if s.trailing_space && !text.ends_with(char::is_whitespace) {
                 text.push(' ');
             }
+            use crate::focus::Restore;
+            let restored = target.as_ref().map_or(Restore::Elsewhere, |t| t.restore());
             let latency = released.elapsed().as_millis() as u64;
-            me.set_status(Status::Typing, None);
-            me.typed_over.store(false, Ordering::Relaxed);
-            me.typing.store(true, Ordering::Relaxed);
-            let typed = typer::type_text(
-                &text,
-                typer::Pace::from_setting(&s.typing_speed),
-                s.newline_as_shift_enter,
-            );
-            // Let the last synthetic events drain before reading the keyboard again.
-            std::thread::sleep(Duration::from_millis(60));
-            me.typing.store(false, Ordering::Relaxed);
-            if let Err(e) = typed {
-                me.set_status(Status::Error, Some(e.to_string()));
-                me.recover_soon();
-                return;
+            // Typing into the window that stole focus is the bug; keep the text in History.
+            let mut lost_focus = restored == Restore::Failed;
+            let mut typing_error: Option<String> = None;
+            // Guard the typing only when Silas knows where the text belongs.
+            let guarded = matches!(restored, Restore::InPlace | Restore::Restored | Restore::Elsewhere);
+            let still_here = |after_focus_key: bool| !guarded || target.as_ref().is_none_or(|t| t.still_here(after_focus_key));
+            if !lost_focus {
+                me.set_status(Status::Typing, None);
+                me.typed_over.store(false, Ordering::Relaxed);
+                me.typing.store(true, Ordering::Relaxed);
+                let typed = typer::type_text(
+                    &text,
+                    typer::Pace::from_setting(&s.typing_speed),
+                    s.newline_as_shift_enter,
+                    &still_here,
+                );
+                // Let the last synthetic events drain before reading the keyboard again.
+                std::thread::sleep(Duration::from_millis(60));
+                me.typing.store(false, Ordering::Relaxed);
+                match typed {
+                    Ok(finished) => lost_focus = !finished,
+                    Err(e) => typing_error = Some(e.to_string()),
+                }
             }
             let typed_over = me.typed_over.load(Ordering::Relaxed);
-            if s.learn_from_edits && !typed_over && crate::focus::us_layout() {
+            if !lost_focus && typing_error.is_none() && s.learn_from_edits && !typed_over && crate::focus::us_layout() {
                 *me.watch.lock() = Some(EditWatch::new(&text, Instant::now(), crate::focus::focused()));
             }
             let item = HistoryItem {
@@ -503,15 +538,29 @@ impl Core {
             store::save("dictionary.json", &*me.dict.lock());
             *me.last_activity.lock() = Instant::now();
             let _ = me.app.emit("transcript", &item);
-            me.set_status(Status::Ready, None);
+            if let Some(e) = typing_error {
+                me.set_status(Status::Error, Some(format!("{e}. Your full text is in History.")));
+                me.recover_soon();
+            } else if lost_focus {
+                me.set_status(
+                    Status::Error,
+                    Some("Another window took the keyboard, so Silas stopped typing. Your full text is in History.".into()),
+                );
+                me.recover_soon();
+            } else {
+                me.set_status(Status::Ready, None);
+            }
         });
     }
 
     fn recover_soon(self: &Shared) {
         let me = self.clone();
+        let gen = self.recover_gen.load(Ordering::Relaxed);
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(4));
-            if me.status().0 == Status::Error {
+            if me.status().0 == Status::Error
+                && me.recover_gen.compare_exchange(gen, gen + 1, Ordering::AcqRel, Ordering::Relaxed).is_ok()
+            {
                 me.machine.lock().reset();
                 if me.active_model().is_some() {
                     me.set_status(Status::Ready, None);

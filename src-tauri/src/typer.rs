@@ -86,27 +86,45 @@ fn chunks(text: &str, size: usize) -> Vec<String> {
     out
 }
 
-pub fn type_text(text: &str, pace: Pace, shift_enter: bool) -> anyhow::Result<()> {
+/// Types `text`, asking `still_here` before every event whether the keyboard is still on the
+/// target (a check costs well under a tenth of a millisecond). Returns false if it stopped
+/// because focus moved.
+pub fn type_text(
+    text: &str,
+    pace: Pace,
+    shift_enter: bool,
+    still_here: &dyn Fn(bool) -> bool,
+) -> anyhow::Result<bool> {
     let mut k = Keyboard::new()?;
+    // A Tab or Return may move focus to the next field on purpose.
+    let mut after_focus_key = false;
     for piece in pieces(text) {
+        if !still_here(after_focus_key) {
+            return Ok(false);
+        }
         match piece {
             Piece::Text(t) => {
                 for c in chunks(t, pace.chunk) {
+                    if !still_here(after_focus_key) {
+                        return Ok(false);
+                    }
                     k.text(&c)?;
                     sleep(pace.gap);
                 }
             }
             Piece::Newline => {
+                after_focus_key = true;
                 k.enter(shift_enter)?;
                 sleep(pace.gap * 4);
             }
             Piece::Tab => {
+                after_focus_key = true;
                 k.text("\t")?;
                 sleep(pace.gap);
             }
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 // ------------------------------------------------------------------ macOS
