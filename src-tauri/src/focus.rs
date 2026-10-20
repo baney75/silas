@@ -355,6 +355,9 @@ mod mac {
         /// Silas typed a Tab or Return, which can move focus to another field on purpose;
         /// from then on only the window is checked.
         field_checks_off: AtomicBool,
+        /// A refocus Silas couldn't confirm (the app didn't answer): the first field the app
+        /// names must be the target, or the keyboard is elsewhere.
+        unconfirmed: AtomicBool,
         checks: std::sync::atomic::AtomicUsize,
     }
 
@@ -443,7 +446,8 @@ mod mac {
 
     pub struct Target {
         shared: Arc<Shared>,
-        watcher: parking_lot::Mutex<Option<std::thread::JoinHandle<()>>>,
+        /// Hangs up when the click judge has finished.
+        judged: parking_lot::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
     }
 
     unsafe impl Send for Target {}
@@ -476,14 +480,19 @@ mod mac {
                 stop: AtomicBool::new(false),
                 field_at_start: AtomicBool::new(false),
                 field_checks_off: AtomicBool::new(false),
+                unconfirmed: AtomicBool::new(false),
                 checks: std::sync::atomic::AtomicUsize::new(0),
             });
             let (tx, rx) = std::sync::mpsc::channel();
             let sampler = shared.clone();
             std::thread::spawn(move || sample_clicks(sampler, baseline, tx));
             let judge = shared.clone();
-            let handle = std::thread::spawn(move || judge_clicks(judge, rx));
-            Some(Self { shared, watcher: parking_lot::Mutex::new(Some(handle)) })
+            let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+            std::thread::spawn(move || {
+                judge_clicks(judge, rx);
+                drop(done_tx);
+            });
+            Some(Self { shared, judged: parking_lot::Mutex::new(Some(done_rx)) })
         }
 
         fn spot(&self) -> Spot {
@@ -498,33 +507,32 @@ mod mac {
                 && spot.wid().is_none_or(|want| focused_window_id(spot.pid).is_none_or(|w| w == want))
         }
 
-        /// Asked before every key event. The front app is a cheap WindowServer question and
-        /// is asked every time; the window and field cost a round trip to the app and are
-        /// asked every fourth time.
+        /// Asked before every key event: the app and window every time (about 25 µs), the
+        /// field every fourth time.
         pub fn still_here(&self, after_focus_key: bool) -> bool {
             if after_focus_key {
                 self.shared.field_checks_off.store(true, Ordering::Relaxed);
             }
-            let spot = self.spot();
-            if front_pid().is_some_and(|p| p != spot.pid) {
-                return false;
-            }
-            if !self.shared.checks.fetch_add(1, Ordering::Relaxed).is_multiple_of(4) {
-                return true;
-            }
             if !self.in_place() {
                 return false;
             }
-            let Some(e) = &spot.element else { return true };
-            if self.shared.field_checks_off.load(Ordering::Relaxed) {
+            if !self.shared.checks.fetch_add(1, Ordering::Relaxed).is_multiple_of(4)
+                || self.shared.field_checks_off.load(Ordering::Relaxed)
+            {
                 return true;
             }
+            let spot = self.spot();
+            let Some(e) = &spot.element else { return true };
             match focused_element(spot.pid) {
                 Some(f) if same(&f, e) => {
                     self.shared.field_at_start.store(true, Ordering::Relaxed);
+                    self.shared.unconfirmed.store(false, Ordering::Relaxed);
                     true
                 }
-                Some(_) => !self.shared.field_at_start.load(Ordering::Relaxed),
+                Some(_) => {
+                    !self.shared.field_at_start.load(Ordering::Relaxed)
+                        && !self.shared.unconfirmed.load(Ordering::Relaxed)
+                }
                 None => true,
             }
         }
@@ -558,18 +566,21 @@ mod mac {
                     }
                     // Another field answered; give the app until the deadline to move.
                     Some(false) if Instant::now() > deadline => return false,
-                    // Too slow to answer: trust the window check, as everywhere else.
-                    None if Instant::now() > deadline => return true,
+                    // Too slow to answer: type, but the first field it names must be this one.
+                    None if Instant::now() > deadline => {
+                        self.shared.unconfirmed.store(true, Ordering::Relaxed);
+                        return true;
+                    }
                     _ => std::thread::sleep(Duration::from_millis(20)),
                 }
             }
         }
 
         pub fn restore(&self) -> Restore {
-            // Let the watcher finish judging a click it has already seen, then stop it.
+            // Let the judge finish clicks it has already seen, but not wait on a hung app.
             self.shared.stop.store(true, Ordering::Relaxed);
-            if let Some(h) = self.watcher.lock().take() {
-                let _ = h.join();
+            if let Some(done) = self.judged.lock().take() {
+                let _ = done.recv_timeout(Duration::from_millis(700));
             }
             let spot = self.spot();
             if self.in_place() {

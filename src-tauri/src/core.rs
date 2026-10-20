@@ -380,7 +380,13 @@ impl Core {
             // Errors clear on their own after a few seconds; a retry right away shouldn't
             // be ignored while a model is loaded and the key listener works.
             Status::Error if self.active_model().is_some() && self.listener_ok.load(Ordering::Relaxed) => {
-                self.recover_gen.fetch_add(1, Ordering::Relaxed);
+                // Claim the error from its recovery timer; if the timer got there first it is
+                // resetting the key machine right now, so let this press go.
+                let g = self.recover_gen.load(Ordering::Relaxed);
+                if self.recover_gen.compare_exchange(g, g + 1, Ordering::AcqRel, Ordering::Relaxed).is_err() {
+                    self.machine.lock().reset();
+                    return;
+                }
             }
             Status::NeedsModel => {
                 self.machine.lock().reset();
@@ -483,6 +489,7 @@ impl Core {
             let latency = released.elapsed().as_millis() as u64;
             // Typing into the window that stole focus is the bug; keep the text in History.
             let mut lost_focus = restored == Restore::Failed;
+            let mut typing_error: Option<String> = None;
             // Guard the typing only when Silas knows where the text belongs.
             let guarded = matches!(restored, Restore::InPlace | Restore::Restored | Restore::Elsewhere);
             let still_here = |after_focus_key: bool| !guarded || target.as_ref().is_none_or(|t| t.still_here(after_focus_key));
@@ -501,15 +508,11 @@ impl Core {
                 me.typing.store(false, Ordering::Relaxed);
                 match typed {
                     Ok(finished) => lost_focus = !finished,
-                    Err(e) => {
-                        me.set_status(Status::Error, Some(e.to_string()));
-                        me.recover_soon();
-                        return;
-                    }
+                    Err(e) => typing_error = Some(e.to_string()),
                 }
             }
             let typed_over = me.typed_over.load(Ordering::Relaxed);
-            if !lost_focus && s.learn_from_edits && !typed_over && crate::focus::us_layout() {
+            if !lost_focus && typing_error.is_none() && s.learn_from_edits && !typed_over && crate::focus::us_layout() {
                 *me.watch.lock() = Some(EditWatch::new(&text, Instant::now(), crate::focus::focused()));
             }
             let item = HistoryItem {
@@ -535,7 +538,10 @@ impl Core {
             store::save("dictionary.json", &*me.dict.lock());
             *me.last_activity.lock() = Instant::now();
             let _ = me.app.emit("transcript", &item);
-            if lost_focus {
+            if let Some(e) = typing_error {
+                me.set_status(Status::Error, Some(format!("{e}. Your full text is in History.")));
+                me.recover_soon();
+            } else if lost_focus {
                 me.set_status(
                     Status::Error,
                     Some("Another window took the keyboard, so Silas stopped typing. Your full text is in History.".into()),
@@ -552,7 +558,9 @@ impl Core {
         let gen = self.recover_gen.load(Ordering::Relaxed);
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(4));
-            if me.status().0 == Status::Error && me.recover_gen.load(Ordering::Relaxed) == gen {
+            if me.status().0 == Status::Error
+                && me.recover_gen.compare_exchange(gen, gen + 1, Ordering::AcqRel, Ordering::Relaxed).is_ok()
+            {
                 me.machine.lock().reset();
                 if me.active_model().is_some() {
                     me.set_status(Status::Ready, None);
