@@ -229,26 +229,42 @@ pub fn similarity(a: &str, b: &str) -> f32 {
     1.0 - levenshtein(&a, &b) as f32 / max as f32
 }
 
-/// Primary and alternate Double Metaphone codes ("omarchy" → AMRX / AMRK).
+/// Primary and alternate Double Metaphone codes ("omarchy" → AMRX / AMRK), full length.
 fn phonetic(s: &str) -> [String; 2] {
+    phonetic_max(s, None)
+}
+
+fn phonetic_max(s: &str, max: Option<usize>) -> [String; 2] {
     let letters: String = s.chars().filter(|c| c.is_ascii_alphabetic()).collect();
     if letters.is_empty() {
         return [String::new(), String::new()];
     }
-    let dm = DoubleMetaphone::default();
+    // Full-length codes: the default stops at 4, so every long name sharing a first
+    // syllable sounded the same ("Proton Pass" and "Proton Drive" were both PRTN).
+    let dm = DoubleMetaphone::new(max);
     [dm.encode(&letters), dm.encode_alternate(&letters)]
 }
 
-/// How alike two spellings sound and look, 0..1. Used both to snap heard words to
-/// dictionary terms and to decide whether a user's edit was a real correction.
+/// How alike two spellings sound and look, 0..1, for deciding whether a user's edit was a
+/// real correction. Learning keeps the 4-character codes it was tuned with.
 pub fn sound_alike(heard: &str, intended: &str) -> f32 {
+    sound_alike_codes(heard, intended, Some(4))
+}
+
+/// The same score for snapping heard words to terms, with full-length codes so long names
+/// sharing a first syllable don't sound identical.
+fn sounds_like_term(heard: &str, term: &str) -> f32 {
+    sound_alike_codes(heard, term, None)
+}
+
+fn sound_alike_codes(heard: &str, intended: &str, max: Option<usize>) -> f32 {
     let a: String = norm_phrase(heard).concat();
     let b: String = norm_phrase(intended).concat();
     if a.is_empty() || b.is_empty() {
         return 0.0;
     }
     let mut score = similarity(&a, &b);
-    let (pa, pb) = (phonetic(&a), phonetic(&b));
+    let (pa, pb) = (phonetic_max(&a, max), phonetic_max(&b, max));
     for x in pa.iter().filter(|x| !x.is_empty()) {
         for y in pb.iter().filter(|y| !y.is_empty()) {
             if x == y {
@@ -259,6 +275,19 @@ pub fn sound_alike(heard: &str, intended: &str) -> f32 {
         }
     }
     score
+}
+
+/// `target` is `first`, at most one more letter, then `second`.
+fn halves_of(first: &str, second: &str, target: &str) -> bool {
+    target.len() <= first.len() + second.len() + 1
+        && target.starts_with(first)
+        && target[first.len()..].ends_with(second)
+}
+
+/// Some full-length sound code of `a` equals one of `b`.
+fn same_sound(a: &str, b: &str) -> bool {
+    let (pa, pb) = (phonetic(a), phonetic(b));
+    pa.iter().any(|x| !x.is_empty() && pb.contains(x))
 }
 
 /// The "s" or "'s" a heard word adds to a term ("GitHubs" → "GitHub" + "s"), so snapping
@@ -278,6 +307,11 @@ fn plural_suffix(heard: &str, term: &str) -> String {
         }
     }
     String::new()
+}
+
+/// A name worth listening for: capitalized or with a digit, and not ordinary English.
+fn is_name(w: &str) -> bool {
+    (starts_upper(w) || w.chars().any(|c| c.is_ascii_digit())) && !is_everyday(w) && w.len() > 2
 }
 
 fn capitalize(s: &str) -> String {
@@ -378,16 +412,57 @@ impl Dictionary {
         }
     }
 
+    /// Every word Silas snaps heard text to: the terms, plus the names that corrections
+    /// produce ("martry" → "Martyr" means "Martyr" is a word to listen for). The index is
+    /// the term's, for counting uses; None for a name that only lives in a correction.
+    fn snap_targets(&self) -> Vec<(String, Option<usize>)> {
+        let mut out: Vec<(String, Option<usize>)> =
+            self.terms.iter().enumerate().map(|(i, t)| (t.text.clone(), Some(i))).collect();
+        for c in &self.corrections {
+            for w in tokenize(&c.to).into_iter().map(|t| t.core) {
+                if is_name(&w) && !out.iter().any(|(t, _)| t.eq_ignore_ascii_case(&w)) {
+                    out.push((w, None));
+                }
+            }
+        }
+        out
+    }
+
     fn snap_terms(&mut self, toks: &mut Vec<Tok>, locked: &mut Vec<bool>) {
-        let mut order: Vec<usize> = (0..self.terms.len()).collect();
-        order.sort_by_key(|&i| std::cmp::Reverse(self.terms[i].text.len()));
-        for ti in order {
-            let term = self.terms[ti].text.clone();
-            let target: String = norm_phrase(&term).concat();
-            if target.len() < 3 {
+        let mut targets = self.snap_targets();
+        targets.sort_by_key(|(t, _)| std::cmp::Reverse(t.len()));
+        // Protect every name already spelled right before any matching, so a near twin
+        // ("Parish1" next to "Parish2") can never bend it, whatever order they run in. Only an
+        // exact longer name may still claim it ("Baney Spaces" → "BaneySpaces").
+        let mut protected = vec![false; toks.len()];
+        // Matched by spelling, ignoring case and a plural or possessive ending ("parish2",
+        // "Parish2's").
+        for (term, _) in &targets {
+            let keys = norm_phrase(term);
+            let n = keys.len();
+            if n == 0 {
                 continue;
             }
-            let term_words = norm_phrase(&term).len();
+            for i in 0..toks.len().saturating_sub(n - 1) {
+                let fits = (0..n).all(|k| {
+                    let key = toks[i + k].key();
+                    key == keys[k]
+                        || (k == n - 1 && key.strip_suffix('s').is_some_and(|s| s == keys[k]))
+                });
+                if fits {
+                    protected[i..i + n].fill(true);
+                }
+            }
+        }
+        for (term, ti) in targets {
+            let target: String = norm_phrase(&term).concat();
+            // Names known only from a correction need some length to be safe to listen for:
+            // "Isa" would turn "is a" into a name.
+            if target.len() < 3 || (ti.is_none() && target.len() < 5) {
+                continue;
+            }
+            let term_keys = norm_phrase(&term);
+            let term_words = term_keys.len();
             let mut i = 0;
             while i < toks.len() {
                 let mut hit: Option<usize> = None;
@@ -396,6 +471,7 @@ impl Dictionary {
                     if i + w > toks.len() || (i..i + w).any(|k| locked[k]) {
                         continue;
                     }
+                    let guarded = (i..i + w).any(|k| protected[k]);
                     // Don't fuse across a sentence break or a comma.
                     if (i..i + w - 1).any(|k| !toks[k].post.is_empty()) {
                         continue;
@@ -416,27 +492,113 @@ impl Dictionary {
                         hit = Some(0);
                         break;
                     }
+                    // A protected word may only stay put inside a longer name, spelled as it sits
+                    // there ("Claude" in "Claude Kode" → "Claude Code", "Baney" in "Baney space" →
+                    // "BaneySpaces"), or take its own name's ending ("ghostty's" → "Ghostty's").
+                    // It is never bent into a different spelling.
+                    // A multi-word name lines words up by position ("Claud Code": "Code" is the
+                    // name's second word). A one-word name lines them up by letters.
+                    let by_word = term_words > 1 && w == term_words;
+                    let protected_fits = by_word && (i..i + w).all(|k| {
+                        let key = toks[k].key();
+                        let want = &term_keys[k - i];
+                        !protected[k] || key == *want || (k == i + w - 1 && key.strip_suffix('s') == Some(want.as_str()))
+                    }) || !by_word && {
+                        let mut at = 0;
+                        (i..i + w).all(|k| {
+                            let key = toks[k].key();
+                            let rest = target.get(at..).unwrap_or("");
+                            at += key.len();
+                            if !protected[k] {
+                                return true;
+                            }
+                            let last = k == i + w - 1;
+                            // The name goes on past this word ("Baney" + "space").
+                            let inside = w >= 2 && rest.len() > key.len() && rest.starts_with(&key);
+                            // The word ends a multi-word name.
+                            let ends = w >= 2 && last && rest == key;
+                            // Its own ending: "ghostty's" for "Ghostty".
+                            let own_ending = last && key.strip_suffix('s') == Some(rest);
+                            // A word that already completes the name never takes the next word
+                            // with it ("Tailscale a" is not "Tailscale").
+                            inside || ends || own_ending
+                        })
+                    };
+                    if guarded && !exact && !protected_fits {
+                        continue;
+                    }
                     // A one-word term that is also an everyday word ("Actor", "Leading") only
                     // keeps its casing when spoken as such; never recase "the actor".
-                    if exact && !(w == 1 && is_everyday(&toks[i].core)) {
+                    // A name known only from a correction ("Martyr") is a spelling to reach, not a
+                    // casing to force: "a martyr died" stays as spoken.
+                    let ordinary = if ti.is_some() { w == 1 && is_everyday(&toks[i].core) } else { all_common };
+                    if exact && !ordinary {
                         hit = Some(w);
                         break;
+                    }
+                    if exact {
+                        continue; // spoken as ordinary words: leave them
+                    }
+                    // Numbers name different machines: "abby2" is abbey2, never abbey1, and
+                    // "Parish two" is Parish2, never Parish12.
+                    let digits = |s: &str| s.chars().filter(char::is_ascii_digit).collect::<String>();
+                    let term_digits = digits(&target);
+                    if !term_digits.is_empty() && digits(&joined) != term_digits {
+                        continue;
                     }
                     // Fuzzy only for words that are not ordinary English; that guard is what
                     // keeps "better" from becoming "Bezier" and "make sure" from "make Azure".
                     // Never bend an address or file name ("claude.ai", "notes/plan.md").
                     let addressy = (i..i + w).any(|k| toks[k].core.contains(['.', '@', '/', '\\']));
+                    // Two ordinary words can still be the two halves of a one-word name, with at
+                    // most one letter lost at the seam ("Bane spaces" → "BaneySpaces"): names of
+                    // 8+ letters, never two everyday words ("what matters most" is not
+                    // "Mattermost"), and never a word that only resembles a half ("the sun shone"
+                    // is not "Sunshine").
+                    let fused = all_common
+                        && w == 2
+                        && term_words == 1
+                        && !addressy
+                        && target.len() >= 8
+                        && !(is_everyday(&toks[i].core) && is_everyday(&toks[i + 1].core))
+                        && halves_of(&toks[i].key(), &toks[i + 1].key(), &target);
+                    if fused {
+                        hit = Some(w);
+                        break;
+                    }
+                    // "martyr's" is still the word martyr, not the name Martyr.
+                    let common_stem = w == 1
+                        && ["'s", "\u{2019}s", "s"].iter().any(|e| {
+                            toks[i].core.to_lowercase().strip_suffix(e).is_some_and(is_common)
+                        });
+                    if ti.is_none() && common_stem {
+                        continue;
+                    }
                     if all_common || addressy || target.len() < 5 || joined.len() < 4 {
                         continue;
                     }
                     // Score "Ghosty's" by its stem, so an ending doesn't block a match. Spelling
                     // only: sound codes drop the ending's vowel, so "Taurus" would sound like "Tauri".
+                    // Only an ending on the term's own word counts: in "Hildegard is" the s
+                    // belongs to "is".
                     let stem = joined
                         .strip_suffix('s')
-                        .filter(|s| !target.ends_with('s') && !is_common(s));
-                    let score = sound_alike(&joined, &target)
+                        .filter(|s| w == term_words && !target.ends_with('s') && !is_common(s));
+                    let score = sounds_like_term(&joined, &target)
                         .max(stem.map_or(0.0, |s| similarity(s, &target)));
-                    if score >= 0.82 && (w == term_words || score >= 0.88) {
+                    // A shared sound code alone is not enough: "Obsidian" and "Waypost" both
+                    // encode as APST. Half the letters must agree too.
+                    // Full-length codes that match exactly are trustworthy on their own ("Towery"
+                    // and "Tauri" are both TR); they now tell Obsidian (APSTN) from Waypost (APST).
+                    let spelled = similarity(stem.unwrap_or(&joined), &target);
+                    let spelled_close = spelled >= 0.5 || (spelled >= 0.3 && same_sound(&joined, &target));
+                    // A wider window than the name never wins when the name already matches
+                    // without its last word: "Tailscal a" is "Tailscale" + "a", not "Tailscale".
+                    let shorter_hits = w > term_words && {
+                        let shorter: String = (i..i + w - 1).map(|k| toks[k].key()).collect();
+                        sounds_like_term(&shorter, &target).max(similarity(&shorter, &target)) >= 0.82
+                    };
+                    if spelled_close && !shorter_hits && score >= 0.82 && (w == term_words || score >= 0.88) {
                         hit = Some(w);
                         fuzzy = true;
                         break;
@@ -444,8 +606,13 @@ impl Dictionary {
                 }
                 match hit {
                     Some(0) => {
-                        self.terms[ti].uses += 1;
-                        i += term_words.max(1);
+                        if let Some(ti) = ti {
+                            self.terms[ti].uses += 1;
+                        }
+                        // Already right: no shorter term may bend it later.
+                        let n = term_words.max(1).min(toks.len() - i);
+                        locked[i..i + n].fill(true);
+                        i += n;
                     }
                     Some(w) => {
                         let sentence_start = i == 0 || ends_sentence(&toks[i - 1]);
@@ -456,7 +623,10 @@ impl Dictionary {
                         };
                         let with = term.clone() + &suffix;
                         let n = replace_span(toks, locked, i, w, &with, sentence_start);
-                        self.terms[ti].uses += 1;
+                        protected.splice(i..i + w, std::iter::repeat_n(false, n));
+                        if let Some(ti) = ti {
+                            self.terms[ti].uses += 1;
+                        }
                         i += n.max(1);
                     }
                     None => i += 1,
@@ -554,15 +724,8 @@ impl Dictionary {
                 continue; // a rewrite, not a mishearing
             }
             // A name (capitalized or with digits) that is not ordinary English is worth keeping as a word.
-            let new_words: Vec<String> = tokenize(&to)
-                .into_iter()
-                .map(|t| t.core)
-                .filter(|w| {
-                    (starts_upper(w) || w.chars().any(|c| c.is_ascii_digit()))
-                        && !is_everyday(w)
-                        && w.len() > 2
-                })
-                .collect();
+            let new_words: Vec<String> =
+                tokenize(&to).into_iter().map(|t| t.core).filter(|w| is_name(w)).collect();
             let is_name = !new_words.is_empty();
             // Ordinary words ("office", "apple", "noon") are only ever rewritten into a name.
             // An edit that turns one ordinary word into another is a change of mind or a
@@ -879,6 +1042,26 @@ mod tests {
         let s = "the Taurus constellation, the ghosts and the hosts.";
         assert_eq!(d.apply(s, true), s);
         assert_eq!(d.apply("shop at macy's and trader joe's", true), "shop at Macy's and Trader Joe's");
+        // Fusing two words into a name, and names known only from corrections.
+        for t in ["BaneySpaces", "Mattermost", "Sunshine"] {
+            d.add_term(t, "user");
+        }
+        d.add_correction("martry", "Martyr", "import");
+        d.add_correction("eesa", "Isa", "import");
+        d.add_correction("eena", "Ina", "import");
+        d.add_correction("bookshelve", "Bookshelf", "import");
+        for s in [
+            "she found the bane of spaces everywhere.",
+            "a martyr died for the faith.",
+            "the fish has tail scales.",
+            "what matters most is speed.",
+            "this is a test, back in a minute.",
+            "we visited the martyr's grave and the martyrs.",
+            "put it on the book shelf.",
+            "the sun shone all day.",
+        ] {
+            assert_eq!(d.apply(s, true), s);
+        }
     }
 
     #[test]
@@ -930,6 +1113,112 @@ mod tests {
         d.add_term("Actor", "user");
         assert_eq!(d.apply("the actor left", true), "the actor left");
         assert_eq!(d.apply("ask claude", true), "ask Claude");
+    }
+
+    #[test]
+    fn misses_from_real_history() {
+        let mut d = dict();
+        for t in ["BaneySpaces", "Runpod", "abbey1"] {
+            d.add_term(t, "user");
+        }
+        d.add_correction("martry", "Martyr", "import");
+        // A correction's target is a name Silas knows, so a new mishearing of it snaps too.
+        assert_eq!(
+            d.apply("Make sure the theme is that same Marter color scheme", true),
+            "Make sure the theme is that same Martyr color scheme"
+        );
+        // Two ordinary words that spell a one-word name almost exactly fuse into it.
+        assert_eq!(
+            d.apply("For Bane spaces, work out why this blue dot's there.", true),
+            "For BaneySpaces, work out why this blue dot's there."
+        );
+        assert_eq!(d.apply("link their run pod to it", true), "link their Runpod to it");
+        assert_eq!(
+            d.apply("Maybe not on Abbey One because it needs storage.", true),
+            "Maybe not on abbey1 because it needs storage."
+        );
+    }
+
+    #[test]
+    fn near_twin_names_keep_their_own_spelling() {
+        let mut d = dict();
+        for t in ["Parish2", "abbey1", "abbey2"] {
+            d.add_term(t, "user");
+        }
+        let s = "ssh into Parish2 now, then Parish1, abbey1 and abbey2.";
+        assert_eq!(d.apply(s, true), s);
+        assert_eq!(d.apply("ssh into parish2 now", true), "ssh into Parish2 now");
+        assert_eq!(d.apply("Parish2's disk is full", true), "Parish2's disk is full");
+        // A protected name can still be part of a longer name spoken exactly.
+        d.add_term("BaneySpaces", "user");
+        d.add_correction("Bainey", "Baney", "import");
+        assert_eq!(d.apply("the dock of the Baney Spaces app", true), "the dock of the BaneySpaces app");
+        assert_eq!(d.apply("open Baney space now", true), "open BaneySpaces now");
+        // A name's own plural or possessive is still recased.
+        assert_eq!(d.apply("check ghostty's config", true), "check Ghostty's config");
+        assert_eq!(d.apply("push to github's api", true), "push to GitHub's api");
+        // A protected name never swallows the next word, or grows into a longer twin.
+        assert_eq!(d.apply("check Tailscale a lot", true), "check Tailscale a lot");
+        assert_eq!(d.apply("restart Tailscale two times", true), "restart Tailscale two times");
+        assert_eq!(d.apply("check Tailscal a lot", true), "check Tailscale a lot");
+        assert_eq!(d.apply("check Tail Scale", true), "check Tailscale");
+        d.add_term("Parish10", "user");
+        assert_eq!(d.apply("ssh into Parish1 now", true), "ssh into Parish1 now");
+        // The digit picks the twin.
+        assert_eq!(d.apply("reboot abby2", true), "reboot abbey2");
+        d.add_term("Parish12", "user");
+        assert_eq!(d.apply("ssh into Parish two now", true), "ssh into Parish2 now");
+        // A protected word inside a multi-word name lines up by word, not by letters.
+        d.add_term("Code", "user");
+        assert_eq!(d.apply("ask Claud Code to do it", true), "ask Claude Code to do it");
+        assert_eq!(d.apply("we cloud code it later and make sure it works.", true), "we cloud code it later and make sure it works.");
+    }
+
+    #[test]
+    fn sound_alike_names_still_snap() {
+        let mut d = dict();
+        d.add_term("Tauri", "user");
+        // Spelled far apart, but the full sound codes match exactly (TR).
+        assert_eq!(d.apply("build it with Towery", true), "build it with Tauri");
+    }
+
+    #[test]
+    fn a_bigger_dictionary_does_not_bend_right_words() {
+        let mut d = dict();
+        for t in ["Obsidian", "Waypost", "Hildegard", "Proton Pass", "Proton Drive"] {
+            d.add_term(t, "user");
+        }
+        for s in [
+            // Same sound code (APST), almost no letters in common.
+            "Obsidian needs more help, and Obsidian opens on my Mac.",
+            // "is" is a word, not Hildegard's plural.
+            "Hildegard is set up for generative requests.",
+            "You should have gone to Proton Pass first, not Proton Drive.",
+        ] {
+            assert_eq!(d.apply(s, true), s);
+        }
+    }
+
+    #[test]
+    fn sound_codes_are_full_length() {
+        // DoubleMetaphone::new(None) has no length cap; the default stops at 4.
+        assert_eq!(phonetic("obsidian")[0], "APSTN");
+        assert_ne!(phonetic("obsidian")[0], phonetic("waypost")[0]);
+        assert_ne!(phonetic("protonpass")[0], phonetic("protondrive")[0]);
+    }
+
+    #[test]
+    fn misheard_names_go_to_the_right_twin() {
+        let mut d = dict();
+        for t in ["Obsidian", "Waypost", "Hildegard", "Proton Pass", "Proton Drive"] {
+            d.add_term(t, "user");
+        }
+        // Misspelled, so nothing is protected: the matcher alone has to get these right.
+        assert_eq!(d.apply("open Obsidan now", true), "open Obsidian now");
+        assert_eq!(d.apply("check Proton Pas first", true), "check Proton Pass first");
+        assert_eq!(d.apply("Hildegarde is set up.", true), "Hildegard is set up.");
+        // A longer name whose first word is itself a term still snaps.
+        assert_eq!(d.apply("ask Claude Kode to do it", true), "ask Claude Code to do it");
     }
 
     #[test]
