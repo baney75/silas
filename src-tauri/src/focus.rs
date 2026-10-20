@@ -170,11 +170,12 @@ mod mac {
         unsafe { ((sl.get_front)(&mut psn) == 0 && GetProcessPID(&psn, &mut pid) == 0).then_some(pid) }
     }
 
-    /// Mouse-down presses since boot, any button. A change means the user clicked.
+    /// Left and right mouse-down presses since boot. A change means the user clicked. Other
+    /// buttons are left out: one may be the dictation hotkey.
     fn clicks() -> u32 {
         const HID_SYSTEM_STATE: i32 = 1;
-        // kCGEventLeftMouseDown, kCGEventRightMouseDown, kCGEventOtherMouseDown.
-        [1u32, 3, 25]
+        // kCGEventLeftMouseDown, kCGEventRightMouseDown.
+        [1u32, 3]
             .iter()
             .map(|&t| unsafe { CGEventSourceCounterForEventType(HID_SYSTEM_STATE, t) })
             .fold(0u32, u32::wrapping_add)
@@ -244,7 +245,12 @@ mod mac {
         use core_graphics::event::CGEvent;
         use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
         let at = CGEvent::new(CGEventSource::new(CGEventSourceStateID::HIDSystemState).ok()?).ok()?.location();
-        let system = wrap(unsafe { AXUIElementCreateSystemWide() })?;
+        // Not through wrap(): a timeout set on the system-wide element applies process-wide.
+        let raw = unsafe { AXUIElementCreateSystemWide() };
+        if raw.is_null() {
+            return None;
+        }
+        let system = unsafe { CFType::wrap_under_create_rule(raw) };
         let mut out: AXUIElementRef = std::ptr::null();
         let err = unsafe { AXUIElementCopyElementAtPosition(system.as_CFTypeRef(), at.x as f32, at.y as f32, &mut out) };
         let el = if err == 0 { wrap(out)? } else { return None };
@@ -252,13 +258,17 @@ mod mac {
         (unsafe { AXUIElementGetPid(el.as_CFTypeRef(), &mut pid) } == 0).then_some((pid, el))
     }
 
-    /// The text field `el` is, or sits inside (a browser reports the text run under the mouse).
-    fn text_field_of(el: CFType) -> Option<CFType> {
+    /// The text field `el` is, or sits inside (a browser reports the text run under the
+    /// mouse). Gives up at `deadline`, so a hung app can't hold up a dictation.
+    fn text_field_of(el: CFType, deadline: Instant) -> Option<CFType> {
         let mut cur = Some(el);
         for _ in 0..8 {
             let c = cur?;
             if editable(&c) {
                 return Some(c);
+            }
+            if Instant::now() > deadline {
+                return None;
             }
             cur = attr(&c, "AXParent");
         }
@@ -290,8 +300,9 @@ mod mac {
     #[derive(Clone)]
     struct Spot {
         pid: i32,
-        window: CFType,
-        wid: u32,
+        /// None when the app couldn't name its window at key-down (still building its
+        /// Accessibility tree): Silas then only checks the app.
+        window: Option<(CFType, u32)>,
         /// None when the app reported no text field (a browser still building its tree, or
         /// a button had focus), so Silas never focuses a container.
         element: Option<CFType>,
@@ -304,12 +315,11 @@ mod mac {
         /// Where the keyboard is in `pid` right now.
         fn focused_in(pid: i32) -> Option<Self> {
             let app = app(pid)?;
-            let window = attr(&app, "AXFocusedWindow")?;
+            let window = attr(&app, "AXFocusedWindow").and_then(|w| Some((window_id(&w)?, w)));
             let element = attr(&app, "AXFocusedUIElement").filter(editable);
             Some(Self {
                 pid,
-                wid: window_id(&window)?,
-                window,
+                window: window.map(|(id, w)| (w, id)),
                 selection: element.as_ref().and_then(|e| attr(e, "AXSelectedTextRange")),
                 element,
             })
@@ -317,6 +327,10 @@ mod mac {
 
         fn has(&self, pid: i32, el: &CFType) -> bool {
             pid == self.pid && self.element.as_ref().is_some_and(|e| same(e, el))
+        }
+
+        fn wid(&self) -> Option<u32> {
+            self.window.as_ref().map(|(_, id)| *id)
         }
     }
 
@@ -326,39 +340,60 @@ mod mac {
         /// into since.
         spot: parking_lot::Mutex<Spot>,
         stop: AtomicBool,
+        /// Typing started with the target field focused, so a later change of field inside
+        /// the same window (a sheet, a command palette) means the keyboard left.
+        field_at_start: AtomicBool,
+        checks: std::sync::atomic::AtomicUsize,
     }
 
     // AXUIElement is a CoreFoundation type that may be used from any thread.
     unsafe impl Send for Shared {}
     unsafe impl Sync for Shared {}
 
-    /// Judges each click as it happens, by what is under the mouse at that moment: a press on
-    /// a text field makes it the place for the text; a press on anything else (closing or
-    /// dragging a pop-up, a button) changes nothing, even if it moves focus as a side effect.
+    /// Judges each click as it happens, by what is under the mouse at that moment. A press on
+    /// a text field makes it the place for the text, once that app takes the keyboard there.
+    /// A press on anything else (closing or dragging a pop-up, a button) changes nothing,
+    /// even if it moves focus as a side effect. Editors that draw their own text (VS Code,
+    /// terminals) count when the click puts the keyboard in a text field of the clicked window.
     fn watch_clicks(shared: Arc<Shared>, mut last: u32) {
         // Recordings stop at 5 minutes; never outlive one by much even if nobody stops us.
         let give_up = Instant::now() + Duration::from_secs(330);
         while !shared.stop.load(Ordering::Relaxed) && Instant::now() < give_up {
-            std::thread::sleep(Duration::from_millis(30));
+            std::thread::sleep(Duration::from_millis(20));
             let now = clicks();
             if now == last {
                 continue;
             }
             last = now;
-            // Finish judging this click even if Silas is told to stop meanwhile.
-            let Some((pid, field)) = under_mouse().and_then(|(p, el)| Some((p, text_field_of(el)?))) else {
-                continue;
-            };
-            if shared.spot.lock().has(pid, &field) {
-                continue;
+            // Finish judging this click even if Silas is told to stop meanwhile, but never
+            // spend more than half a second on it.
+            let deadline = Instant::now() + Duration::from_millis(500);
+            let Some((pid, hit)) = under_mouse() else { continue };
+            let clicked_wid = attr(&hit, "AXWindow").and_then(|w| window_id(&w));
+            let field = text_field_of(hit, deadline);
+            if let Some(f) = &field {
+                let mut spot = shared.spot.lock();
+                if spot.has(pid, f) {
+                    // A click inside the target field moves the caret; remember where.
+                    spot.selection = attr(f, "AXSelectedTextRange");
+                    continue;
+                }
             }
-            // The app moves its keyboard focus to the field shortly after the click.
-            let deadline = Instant::now() + Duration::from_millis(400);
             loop {
-                let focused = Spot::focused_in(pid);
-                if let Some(spot) = focused.filter(|s| s.has(pid, &field)) {
-                    *shared.spot.lock() = spot;
-                    break;
+                // The clicked app must take the keyboard: clicking OK on a dialog that then
+                // closes doesn't make a background app's field the target.
+                if front_pid() == Some(pid) {
+                    if let Some(spot) = Spot::focused_in(pid) {
+                        let chosen = match (&field, &spot.element) {
+                            (Some(f), Some(_)) => spot.has(pid, f),
+                            (None, Some(_)) => clicked_wid.is_some() && spot.wid() == clicked_wid,
+                            _ => false,
+                        };
+                        if chosen {
+                            *shared.spot.lock() = spot;
+                            break;
+                        }
+                    }
                 }
                 if Instant::now() > deadline {
                     break;
@@ -388,8 +423,22 @@ mod mac {
             skylight()?;
             let baseline = clicks();
             let pid = super::focused()? as i32;
-            let spot = Spot::focused_in(pid)?;
-            let shared = Arc::new(Shared { spot: parking_lot::Mutex::new(spot), stop: AtomicBool::new(false) });
+            // Browsers can miss the first question while they build their tree; ask again.
+            let mut spot = Spot::focused_in(pid);
+            for _ in 0..2 {
+                if spot.as_ref().is_some_and(|s| s.window.is_some()) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(40));
+                spot = Spot::focused_in(pid).or(spot);
+            }
+            let spot = spot.unwrap_or(Spot { pid, window: None, element: None, selection: None });
+            let shared = Arc::new(Shared {
+                spot: parking_lot::Mutex::new(spot),
+                stop: AtomicBool::new(false),
+                field_at_start: AtomicBool::new(false),
+                checks: std::sync::atomic::AtomicUsize::new(0),
+            });
             let watcher = shared.clone();
             let handle = std::thread::spawn(move || watch_clicks(watcher, baseline));
             Some(Self { shared, watcher: parking_lot::Mutex::new(Some(handle)) })
@@ -403,11 +452,33 @@ mod mac {
         /// otherwise. Only a clear sign (another app in front, another window focused) is No.
         pub(super) fn in_place(&self) -> bool {
             let spot = self.spot();
-            front_pid().is_none_or(|p| p == spot.pid) && focused_window_id(spot.pid).is_none_or(|w| w == spot.wid)
+            front_pid().is_none_or(|p| p == spot.pid)
+                && spot.wid().is_none_or(|want| focused_window_id(spot.pid).is_none_or(|w| w == want))
         }
 
+        /// Asked before every key event. The front app is a cheap WindowServer question and
+        /// is asked every time; the window and field cost a round trip to the app and are
+        /// asked every fourth time.
         pub fn still_here(&self) -> bool {
-            self.in_place()
+            let spot = self.spot();
+            if front_pid().is_some_and(|p| p != spot.pid) {
+                return false;
+            }
+            if !self.shared.checks.fetch_add(1, Ordering::Relaxed).is_multiple_of(4) {
+                return true;
+            }
+            if !self.in_place() {
+                return false;
+            }
+            let Some(e) = &spot.element else { return true };
+            match focused_element(spot.pid) {
+                Some(f) if same(&f, e) => {
+                    self.shared.field_at_start.store(true, Ordering::Relaxed);
+                    true
+                }
+                Some(_) => !self.shared.field_at_start.load(Ordering::Relaxed),
+                None => true,
+            }
         }
 
         /// Ask the app to focus the target field if something else in it has focus, and put
@@ -442,11 +513,25 @@ mod mac {
                 Self::refocus_field(&spot);
                 return Restore::InPlace;
             }
-            if let Err(AX_INVALID_ELEMENT) = attr_err(&spot.window, "AXRole") {
-                // The window is gone. Another window of the same app is a fine home for the
-                // text; anything else would be a stranger's window.
+            let Some((window, wid)) = spot.window.clone() else {
+                // Silas never learned the window, so it can't bring it back.
+                return Restore::Failed;
+            };
+            if let Err(AX_INVALID_ELEMENT) = attr_err(&window, "AXRole") {
+                // The window is gone. A text field in another window of the same app is a fine
+                // home for the text, guarded like any target; anything else would be a stranger's.
                 log::info!("the window the dictation was going to is gone");
-                return if front_pid() == Some(spot.pid) { Restore::Elsewhere } else { Restore::Failed };
+                let here = front_pid()
+                    .filter(|p| *p == spot.pid)
+                    .and_then(Spot::focused_in)
+                    .filter(|s| s.element.is_some() && s.window.is_some());
+                return match here {
+                    Some(s) => {
+                        *self.shared.spot.lock() = s;
+                        Restore::Elsewhere
+                    }
+                    None => Restore::Failed,
+                };
             }
             let Some(sl) = skylight() else { return Restore::Failed };
             let mut psn: Psn = [0; 8];
@@ -455,10 +540,10 @@ mod mac {
             }
             for _ in 0..2 {
                 // kCPSUserGenerated lets the app install its key window before it handles keys.
-                unsafe { (sl.set_front)(&psn, spot.wid, 0x200) };
-                make_key(sl, &psn, spot.wid);
+                unsafe { (sl.set_front)(&psn, wid, 0x200) };
+                make_key(sl, &psn, wid);
                 unsafe {
-                    AXUIElementPerformAction(spot.window.as_CFTypeRef(), CFString::new("AXRaise").as_concrete_TypeRef());
+                    AXUIElementPerformAction(window.as_CFTypeRef(), CFString::new("AXRaise").as_concrete_TypeRef());
                 }
                 let deadline = Instant::now() + Duration::from_millis(400);
                 while !self.in_place() && Instant::now() < deadline {

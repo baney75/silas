@@ -439,13 +439,14 @@ impl Core {
             return;
         };
         self.cue("stop");
+        // Carried by value: a new dictation may start before this one finishes typing.
+        let target = self.target.lock().take();
         let me = self.clone();
         std::thread::spawn(move || {
             let released = Instant::now();
             let samples = rec.finish();
             let secs = samples.len() as f32 / 16_000.0;
             if secs < 0.35 {
-                me.target.lock().take();
                 me.set_status(Status::Ready, None);
                 return;
             }
@@ -461,7 +462,6 @@ impl Core {
             let raw = match raw {
                 Ok(t) => t,
                 Err(e) => {
-                    me.target.lock().take();
                     me.set_status(Status::Error, Some(format!("Transcription failed: {e}")));
                     me.recover_soon();
                     return;
@@ -470,7 +470,6 @@ impl Core {
             let s = me.settings.lock().clone();
             let mut text = me.dict.lock().apply(&raw, s.remove_fillers);
             if text.trim().is_empty() {
-                me.target.lock().take();
                 me.set_status(Status::Ready, None);
                 return;
             }
@@ -478,13 +477,12 @@ impl Core {
                 text.push(' ');
             }
             use crate::focus::Restore;
-            let target = me.target.lock().take();
             let restored = target.as_ref().map_or(Restore::Elsewhere, |t| t.restore());
             let latency = released.elapsed().as_millis() as u64;
             // Typing into the window that stole focus is the bug; keep the text in History.
             let mut lost_focus = restored == Restore::Failed;
             // Guard the typing only when Silas knows where the text belongs.
-            let guarded = matches!(restored, Restore::InPlace | Restore::Restored);
+            let guarded = matches!(restored, Restore::InPlace | Restore::Restored | Restore::Elsewhere);
             let still_here = || !guarded || target.as_ref().is_none_or(|t| t.still_here());
             if !lost_focus {
                 me.set_status(Status::Typing, None);
