@@ -1,0 +1,61 @@
+# Maintainer: Donovan Baney <baneydonovan@gmail.com>
+#
+# Silas as a native Arch package, built from source: /usr/bin/silas, the silas-ctl command for
+# compositor keybindings, the launcher entry, icons, the udev rule that lets Silas read its key,
+# and the Hyprland keybinding snippet.
+#
+#   cd packaging/arch && makepkg -si
+#
+# SILAS_REPO and SILAS_BRANCH build another clone or branch, e.g. SILAS_REPO=file:///path/to/silas.
+
+pkgname=silas-git
+_name=silas
+pkgver=0.1.5.r25.ge768a0c
+pkgrel=1
+pkgdesc="Private, on-device dictation: hold a key, speak, and Silas types what you said"
+arch=(x86_64)
+url="https://github.com/baney75/silas"
+license=(MIT)
+depends=(webkit2gtk-4.1 gtk3 gtk-layer-shell libayatana-appindicator alsa-lib systemd-libs hicolor-icon-theme)
+makedepends=(git cargo bun)
+provides=(silas)
+conflicts=(silas)
+# The Rust profile has its own LTO; makepkg's would also reach the C code ONNX Runtime brings.
+options=(!lto !debug)
+install=silas.install
+source=("$_name::git+${SILAS_REPO:-https://github.com/baney75/silas.git}#branch=${SILAS_BRANCH:-main}")
+sha256sums=(SKIP)
+
+pkgver() {
+  cd "$_name"
+  local v
+  v=$(sed -n 's/^  "version": "\(.*\)",$/\1/p' src-tauri/tauri.conf.json)
+  printf "%s.r%s.g%s" "$v" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  cd "$_name"
+  # Updates come from pacman, so Silas doesn't replace itself.
+  export SILAS_PACKAGED=pacman
+  bun install --frozen-lockfile
+  # Builds every binary (silas and silas-ctl) with the frontend embedded.
+  bunx tauri build --no-bundle -- --locked
+}
+
+check() {
+  cd "$_name/src-tauri"
+  cargo test --release --locked --lib
+}
+
+package() {
+  cd "$_name"
+  install -Dm755 src-tauri/target/release/silas "$pkgdir/usr/bin/silas"
+  install -Dm755 src-tauri/target/release/silas-ctl "$pkgdir/usr/bin/silas-ctl"
+  install -Dm644 packaging/arch/silas.desktop "$pkgdir/usr/share/applications/silas.desktop"
+  install -Dm644 src-tauri/icons/32x32.png "$pkgdir/usr/share/icons/hicolor/32x32/apps/silas.png"
+  install -Dm644 src-tauri/icons/128x128.png "$pkgdir/usr/share/icons/hicolor/128x128/apps/silas.png"
+  install -Dm644 src-tauri/icons/128x128@2x.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/silas.png"
+  install -Dm644 src-tauri/linux/70-silas-input.rules "$pkgdir/usr/lib/udev/rules.d/70-silas-input.rules"
+  install -Dm644 packaging/hyprland/silas.lua "$pkgdir/usr/share/silas/hyprland.lua"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

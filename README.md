@@ -19,6 +19,27 @@ curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | sh
 **Linux** (nightly, x86_64, glibc 2.39 or newer, e.g. Ubuntu 24.04+): the same command. It installs the `.deb` or `.rpm` when it can,
 otherwise an AppImage plus a udev rule so Silas can read the hold-to-talk key.
 
+**Arch Linux and Omarchy**: build the native package, which installs `/usr/bin/silas` and
+`silas-ctl`, the udev rule for the hold-to-talk key, and Hyprland keybindings:
+
+```sh
+git clone https://github.com/baney75/silas && cd silas/packaging/arch && makepkg -si
+```
+
+Then put Silas on Omarchy's dictation keys (hold **F9** to talk, **Super + Ctrl + X** for
+hands-free) by adding this to `~/.config/hypr/bindings.lua`:
+
+```lua
+local silas = dofile("/usr/share/silas/hyprland.lua")
+silas.hold("SUPER + SHIFT + code:201") -- optional: the Copilot key
+```
+
+The bindings run `silas-ctl press` and `silas-ctl release`. Hyprland swallows the keys, so
+apps never see them. Silas types through Wayland's virtual-keyboard protocol, floats its
+overlay as a layer surface that never takes the keyboard, and on Hyprland puts the text back
+in the window where you started. If you used voxtype, stop it so two apps don't share the
+keys: `systemctl --user disable --now voxtype`.
+
 **Windows** (nightly), in PowerShell:
 
 ```powershell
@@ -82,7 +103,8 @@ bunx tauri dev                      # run
 bunx tauri build                    # package
 ```
 
-Linux needs `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev libudev-dev libxdo-dev`.
+Linux needs `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev libudev-dev libxdo-dev`,
+plus `libgtk-layer-shell0` at run time for the overlay on Wayland.
 
 ## Privacy
 

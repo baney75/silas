@@ -1,15 +1,25 @@
 pub mod audio;
 pub mod commands;
+#[cfg(unix)]
+pub mod control;
+#[cfg(unix)]
+pub mod ctl;
 pub mod core;
 pub mod dictionary;
 pub mod focus;
+#[cfg(target_os = "linux")]
+pub mod hypr;
 pub mod keys;
+#[cfg(target_os = "linux")]
+pub mod layer;
 pub mod models;
 pub mod permissions;
 pub mod store;
 pub mod tray;
 pub mod typer;
 pub mod updates;
+#[cfg(target_os = "linux")]
+pub mod wayland;
 
 use std::time::Duration;
 
@@ -70,8 +80,12 @@ pub fn run() {
         .init();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            show_main(app)
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _| {
+            // Login autostart (or a desktop's autostart line) launching Silas again must not
+            // pop the window open; opening it from the launcher should.
+            if !argv.iter().any(|a| a == "--background") {
+                show_main(app)
+            }
         }))
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -94,8 +108,14 @@ pub fn run() {
             }
 
             tray::build(&handle)?;
+            #[cfg(target_os = "linux")]
+            if let Some(w) = handle.get_webview_window("overlay") {
+                layer::setup(&w);
+            }
             core.load_model();
             start_listener(core.clone());
+            #[cfg(unix)]
+            control::serve(core.clone());
             updates::schedule(handle.clone());
 
             let background = std::env::args().any(|a| a == "--background");

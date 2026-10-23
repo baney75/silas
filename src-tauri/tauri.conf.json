@@ -69,12 +69,14 @@
     },
     "linux": {
       "deb": {
+        "recommends": ["libgtk-layer-shell0"],
         "files": {
           "/usr/lib/udev/rules.d/70-silas-input.rules": "linux/70-silas-input.rules"
         },
         "postInstallScript": "linux/postinst.sh"
       },
       "rpm": {
+        "recommends": ["gtk-layer-shell"],
         "files": {
           "/usr/lib/udev/rules.d/70-silas-input.rules": "linux/70-silas-input.rules"
         },

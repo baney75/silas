@@ -19,6 +19,10 @@ const REPO: &str = "https://github.com/baney75/silas/releases";
 const STABLE_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI0OUZBOTBFNEEyQUQzNTgKUldSWTB5cEtEcW1mdE5FYXBNV1AyT3NGaXdzVXFvUHRPeGZlZHFiWE9mNXhZTUtEZTJWZGhicWMK";
 const NIGHTLY_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ1QTkyOTlGNzM0MEJGMTIKUldRU3YwQnpueW1wMVUvOEtteWFXL0xyUys3L1JOSmhZbkFqNEtUVTh5RjdwWGZMdWV1VzA4cGcK";
 
+/// Set at build time by a distro package (`SILAS_PACKAGED=pacman`). Its package manager owns
+/// the files, so Silas must not replace itself.
+pub const PACKAGED: Option<&str> = option_env!("SILAS_PACKAGED");
+
 pub fn endpoint(channel: &str) -> String {
     match channel {
         "stable" => format!("{REPO}/latest/download/latest.json"),
@@ -37,6 +41,9 @@ pub struct UpdateInfo {
 }
 
 async fn find(app: &AppHandle) -> anyhow::Result<Option<(tauri_plugin_updater::Update, String)>> {
+    if let Some(manager) = PACKAGED {
+        anyhow::bail!("This copy of Silas came from {manager}; update it there.");
+    }
     let channel = app
         .state::<Shared>()
         .settings
@@ -94,6 +101,9 @@ pub async fn install(app: &AppHandle) -> anyhow::Result<()> {
 /// Check at launch and every four hours. With auto-update on, install once Silas has
 /// been idle for two minutes so a restart never lands mid-dictation.
 pub fn schedule(app: AppHandle) {
+    if PACKAGED.is_some() {
+        return;
+    }
     tauri::async_runtime::spawn(async move {
         tokio_sleep(Duration::from_secs(20)).await;
         loop {

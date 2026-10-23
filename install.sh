@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install Silas on macOS or Linux:
 #   curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | sh
-# macOS gets the stable channel; Linux gets nightly (the only Linux channel).
+# macOS gets the stable channel; Arch builds the native package; other Linux gets nightly.
 set -eu
 REPO="https://github.com/baney75/silas/releases"
 say() { printf '\033[1;33m›\033[0m %s\n' "$1"; }
@@ -34,10 +34,25 @@ Darwin)
   open "$dest/Silas.app" || { sleep 2; open "$dest/Silas.app"; }
   ;;
 Linux)
+  arch=$(uname -m); [ "$arch" = x86_64 ] || { echo "Silas builds are x86_64 only for now" >&2; exit 1; }
+  if command -v makepkg >/dev/null 2>&1; then
+    # Arch and Omarchy: build the native package from source (a few minutes).
+    need="base-devel git"
+    command -v cargo >/dev/null 2>&1 || need="$need rust"
+    command -v bun >/dev/null 2>&1 || need="$need bun"
+    say "Installing build tools"
+    # shellcheck disable=SC2086
+    sudo pacman -S --needed --noconfirm $need
+    git clone --depth 1 https://github.com/baney75/silas "$tmp/silas"
+    say "Building Silas"
+    (cd "$tmp/silas/packaging/arch" && makepkg -si --noconfirm --nocheck)
+    say "For Hyprland keys, add to ~/.config/hypr/bindings.lua: dofile(\"/usr/share/silas/hyprland.lua\")"
+    say "Done. Start Silas from your app launcher."
+    exit 0
+  fi
   api="https://api.github.com/repos/baney75/silas/releases/tags/nightly"
   assets=$(curl -fsSL "$api" | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4) || true
   [ -n "$assets" ] || { echo "The nightly release is being rebuilt. Try again in a few minutes." >&2; exit 1; }
-  arch=$(uname -m); [ "$arch" = x86_64 ] || { echo "Silas builds are x86_64 only for now" >&2; exit 1; }
   if command -v apt-get >/dev/null 2>&1; then
     deb=$(echo "$assets" | grep '\.deb$' | head -1)
     say "Downloading Silas (.deb)"; curl -fL# "$deb" -o "$tmp/silas.deb"
@@ -55,9 +70,12 @@ Linux)
     printf 'KERNEL=="uinput", TAG+="uaccess"\nSUBSYSTEM=="input", KERNEL=="event*", TAG+="uaccess"\n' | sudo tee /etc/udev/rules.d/70-silas-input.rules >/dev/null
     sudo udevadm control --reload && sudo udevadm trigger
   fi
-  if [ -n "${WAYLAND_DISPLAY:-}" ] && ! command -v wtype >/dev/null 2>&1; then
-    say "Tip: install 'wtype' so Silas can type into Wayland apps."
-  fi
+  case "${XDG_CURRENT_DESKTOP:-}" in
+  *GNOME*|*KDE*)
+    if [ -n "${WAYLAND_DISPLAY:-}" ] && ! command -v ydotool >/dev/null 2>&1; then
+      say "Tip: install 'ydotool' so Silas can type into Wayland apps on ${XDG_CURRENT_DESKTOP}."
+    fi ;;
+  esac
   say "Done. Start Silas from your app launcher."
   ;;
 *) echo "On Windows run: irm https://raw.githubusercontent.com/baney75/silas/main/install.ps1 | iex" >&2; exit 1 ;;

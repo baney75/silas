@@ -12,6 +12,10 @@ name = "silas_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
+name = "silas-ctl"
+path = "src/bin/silas-ctl.rs"
+
+[[bin]]
 name = "silas-bench"
 path = "src/bin/silas-bench.rs"
 required-features = ["bench"]
@@ -48,6 +52,13 @@ chrono = { version = "0.4", features = ["serde"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 enigo = "0.6"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wayland-client = "0.31"
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+gtk = "0.18"
+libloading = "0.8"
+libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }

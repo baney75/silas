@@ -47,6 +47,8 @@ pub struct Core {
     /// The global key listener is running. Without it the hotkey can't work, so Silas
     /// must never claim to be ready.
     pub listener_ok: AtomicBool,
+    /// A modifier key is down, as the key listener last saw it.
+    pub mods_held: AtomicBool,
     /// The user pressed keys while Silas was typing, so its copy of the text is off.
     typed_over: AtomicBool,
     /// Bumped per recording so the length limit only stops the one it was set for.
@@ -97,6 +99,7 @@ impl Core {
             watch: Mutex::new(None),
             typing: AtomicBool::new(false),
             listener_ok: AtomicBool::new(false),
+            mods_held: AtomicBool::new(false),
             typed_over: AtomicBool::new(false),
             recording_gen: std::sync::atomic::AtomicU64::new(0),
             recover_gen: std::sync::atomic::AtomicU64::new(0),
@@ -173,6 +176,15 @@ impl Core {
         };
         let show = self.settings.lock().show_overlay
             && matches!(s, Status::Recording | Status::Transcribing | Status::Typing);
+        #[cfg(target_os = "linux")]
+        match crate::layer::mode() {
+            crate::layer::Overlay::Layer => {
+                let _ = if show { w.show() } else { w.hide() };
+                return;
+            }
+            crate::layer::Overlay::Hidden => return,
+            crate::layer::Overlay::Plain => {}
+        }
         if show {
             if let Ok(Some(monitor)) = w
                 .primary_monitor()
@@ -284,6 +296,8 @@ impl Core {
 
     /// Every key event from the global listener lands here.
     pub fn on_key(self: &Shared, ev: &handy_keys::KeyEvent) {
+        use handy_keys::Modifiers as M;
+        self.mods_held.store(ev.modifiers.intersects(M::CMD | M::CTRL | M::OPT | M::SHIFT), Ordering::Relaxed);
         if self.typing.load(Ordering::Relaxed) {
             // Silas's own text arrives as key events too, so only keys it never sends
             // (deleting, moving the cursor) mean the user edited mid-typing.
@@ -409,10 +423,30 @@ impl Core {
                 // The mic is already running; publish the target before the recording, so a
                 // release can never find a recording without its target.
                 *self.target.lock() = capture.join().ok().flatten();
-                *self.recording.lock() = Some((r, Instant::now()));
+                {
+                    // Esc (or `silas-ctl cancel`) on another thread while the mic was opening
+                    // already reset the key machine and found no recording to stop. Checking
+                    // under the recording lock means a cancel either sees this recording or
+                    // happened before the check.
+                    let mut rec = self.recording.lock();
+                    if !self.machine.lock().is_active() {
+                        drop(rec);
+                        self.target.lock().take();
+                        // A press from an error claimed its recovery timer; don't leave the error up.
+                        self.set_status(Status::Ready, None);
+                        return;
+                    }
+                    *rec = Some((r, Instant::now()));
+                }
                 let gen = self.recording_gen.fetch_add(1, Ordering::Relaxed) + 1;
                 self.cue("start");
                 self.set_status(Status::Recording, None);
+                // A cancel between storing the recording and the line above already set Ready,
+                // which Recording then covered. It took the recording, so look again.
+                if self.recording.lock().is_none() {
+                    self.set_status(Status::Ready, None);
+                    return;
+                }
                 // Hands-free mode left on by mistake would grow without end; stop at 5 minutes.
                 let me = self.clone();
                 std::thread::spawn(move || {
@@ -493,7 +527,19 @@ impl Core {
             // Guard the typing only when Silas knows where the text belongs.
             let guarded = matches!(restored, Restore::InPlace | Restore::Restored | Restore::Elsewhere);
             let still_here = |after_focus_key: bool| !guarded || target.as_ref().is_none_or(|t| t.still_here(after_focus_key));
-            if !lost_focus {
+            // Keys typed while the user still holds Super or Ctrl from a keybinding would reach
+            // the compositor as shortcuts, so wait for the keys to come up, or don't type.
+            #[cfg(target_os = "linux")]
+            if !lost_focus && me.listener_ok.load(Ordering::Relaxed) {
+                let until = Instant::now() + Duration::from_secs(3);
+                while me.mods_held.load(Ordering::Relaxed) && Instant::now() < until {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                if me.mods_held.load(Ordering::Relaxed) {
+                    typing_error = Some("Let go of Ctrl, Alt, Shift and Super so Silas can type".into());
+                }
+            }
+            if !lost_focus && typing_error.is_none() {
                 me.set_status(Status::Typing, None);
                 me.typed_over.store(false, Ordering::Relaxed);
                 me.typing.store(true, Ordering::Relaxed);

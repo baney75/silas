@@ -124,3 +124,18 @@ interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string
 | `transcript` | `HistoryItem` just typed |
 | `learned` | `LearnResult` when Silas learned from an edit |
 | `model-progress` | `{ id, downloaded, total, stage: "downloading" \| "unpacking" \| "loading" \| "done" \| "error", message? }` |
+
+## Control socket (Linux, macOS)
+
+`silas-ctl <command>` (or `silas <command>`, which loads the GUI libraries first and takes
+about 30 ms instead of 2) writes one line to `$XDG_RUNTIME_DIR/silas.sock` and reads `ok`.
+Compositor keybindings use it, since on Wayland the compositor owns the keyboard.
+
+| Command | Same as |
+| --- | --- |
+| `press` | the hotkey going down (a short press-and-release starts hands-free) |
+| `release` | the hotkey coming up |
+| `toggle` | the record button in the window |
+| `cancel` | Esc while listening |
+
+Exit code 1 means Silas isn't running.

@@ -5,7 +5,8 @@
 //! the same app keeps focus (handy-keys reports no plain mouse clicks) and the layout maps
 //! keys the way `keys::char_for` expects.
 
-/// An id for the focused app or window, or None where the OS can't tell us (Linux).
+/// An id for the focused app or window, or None where the OS can't tell us (Wayland outside
+/// Hyprland).
 #[cfg(target_os = "macos")]
 pub fn focused() -> Option<u64> {
     if let Some(pid) = mac::front_pid() {
@@ -30,8 +31,9 @@ pub fn focused() -> Option<u64> {
 
 #[cfg(target_os = "linux")]
 pub fn focused() -> Option<u64> {
-    None
+    crate::hypr::active().and_then(|w| w.id())
 }
+
 
 /// Where a dictation's text goes: the text field that had the keyboard when the hotkey went
 /// down, or the one the user clicked into since. A window that opens mid-dictation steals
@@ -41,6 +43,8 @@ pub fn focused() -> Option<u64> {
 pub struct Target {
     #[cfg(target_os = "macos")]
     mac: mac::Target,
+    #[cfg(target_os = "linux")]
+    hypr: hypr::Target,
 }
 
 impl Target {
@@ -49,7 +53,12 @@ impl Target {
         mac::Target::capture().map(|mac| Self { mac })
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    pub fn capture() -> Option<Self> {
+        hypr::Target::capture().map(|hypr| Self { hypr })
+    }
+
+    #[cfg(target_os = "windows")]
     pub fn capture() -> Option<Self> {
         None
     }
@@ -59,7 +68,9 @@ impl Target {
     pub fn restore(&self) -> Restore {
         #[cfg(target_os = "macos")]
         return self.mac.restore();
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        return self.hypr.restore();
+        #[cfg(target_os = "windows")]
         Restore::Elsewhere
     }
 
@@ -70,7 +81,9 @@ impl Target {
     pub fn still_here(&self, after_focus_key: bool) -> bool {
         #[cfg(target_os = "macos")]
         return self.mac.still_here(after_focus_key);
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        return self.hypr.still_here(after_focus_key);
+        #[cfg(target_os = "windows")]
         {
             let _ = after_focus_key;
             true
@@ -89,6 +102,102 @@ pub enum Restore {
     Elsewhere,
     /// Focus was taken and Silas couldn't put it back; typing now would hit the wrong window.
     Failed,
+}
+
+#[cfg(target_os = "linux")]
+mod hypr {
+    //! Hyprland names the focused window and moves focus on request, which is all Silas needs
+    //! to put the text back where it belongs. Other Wayland compositors tell apps neither.
+
+    use super::Restore;
+    use crate::hypr::{self, Window};
+    use std::time::{Duration, Instant};
+
+    pub struct Target {
+        window: parking_lot::Mutex<Window>,
+        /// Where the pointer was when the hotkey went down.
+        pointer: Option<(i64, i64)>,
+    }
+
+    impl Target {
+        pub fn capture() -> Option<Self> {
+            let window = hypr::active()?;
+            Some(Self { window: parking_lot::Mutex::new(window), pointer: hypr::cursor() })
+        }
+
+        fn address(&self) -> String {
+            self.window.lock().address.clone()
+        }
+
+        /// Only a clear answer (another window, or none, has the keyboard) is No.
+        fn in_place(&self) -> bool {
+            match hypr::focused() {
+                None => true,
+                Some(w) => w.is_some_and(|w| w.address == self.address()),
+            }
+        }
+
+        /// Hyprland reports windows, not fields, so a Tab or Return changes nothing here.
+        pub fn still_here(&self, _after_focus_key: bool) -> bool {
+            self.in_place()
+        }
+
+        pub fn restore(&self) -> Restore {
+            let want = self.window.lock().clone();
+            let now = match hypr::focused() {
+                // Hyprland didn't answer: type, as Silas did before it could check.
+                None => return Restore::InPlace,
+                Some(Some(w)) if w.address == want.address => return Restore::InPlace,
+                // Nothing has focus (the user went to an empty workspace): bring the target back.
+                Some(None) => Window { address: String::new(), pid: -1, at: (0, 0), size: (0, 0) },
+                Some(Some(w)) => w,
+            };
+            // The user moved the pointer into the window that has focus now: they clicked (or,
+            // with focus following the mouse, moved) there, so that is where the text goes. A
+            // window that grabs focus on its own leaves the pointer where it was.
+            let moved_in = |p: (i64, i64)| self.pointer != Some(p) && now.contains(p) && !want.contains(p);
+            if hypr::cursor().is_some_and(moved_in) {
+                log::info!("you moved to another window; typing there");
+                *self.window.lock() = now;
+                return Restore::Elsewhere;
+            }
+            if !hypr::exists(&want.address) {
+                log::info!("the window the dictation was going to is gone");
+                if now.pid == want.pid {
+                    *self.window.lock() = now;
+                    return Restore::Elsewhere;
+                }
+                return Restore::Failed;
+            }
+            for _ in 0..2 {
+                if !hypr::focus(&want.address) {
+                    break;
+                }
+                let deadline = Instant::now() + Duration::from_millis(400);
+                while !self.in_place() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                // A window still opening can take focus right back; wait until it stays put.
+                if self.settled() {
+                    log::info!("put the keyboard back where the dictation was going");
+                    return Restore::Restored;
+                }
+            }
+            log::warn!("could not put the keyboard back where the dictation was going");
+            Restore::Failed
+        }
+
+        fn settled(&self) -> bool {
+            let until = Instant::now() + Duration::from_millis(150);
+            while Instant::now() < until {
+                if !self.in_place() {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(15));
+            }
+            self.in_place()
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -706,7 +815,10 @@ pub fn us_layout() -> bool {
 
 #[cfg(target_os = "linux")]
 pub fn us_layout() -> bool {
-    // X11 reports the layout; Wayland compositors don't share it, so trust the locale.
+    if let Some(us) = crate::hypr::us_layout() {
+        return us;
+    }
+    // X11 reports the layout; other Wayland compositors don't share it, so trust the locale.
     if let Ok(o) = std::process::Command::new("setxkbmap")
         .arg("-query")
         .output()
