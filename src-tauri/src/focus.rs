@@ -34,15 +34,6 @@ pub fn focused() -> Option<u64> {
     crate::hypr::active().and_then(|w| w.id())
 }
 
-/// Mouse clicks seen by the key listener. On Hyprland a click since the hotkey went down
-/// means the user picked where the text goes.
-#[cfg(target_os = "linux")]
-static CLICKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-pub fn note_click() {
-    #[cfg(target_os = "linux")]
-    CLICKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-}
 
 /// Where a dictation's text goes: the text field that had the keyboard when the hotkey went
 /// down, or the one the user clicked into since. A window that opens mid-dictation steals
@@ -118,20 +109,18 @@ mod hypr {
     //! Hyprland names the focused window and moves focus on request, which is all Silas needs
     //! to put the text back where it belongs. Other Wayland compositors tell apps neither.
 
-    use super::{Restore, CLICKS};
+    use super::Restore;
     use crate::hypr::{self, Window};
-    use std::sync::atomic::Ordering;
     use std::time::{Duration, Instant};
 
     pub struct Target {
         window: parking_lot::Mutex<Window>,
-        clicks: u64,
     }
 
     impl Target {
         pub fn capture() -> Option<Self> {
             let window = hypr::active()?;
-            Some(Self { window: parking_lot::Mutex::new(window), clicks: CLICKS.load(Ordering::Relaxed) })
+            Some(Self { window: parking_lot::Mutex::new(window) })
         }
 
         fn address(&self) -> String {
@@ -155,9 +144,11 @@ mod hypr {
                 return Restore::InPlace;
             }
             let now = now.expect("checked above");
-            if CLICKS.load(Ordering::Relaxed) > self.clicks {
-                // The user clicked into another window: that is where the text goes.
-                log::info!("you clicked another window; typing there");
+            // Focus went where the pointer is: the user clicked (or, with focus following the
+            // mouse, moved) there, so that is where the text goes. A window that grabs focus
+            // on its own rarely opens under the pointer.
+            if hypr::cursor().is_some_and(|p| now.contains(p) && !want.contains(p)) {
+                log::info!("you moved to another window; typing there");
                 *self.window.lock() = now;
                 return Restore::Elsewhere;
             }

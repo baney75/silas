@@ -22,6 +22,7 @@ provides=(silas)
 conflicts=(silas)
 # The Rust profile has its own LTO; makepkg's would also reach the C code ONNX Runtime brings.
 options=(!lto !debug)
+install=silas.install
 source=("$_name::git+${SILAS_REPO:-https://github.com/baney75/silas.git}#branch=${SILAS_BRANCH:-main}")
 sha256sums=(SKIP)
 

@@ -3,8 +3,9 @@
 //! into the overlay. A layer-shell surface floats over every window, sits where it is anchored
 //! and never takes the keyboard.
 //!
-//! gtk-layer-shell is loaded at run time so Silas still starts where it isn't installed; there,
-//! on Wayland, the overlay stays hidden instead.
+//! gtk-layer-shell is loaded at run time so Silas still starts where it isn't installed. There,
+//! a tiling compositor gets no overlay (it would take the keyboard); GNOME and KDE get the plain
+//! window they always had.
 
 use std::ffi::{c_int, c_void};
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -30,7 +31,8 @@ pub const MARGIN: c_int = 72;
 pub enum Overlay {
     /// A layer surface: show and hide it, never move it.
     Layer,
-    /// Wayland without layer-shell: showing a window would steal the keyboard.
+    /// A tiling Wayland compositor without layer-shell: showing a window would steal the
+    /// keyboard.
     Hidden,
     /// X11, macOS, Windows: a normal always-on-top window that Silas positions.
     Plain,
@@ -56,8 +58,14 @@ pub fn setup(window: &tauri::WebviewWindow) {
         Ok(w) => unsafe { init(w.upcast_ref::<gtk::Window>()) },
         Err(_) => false,
     };
-    log::info!("overlay: {}", if ok { "layer surface" } else { "hidden (no gtk-layer-shell)" });
-    MODE.store(if ok { LAYER } else { HIDDEN }, Ordering::Relaxed);
+    let tiling = crate::hypr::running() || std::env::var_os("SWAYSOCK").is_some();
+    let mode = match (ok, tiling) {
+        (true, _) => LAYER,
+        (false, true) => HIDDEN,
+        (false, false) => PLAIN,
+    };
+    log::info!("overlay: {}", ["", "layer surface", "hidden (no gtk-layer-shell)", "window"][mode as usize]);
+    MODE.store(mode, Ordering::Relaxed);
 }
 
 unsafe fn init(window: &gtk::Window) -> bool {

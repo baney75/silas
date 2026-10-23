@@ -27,10 +27,11 @@ function silas.hold(keys)
   bind(keys, "Dictate with Silas (release)", "silas-ctl release", { release = true })
 end
 
--- Press once to start hands-free, again to type.
+-- Press once to start hands-free, again to type. It fires when the keys come up, so Silas
+-- never types while the chord's modifiers are still held.
 function silas.toggle(keys)
   hl.unbind(keys)
-  bind(keys, "Dictate with Silas (hands-free)", "silas-ctl toggle")
+  bind(keys, "Dictate with Silas (hands-free)", "silas-ctl toggle", { release = true })
 end
 
 silas.hold("F9")

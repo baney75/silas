@@ -9,9 +9,18 @@ use std::time::Duration;
 
 pub const COMMANDS: &[&str] = &["press", "release", "toggle", "cancel"];
 
+/// In the runtime dir, which only the user can open. Without one, a name with the uid in the
+/// temp dir; the app makes the socket owner-only either way.
 pub fn socket() -> PathBuf {
-    let dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-    dir.join("silas.sock")
+    match std::env::var_os("XDG_RUNTIME_DIR") {
+        Some(dir) => PathBuf::from(dir).join("silas.sock"),
+        None => std::env::temp_dir().join(format!("silas-{}.sock", uid())),
+    }
+}
+
+fn uid() -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(std::env::var_os("HOME").unwrap_or_default()).map(|m| m.uid()).unwrap_or(0)
 }
 
 /// Handles `silas <command>`. Some(exit code) when the first argument was a command.

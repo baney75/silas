@@ -25,34 +25,41 @@ pub fn serve(core: Shared) {
             return;
         }
     };
-    // One command at a time, like keys from the listener: a release must not overtake the
-    // press that is still opening the microphone.
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    // Commands are stamped as they arrive and acted on one at a time, like keys from the
+    // listener: a release must not overtake the press that is still opening the microphone,
+    // and a quick tap must still read as a tap when the microphone was slow to open.
+    let (tx, rx) = std::sync::mpsc::channel::<(String, Instant)>();
+    std::thread::spawn(move || {
+        for (cmd, at) in rx {
+            let out = match cmd.as_str() {
+                "press" => core.machine.lock().external(true, at),
+                "release" => core.machine.lock().external(false, at),
+                "toggle" => core.machine.lock().toggle_from_ui(),
+                _ => core.machine.lock().cancel(),
+            };
+            if out != Out::Nothing {
+                core.act(out);
+            }
+        }
+    });
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
-            handle(&core, stream);
+            if let Some(cmd) = read(&stream) {
+                let _ = tx.send((cmd, Instant::now()));
+            }
         }
     });
 }
 
-fn handle(core: &Shared, stream: UnixStream) {
+/// One command line, answered at once so the keybinding never waits on the microphone.
+fn read(stream: &UnixStream) -> Option<String> {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
     let mut line = String::new();
-    let mut reader = BufReader::new(&stream);
-    if reader.read_line(&mut line).is_err() {
-        return;
-    }
-    let now = Instant::now();
-    let out = match line.trim() {
-        "press" => Some(core.machine.lock().external(true, now)),
-        "release" => Some(core.machine.lock().external(false, now)),
-        "toggle" => Some(core.machine.lock().toggle_from_ui()),
-        "cancel" => Some(core.machine.lock().cancel()),
-        _ => None,
-    };
-    let reply = if out.is_some() { "ok" } else { "unknown command" };
-    let _ = writeln!(&stream, "{reply}");
-    // Answer first: the binding shouldn't wait on the microphone opening.
-    if let Some(out) = out.filter(|o| *o != Out::Nothing) {
-        core.act(out);
-    }
+    BufReader::new(stream).read_line(&mut line).ok()?;
+    let cmd = line.trim().to_string();
+    let known = crate::ctl::COMMANDS.contains(&cmd.as_str());
+    let _ = writeln!(&*stream, "{}", if known { "ok" } else { "unknown command" });
+    known.then_some(cmd)
 }

@@ -47,6 +47,8 @@ pub struct Core {
     /// The global key listener is running. Without it the hotkey can't work, so Silas
     /// must never claim to be ready.
     pub listener_ok: AtomicBool,
+    /// A modifier key is down, as the key listener last saw it.
+    pub mods_held: AtomicBool,
     /// The user pressed keys while Silas was typing, so its copy of the text is off.
     typed_over: AtomicBool,
     /// Bumped per recording so the length limit only stops the one it was set for.
@@ -97,6 +99,7 @@ impl Core {
             watch: Mutex::new(None),
             typing: AtomicBool::new(false),
             listener_ok: AtomicBool::new(false),
+            mods_held: AtomicBool::new(false),
             typed_over: AtomicBool::new(false),
             recording_gen: std::sync::atomic::AtomicU64::new(0),
             recover_gen: std::sync::atomic::AtomicU64::new(0),
@@ -293,9 +296,7 @@ impl Core {
 
     /// Every key event from the global listener lands here.
     pub fn on_key(self: &Shared, ev: &handy_keys::KeyEvent) {
-        if ev.is_key_down && matches!(ev.key, Some(handy_keys::Key::MouseLeft | handy_keys::Key::MouseRight | handy_keys::Key::MouseMiddle)) {
-            crate::focus::note_click();
-        }
+        self.mods_held.store(!ev.modifiers.is_empty(), Ordering::Relaxed);
         if self.typing.load(Ordering::Relaxed) {
             // Silas's own text arrives as key events too, so only keys it never sends
             // (deleting, moving the cursor) mean the user edited mid-typing.
@@ -421,7 +422,19 @@ impl Core {
                 // The mic is already running; publish the target before the recording, so a
                 // release can never find a recording without its target.
                 *self.target.lock() = capture.join().ok().flatten();
-                *self.recording.lock() = Some((r, Instant::now()));
+                {
+                    // Esc (or `silas-ctl cancel`) on another thread while the mic was opening
+                    // already reset the key machine and found no recording to stop. Checking
+                    // under the recording lock means a cancel either sees this recording or
+                    // happened before the check.
+                    let mut rec = self.recording.lock();
+                    if !self.machine.lock().is_active() {
+                        drop(rec);
+                        self.target.lock().take();
+                        return;
+                    }
+                    *rec = Some((r, Instant::now()));
+                }
                 let gen = self.recording_gen.fetch_add(1, Ordering::Relaxed) + 1;
                 self.cue("start");
                 self.set_status(Status::Recording, None);
@@ -506,6 +519,15 @@ impl Core {
             let guarded = matches!(restored, Restore::InPlace | Restore::Restored | Restore::Elsewhere);
             let still_here = |after_focus_key: bool| !guarded || target.as_ref().is_none_or(|t| t.still_here(after_focus_key));
             if !lost_focus {
+                // Keys typed while the user still holds Super or Ctrl from a keybinding would
+                // reach the compositor as shortcuts.
+                #[cfg(target_os = "linux")]
+                {
+                    let until = Instant::now() + Duration::from_secs(1);
+                    while me.mods_held.load(Ordering::Relaxed) && Instant::now() < until {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
                 me.set_status(Status::Typing, None);
                 me.typed_over.store(false, Ordering::Relaxed);
                 me.typing.store(true, Ordering::Relaxed);
