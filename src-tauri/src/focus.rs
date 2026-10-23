@@ -129,9 +129,12 @@ mod hypr {
             self.window.lock().address.clone()
         }
 
-        /// Only a clear answer (another window has the keyboard) is No.
+        /// Only a clear answer (another window, or none, has the keyboard) is No.
         fn in_place(&self) -> bool {
-            hypr::active().is_none_or(|w| w.address == self.address())
+            match hypr::focused() {
+                None => true,
+                Some(w) => w.is_some_and(|w| w.address == self.address()),
+            }
         }
 
         /// Hyprland reports windows, not fields, so a Tab or Return changes nothing here.
@@ -141,11 +144,14 @@ mod hypr {
 
         pub fn restore(&self) -> Restore {
             let want = self.window.lock().clone();
-            let now = hypr::active();
-            if now.as_ref().is_none_or(|w| w.address == want.address) {
-                return Restore::InPlace;
-            }
-            let now = now.expect("checked above");
+            let now = match hypr::focused() {
+                // Hyprland didn't answer: type, as Silas did before it could check.
+                None => return Restore::InPlace,
+                Some(Some(w)) if w.address == want.address => return Restore::InPlace,
+                // Nothing has focus (the user went to an empty workspace): bring the target back.
+                Some(None) => Window { address: String::new(), pid: -1, at: (0, 0), size: (0, 0) },
+                Some(Some(w)) => w,
+            };
             // The user moved the pointer into the window that has focus now: they clicked (or,
             // with focus following the mouse, moved) there, so that is where the text goes. A
             // window that grabs focus on its own leaves the pointer where it was.

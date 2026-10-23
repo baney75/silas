@@ -16,6 +16,10 @@ use crate::keys::Out;
 /// Listen for commands for as long as Silas runs.
 pub fn serve(core: Shared) {
     let path = socket();
+    if let Err(e) = private_dir(&path) {
+        log::warn!("no control socket at {}: {e}", path.display());
+        return;
+    }
     // Only one Silas gets this far (single-instance), so a file here is a dead one's.
     let _ = std::fs::remove_file(&path);
     let listener = match UnixListener::bind(&path) {
@@ -60,6 +64,23 @@ pub fn serve(core: Shared) {
             }
         }
     });
+}
+
+/// The socket's directory must be ours and closed to others. The runtime dir already is; the
+/// temp-dir fallback is created that way, and refused if someone else made it first.
+fn private_dir(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    let dir = path.parent().ok_or_else(|| std::io::Error::other("no parent"))?;
+    if std::env::var_os("XDG_RUNTIME_DIR").is_some() {
+        return Ok(());
+    }
+    let _ = std::fs::DirBuilder::new().mode(0o700).create(dir);
+    let meta = std::fs::symlink_metadata(dir)?;
+    let mine = std::fs::metadata("/proc/self").map(|m| m.uid()).ok();
+    if !meta.is_dir() || mine.is_some_and(|uid| meta.uid() != uid) || meta.permissions().mode() & 0o077 != 0 {
+        return Err(std::io::Error::other("the socket directory isn't private"));
+    }
+    Ok(())
 }
 
 /// One command line, answered at once so the keybinding never waits on the microphone.

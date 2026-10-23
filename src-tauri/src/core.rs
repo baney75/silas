@@ -432,6 +432,8 @@ impl Core {
                     if !self.machine.lock().is_active() {
                         drop(rec);
                         self.target.lock().take();
+                        // A press from an error claimed its recovery timer; don't leave the error up.
+                        self.set_status(Status::Ready, None);
                         return;
                     }
                     *rec = Some((r, Instant::now()));
@@ -439,6 +441,12 @@ impl Core {
                 let gen = self.recording_gen.fetch_add(1, Ordering::Relaxed) + 1;
                 self.cue("start");
                 self.set_status(Status::Recording, None);
+                // A cancel between storing the recording and the line above already set Ready,
+                // which Recording then covered. It took the recording, so look again.
+                if self.recording.lock().is_none() {
+                    self.set_status(Status::Ready, None);
+                    return;
+                }
                 // Hands-free mode left on by mistake would grow without end; stop at 5 minutes.
                 let me = self.clone();
                 std::thread::spawn(move || {

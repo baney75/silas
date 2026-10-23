@@ -57,12 +57,18 @@ fn pair(v: &serde_json::Value, key: &str) -> (i64, i64) {
     (n(0), n(1))
 }
 
-/// The window with the keyboard. None when nothing has focus (an empty workspace).
+/// The window with the keyboard. None when nothing has focus or Hyprland didn't answer.
 pub fn active() -> Option<Window> {
+    focused().flatten()
+}
+
+/// Some(None) when Hyprland answered that nothing has focus (an empty workspace); None when it
+/// didn't answer.
+pub fn focused() -> Option<Option<Window>> {
     let v = json("activewindow")?;
-    let address = v.get("address")?.as_str()?.to_string();
+    let address = v.get("address").and_then(|a| a.as_str()).unwrap_or("").to_string();
     let pid = v.get("pid").and_then(|p| p.as_i64()).unwrap_or(-1);
-    (!address.is_empty()).then(|| Window { address, pid, at: pair(&v, "at"), size: pair(&v, "size") })
+    Some((!address.is_empty()).then(|| Window { address, pid, at: pair(&v, "at"), size: pair(&v, "size") }))
 }
 
 /// The pointer, in the same coordinates as window positions.

@@ -79,6 +79,9 @@ pub struct Machine {
     pub trigger: Trigger,
     pub tap_to_toggle: bool,
     state: State,
+    /// A `silas-ctl release` that arrived with nothing held. The press and release run as
+    /// separate processes, so on a quick tap the release can reach Silas first.
+    early_release: Option<Instant>,
 }
 
 impl Machine {
@@ -87,6 +90,7 @@ impl Machine {
             trigger,
             tap_to_toggle,
             state: State::Idle,
+            early_release: None,
         }
     }
 
@@ -117,7 +121,27 @@ impl Machine {
     /// `silas press` and `silas release`. It acts like the configured key, but other keys never
     /// turn it into a shortcut, since the compositor already took the whole chord.
     pub fn external(&mut self, down: bool, now: Instant) -> Out {
-        self.on_trigger(down, now, true)
+        match (self.state, down) {
+            (State::Idle, false) => {
+                self.early_release = Some(now);
+                Out::Nothing
+            }
+            // The release overtook this press: it was a tap.
+            (State::Idle, true) if self.early_release.take().is_some_and(|r| now.duration_since(r) < TAP) => {
+                if self.tap_to_toggle {
+                    self.state = State::Toggled;
+                    Out::Start
+                } else {
+                    Out::Nothing
+                }
+            }
+            // Compositor bindings don't repeat, so a second press means the release was lost.
+            (State::Held { external: true, .. }, true) => {
+                self.state = State::Idle;
+                Out::Finish
+            }
+            _ => self.on_trigger(down, now, true),
+        }
     }
 
     /// `silas cancel`: drop the dictation in progress.
@@ -515,7 +539,6 @@ mod tests {
         assert_eq!(m.on_event(&modifier(Modifiers::SHIFT_LEFT, true), t0), Out::Nothing);
         assert_eq!(m.on_event(&key(Key::F23, Modifiers::SHIFT_LEFT), t0), Out::Nothing);
         assert!(m.is_active());
-        assert_eq!(m.external(true, t0), Out::Nothing); // repeat
         assert_eq!(m.external(false, t0 + Duration::from_secs(2)), Out::Finish);
         assert!(!m.is_active());
 
@@ -543,5 +566,17 @@ mod tests {
         assert_eq!(m.on_event(&modifier(Modifiers::CTRL_RIGHT, false), t0 + Duration::from_secs(1)), Out::Nothing);
         assert!(m.is_active());
         assert_eq!(m.external(false, t0 + Duration::from_secs(2)), Out::Finish);
+
+        // A quick tap whose release reached Silas before its press still starts hands-free.
+        assert_eq!(m.external(false, t0), Out::Nothing);
+        assert_eq!(m.external(true, t0 + Duration::from_millis(20)), Out::Start);
+        assert!(m.is_active());
+        assert_eq!(m.cancel(), Out::Cancel);
+        // A stray release long ago doesn't make the next press a tap.
+        assert_eq!(m.external(false, t0), Out::Nothing);
+        assert_eq!(m.external(true, t0 + Duration::from_secs(5)), Out::Start);
+        // A lost release: the next press ends the hold instead of sticking.
+        assert_eq!(m.external(true, t0 + Duration::from_secs(9)), Out::Finish);
+        assert!(!m.is_active());
     }
 }

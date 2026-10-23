@@ -9,12 +9,12 @@ use std::time::Duration;
 
 pub const COMMANDS: &[&str] = &["press", "release", "toggle", "cancel"];
 
-/// In the runtime dir, which only the user can open. Without one, a name with the user in the
-/// temp dir; the app makes the socket owner-only either way.
+/// In the runtime dir, which only the user can open. Without one, in a private directory in
+/// the temp dir that the app creates owner-only (see `control::serve`).
 pub fn socket() -> PathBuf {
     match std::env::var_os("XDG_RUNTIME_DIR") {
         Some(dir) => PathBuf::from(dir).join("silas.sock"),
-        None => std::env::temp_dir().join(format!("silas-{}.sock", user())),
+        None => std::env::temp_dir().join(format!("silas-{}", user())).join("silas.sock"),
     }
 }
 

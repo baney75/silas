@@ -10,7 +10,7 @@
 
 pkgname=silas-git
 _name=silas
-pkgver=0.1.5.r24.g240f828
+pkgver=0.1.5.r25.ge768a0c
 pkgrel=1
 pkgdesc="Private, on-device dictation: hold a key, speak, and Silas types what you said"
 arch=(x86_64)
