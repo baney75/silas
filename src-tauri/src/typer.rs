@@ -96,6 +96,7 @@ pub fn type_text(
     still_here: &dyn Fn(bool) -> bool,
 ) -> anyhow::Result<bool> {
     let mut k = Keyboard::new()?;
+    k.prepare(text)?;
     // A Tab or Return may move focus to the next field on purpose.
     let mut after_focus_key = false;
     for piece in pieces(text) {
@@ -163,6 +164,10 @@ impl Keyboard {
         Ok(())
     }
 
+    fn prepare(&mut self, _text: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     fn text(&mut self, t: &str) -> anyhow::Result<()> {
         self.post(
             0,
@@ -188,7 +193,9 @@ impl Keyboard {
 struct Keyboard {
     enigo: Option<enigo::Enigo>,
     #[cfg(target_os = "linux")]
-    wayland_tool: Option<&'static str>,
+    wayland: Option<crate::wayland::VirtualKeyboard>,
+    #[cfg(target_os = "linux")]
+    ydotool: bool,
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -196,15 +203,14 @@ impl Keyboard {
     fn new() -> anyhow::Result<Self> {
         #[cfg(target_os = "linux")]
         {
-            // Native Wayland windows ignore X11 input, so prefer a Wayland typing tool.
+            // Native Wayland windows ignore X11 input. Hyprland and other wlroots compositors
+            // take a virtual keyboard; GNOME and KDE don't, so they need ydotool.
             if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-                for tool in ["wtype", "ydotool"] {
-                    if which(tool) {
-                        return Ok(Self {
-                            enigo: None,
-                            wayland_tool: Some(tool),
-                        });
-                    }
+                if let Some(vk) = crate::wayland::VirtualKeyboard::new() {
+                    return Ok(Self { enigo: None, wayland: Some(vk), ydotool: false });
+                }
+                if which("ydotool") {
+                    return Ok(Self { enigo: None, wayland: None, ydotool: true });
                 }
             }
         }
@@ -213,25 +219,36 @@ impl Keyboard {
         Ok(Self {
             enigo: Some(enigo),
             #[cfg(target_os = "linux")]
-            wayland_tool: None,
+            wayland: None,
+            #[cfg(target_os = "linux")]
+            ydotool: false,
         })
+    }
+
+    /// Sends the keymap for the whole text up front, so the target app sees it change once.
+    fn prepare(&mut self, text: &str) -> anyhow::Result<()> {
+        #[cfg(target_os = "linux")]
+        if let Some(vk) = self.wayland.as_mut() {
+            return vk.prepare(text);
+        }
+        let _ = text;
+        Ok(())
     }
 
     fn text(&mut self, t: &str) -> anyhow::Result<()> {
         #[cfg(target_os = "linux")]
-        if let Some(tool) = self.wayland_tool {
-            let status = match tool {
-                "wtype" => std::process::Command::new("wtype")
-                    .arg("--")
-                    .arg(t)
-                    .status()?,
-                _ => std::process::Command::new("ydotool")
+        {
+            if let Some(vk) = self.wayland.as_mut() {
+                return vk.text(t);
+            }
+            if self.ydotool {
+                let status = std::process::Command::new("ydotool")
                     .args(["type", "--key-delay", "1", "--"])
                     .arg(t)
-                    .status()?,
-            };
-            anyhow::ensure!(status.success(), "{tool} failed to type");
-            return Ok(());
+                    .status()?;
+                anyhow::ensure!(status.success(), "ydotool failed to type");
+                return Ok(());
+            }
         }
         use enigo::Keyboard as _;
         self.enigo
@@ -243,17 +260,16 @@ impl Keyboard {
 
     fn enter(&mut self, shift: bool) -> anyhow::Result<()> {
         #[cfg(target_os = "linux")]
-        if let Some(tool) = self.wayland_tool {
-            let mut cmd = std::process::Command::new(tool);
-            match (tool, shift) {
-                ("wtype", true) => cmd.args(["-M", "shift", "-k", "Return", "-m", "shift"]),
-                ("wtype", false) => cmd.args(["-k", "Return"]),
+        {
+            if let Some(vk) = self.wayland.as_mut() {
+                return vk.enter(shift);
+            }
+            if self.ydotool {
                 // ydotool keycodes: 42 = Left Shift, 28 = Enter.
-                (_, true) => cmd.args(["key", "42:1", "28:1", "28:0", "42:0"]),
-                (_, false) => cmd.args(["key", "28:1", "28:0"]),
-            };
-            cmd.status()?;
-            return Ok(());
+                let keys: &[&str] = if shift { &["42:1", "28:1", "28:0", "42:0"] } else { &["28:1", "28:0"] };
+                std::process::Command::new("ydotool").arg("key").args(keys).status()?;
+                return Ok(());
+            }
         }
         use enigo::{Direction, Key, Keyboard as _};
         let e = self.enigo.as_mut().unwrap();
@@ -303,5 +319,28 @@ mod tests {
             assert_eq!(c.concat(), text);
             assert!(c.iter().all(|e| !e.starts_with(' ') && e.chars().count() <= 20));
         }
+    }
+
+    /// Live check on a Wayland compositor. Run a terminal that writes what it gets to a file,
+    /// headless so nothing lands on your screen:
+    ///   WLR_BACKENDS=headless cage -- foot sh -c 'stty -icanon; cat > /tmp/typed.txt'
+    /// then `SILAS_TYPED=/tmp/typed.txt WAYLAND_DISPLAY=wayland-N cargo test --lib typer -- --ignored`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore]
+    fn types_every_character_on_wayland() {
+        let path = std::env::var("SILAS_TYPED").expect("SILAS_TYPED names the terminal's file");
+        let before = std::fs::read_to_string(&path).unwrap_or_default().len();
+        let text = "Man needs no excuse. Parish1 runs Hyprland: naïve café, “quotes” — 100% ok? <a href='x'>{y}</a> ~`|\\ ";
+        let words = text.repeat(4);
+        let t = std::time::Instant::now();
+        assert!(type_text(&words, Pace::from_setting("normal"), false, &|_| true).unwrap());
+        let took = t.elapsed();
+        std::thread::sleep(Duration::from_millis(500));
+        let got = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(&got[before..], words);
+        let per_sec = words.chars().count() as f64 / took.as_secs_f64();
+        eprintln!("{} chars in {took:?}: {per_sec:.0} chars/s", words.chars().count());
+        assert!(per_sec > 400.0, "{per_sec:.0} chars/s");
     }
 }

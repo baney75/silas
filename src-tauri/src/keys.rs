@@ -65,6 +65,8 @@ enum State {
     Idle,
     Held {
         since: Instant,
+        /// Pressed through `silas press` (a compositor keybinding), not a key Silas reads.
+        external: bool,
     },
     /// The key became part of a shortcut (Right ⌘ + C); wait for its release.
     Shortcut,
@@ -111,20 +113,28 @@ impl Machine {
         self.state = State::Idle;
     }
 
-    pub fn on_event(&mut self, ev: &KeyEvent, now: Instant) -> Out {
-        let mine = self.trigger.matches(ev);
-        let is_mouse = matches!(
-            ev.key,
-            Some(Key::MouseLeft | Key::MouseRight | Key::MouseMiddle | Key::MouseX1 | Key::MouseX2)
-        );
-        let escape = ev.key == Some(Key::Escape) && ev.is_key_down;
-        match (self.state, mine) {
-            (State::Idle, Some(true)) => {
-                self.state = State::Held { since: now };
+    /// The hotkey went down or up where Silas can't see it: a compositor keybinding running
+    /// `silas press` and `silas release`. It acts like the configured key, but other keys never
+    /// turn it into a shortcut, since the compositor already took the whole chord.
+    pub fn external(&mut self, down: bool, now: Instant) -> Out {
+        self.on_trigger(down, now, true)
+    }
+
+    /// `silas cancel`: drop the dictation in progress.
+    pub fn cancel(&mut self) -> Out {
+        let active = self.is_active();
+        self.state = State::Idle;
+        if active { Out::Cancel } else { Out::Nothing }
+    }
+
+    fn on_trigger(&mut self, down: bool, now: Instant, external: bool) -> Out {
+        match (self.state, down) {
+            (State::Idle, true) => {
+                self.state = State::Held { since: now, external };
                 Out::Start
             }
-            (State::Held { .. }, Some(true)) => Out::Nothing, // key repeat
-            (State::Held { since }, Some(false)) => {
+            (State::Held { .. }, true) => Out::Nothing, // key repeat
+            (State::Held { since, .. }, false) => {
                 if now.duration_since(since) < TAP {
                     if self.tap_to_toggle {
                         self.state = State::Toggled;
@@ -138,11 +148,37 @@ impl Machine {
                     Out::Finish
                 }
             }
-            (State::Held { .. }, None) if escape => {
+            (State::Shortcut, false) => {
+                self.state = State::Idle;
+                Out::Nothing
+            }
+            (State::Toggled, true) => {
+                self.state = State::Ending;
+                Out::Finish
+            }
+            (State::Ending, false) => {
+                self.state = State::Idle;
+                Out::Nothing
+            }
+            _ => Out::Nothing,
+        }
+    }
+
+    pub fn on_event(&mut self, ev: &KeyEvent, now: Instant) -> Out {
+        if let Some(down) = self.trigger.matches(ev) {
+            return self.on_trigger(down, now, false);
+        }
+        let is_mouse = matches!(
+            ev.key,
+            Some(Key::MouseLeft | Key::MouseRight | Key::MouseMiddle | Key::MouseX1 | Key::MouseX2)
+        );
+        let escape = ev.key == Some(Key::Escape) && ev.is_key_down;
+        match self.state {
+            State::Held { .. } if escape => {
                 self.state = State::Shortcut;
                 Out::Cancel
             }
-            (State::Held { .. }, None)
+            State::Held { external: false, .. }
                 if ev.is_key_down
                     && !is_mouse
                     && (ev.key.is_some() || ev.changed_modifier.is_some()) =>
@@ -150,21 +186,9 @@ impl Machine {
                 self.state = State::Shortcut;
                 Out::Cancel
             }
-            (State::Shortcut, Some(false)) => {
-                self.state = State::Idle;
-                Out::Nothing
-            }
-            (State::Toggled, Some(true)) => {
-                self.state = State::Ending;
-                Out::Finish
-            }
-            (State::Toggled, None) if escape => {
+            State::Toggled if escape => {
                 self.state = State::Idle;
                 Out::Cancel
-            }
-            (State::Ending, Some(false)) => {
-                self.state = State::Idle;
-                Out::Nothing
             }
             _ => Out::Nothing,
         }
@@ -475,5 +499,38 @@ mod tests {
             Some(Watch::Done(Some((_, b)))) => assert_eq!(b, "hello claude"),
             _ => panic!("expected a finished edit"),
         }
+    }
+
+    #[test]
+    fn a_compositor_binding_holds_and_taps_like_the_key() {
+        let t0 = Instant::now();
+        let mut m = Machine::new(Trigger::parse("CtrlRight").unwrap(), true);
+        // Super + Shift + F23 (the Copilot key) reaches Silas's listener too; it must not
+        // count as a shortcut while the binding holds the dictation.
+        assert_eq!(m.external(true, t0), Out::Start);
+        assert_eq!(m.on_event(&modifier(Modifiers::SHIFT_LEFT, true), t0), Out::Nothing);
+        assert_eq!(m.on_event(&key(Key::F23, Modifiers::SHIFT_LEFT), t0), Out::Nothing);
+        assert!(m.is_active());
+        assert_eq!(m.external(true, t0), Out::Nothing); // repeat
+        assert_eq!(m.external(false, t0 + Duration::from_secs(2)), Out::Finish);
+        assert!(!m.is_active());
+
+        // A tap starts hands-free; the next press ends it and its release is swallowed.
+        assert_eq!(m.external(true, t0), Out::Start);
+        assert_eq!(m.external(false, t0 + Duration::from_millis(100)), Out::Nothing);
+        assert!(m.is_active());
+        assert_eq!(m.external(true, t0 + Duration::from_secs(4)), Out::Finish);
+        assert_eq!(m.external(false, t0 + Duration::from_secs(4)), Out::Nothing);
+        assert!(!m.is_active());
+
+        // Escape still cancels, and the release that follows does nothing.
+        assert_eq!(m.external(true, t0), Out::Start);
+        assert_eq!(m.on_event(&key(Key::Escape, Modifiers::empty()), t0), Out::Cancel);
+        assert_eq!(m.external(false, t0 + Duration::from_secs(1)), Out::Nothing);
+        assert!(!m.is_active());
+
+        assert_eq!(m.external(true, t0), Out::Start);
+        assert_eq!(m.cancel(), Out::Cancel);
+        assert_eq!(m.cancel(), Out::Nothing);
     }
 }

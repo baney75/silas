@@ -173,6 +173,15 @@ impl Core {
         };
         let show = self.settings.lock().show_overlay
             && matches!(s, Status::Recording | Status::Transcribing | Status::Typing);
+        #[cfg(target_os = "linux")]
+        match crate::layer::mode() {
+            crate::layer::Overlay::Layer => {
+                let _ = if show { w.show() } else { w.hide() };
+                return;
+            }
+            crate::layer::Overlay::Hidden => return,
+            crate::layer::Overlay::Plain => {}
+        }
         if show {
             if let Ok(Some(monitor)) = w
                 .primary_monitor()
@@ -284,6 +293,9 @@ impl Core {
 
     /// Every key event from the global listener lands here.
     pub fn on_key(self: &Shared, ev: &handy_keys::KeyEvent) {
+        if ev.is_key_down && matches!(ev.key, Some(handy_keys::Key::MouseLeft | handy_keys::Key::MouseRight | handy_keys::Key::MouseMiddle)) {
+            crate::focus::note_click();
+        }
         if self.typing.load(Ordering::Relaxed) {
             // Silas's own text arrives as key events too, so only keys it never sends
             // (deleting, moving the cursor) mean the user edited mid-typing.

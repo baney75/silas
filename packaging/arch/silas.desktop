@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Silas
+GenericName=Dictation
+Comment=Hold a key, speak, and Silas types what you said
+Exec=silas
+Icon=silas
+Terminal=false
+Categories=Utility;Accessibility;
+Keywords=dictation;speech;voice;transcribe;
