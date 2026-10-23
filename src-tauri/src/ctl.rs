@@ -9,18 +9,22 @@ use std::time::Duration;
 
 pub const COMMANDS: &[&str] = &["press", "release", "toggle", "cancel"];
 
-/// In the runtime dir, which only the user can open. Without one, a name with the uid in the
+/// In the runtime dir, which only the user can open. Without one, a name with the user in the
 /// temp dir; the app makes the socket owner-only either way.
 pub fn socket() -> PathBuf {
     match std::env::var_os("XDG_RUNTIME_DIR") {
         Some(dir) => PathBuf::from(dir).join("silas.sock"),
-        None => std::env::temp_dir().join(format!("silas-{}.sock", uid())),
+        None => std::env::temp_dir().join(format!("silas-{}.sock", user())),
     }
 }
 
-fn uid() -> u32 {
+/// The uid (Linux owns /proc/self by the process's user), else the login name.
+fn user() -> String {
     use std::os::unix::fs::MetadataExt;
-    std::fs::metadata(std::env::var_os("HOME").unwrap_or_default()).map(|m| m.uid()).unwrap_or(0)
+    std::fs::metadata("/proc/self")
+        .map(|m| m.uid().to_string())
+        .or_else(|_| std::env::var("USER"))
+        .unwrap_or_else(|_| "user".into())
 }
 
 /// Handles `silas <command>`. Some(exit code) when the first argument was a command.

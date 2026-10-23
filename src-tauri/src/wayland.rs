@@ -109,6 +109,33 @@ fn keymap(spares: &HashMap<char, u32>) -> String {
     )
 }
 
+/// Give every character of `text` that has no key a spare one. When the spares run out, keep
+/// only the ones `text` needs. True when the map changed.
+fn assign(spares: &mut HashMap<char, u32>, text: &str) -> anyhow::Result<bool> {
+    let missing: Vec<char> = {
+        let mut m: Vec<char> = text
+            .chars()
+            .filter(|c| !matches!(c, '\n' | '\t') && us_slot(*c).is_none() && !spares.contains_key(c))
+            .collect();
+        m.sort_unstable();
+        m.dedup();
+        m
+    };
+    if missing.is_empty() {
+        return Ok(false);
+    }
+    let free = |spares: &HashMap<char, u32>| SPARE.clone().filter(|code| !spares.values().any(|v| v == code)).count();
+    if free(spares) < missing.len() {
+        spares.retain(|c, _| text.contains(*c));
+        anyhow::ensure!(free(spares) >= missing.len(), "too many different characters to type at once");
+    }
+    for c in missing {
+        let code = SPARE.clone().find(|code| !spares.values().any(|v| v == code)).expect("counted above");
+        spares.insert(c, code);
+    }
+    Ok(true)
+}
+
 pub struct VirtualKeyboard {
     conn: Connection,
     queue: EventQueue<State>,
@@ -142,29 +169,11 @@ impl VirtualKeyboard {
     }
 
     /// Make sure every character of `text` has a key, uploading a new keymap only when one
-    /// is missing. Call it with the whole dictation first so the keymap is sent once.
+    /// is missing. Call it with the whole dictation first so the keymap is usually sent once;
+    /// each chunk calls it again, which remaps when the text has more unusual characters than
+    /// spare keys.
     pub fn prepare(&mut self, text: &str) -> anyhow::Result<()> {
-        let mut changed = !self.uploaded;
-        for c in text.chars() {
-            if matches!(c, '\n' | '\t') || us_slot(c).is_some() || self.spares.contains_key(&c) {
-                continue;
-            }
-            let free = SPARE.clone().find(|code| !self.spares.values().any(|v| v == code));
-            let code = match free {
-                Some(code) => code,
-                None => {
-                    // More unusual characters than spare keys: start over with only this text's.
-                    self.spares.retain(|k, _| text.contains(*k));
-                    match SPARE.clone().find(|code| !self.spares.values().any(|v| v == code)) {
-                        Some(code) => code,
-                        None => anyhow::bail!("too many different characters to type at once"),
-                    }
-                }
-            };
-            self.spares.insert(c, code);
-            changed = true;
-        }
-        if changed {
+        if assign(&mut self.spares, text)? || !self.uploaded {
             self.upload()?;
         }
         Ok(())
@@ -250,6 +259,30 @@ mod tests {
         assert_eq!(us_slot('|'), Some((43, true)));
         assert_eq!(us_slot(' '), Some((SPACE, false)));
         assert_eq!(us_slot('é'), None);
+    }
+
+    #[test]
+    fn more_unusual_characters_than_spare_keys_still_type() {
+        // 80 different Greek and Cyrillic letters: more than the 53 spare keys.
+        let text: String = ('Α'..='ω').chain('А'..='я').take(80).collect();
+        let mut spares = HashMap::new();
+        assert!(assign(&mut spares, &text).is_err(), "one keymap can't hold them all");
+        // Typed in chunks, each chunk gets its own keys and keeps every code unique.
+        let chars: Vec<char> = text.chars().collect();
+        for chunk in chars.chunks(7) {
+            let chunk: String = chunk.iter().collect();
+            assign(&mut spares, &chunk).unwrap();
+            for c in chunk.chars() {
+                assert!(spares.contains_key(&c));
+            }
+            let mut codes: Vec<_> = spares.values().collect();
+            codes.sort();
+            codes.dedup();
+            assert_eq!(codes.len(), spares.len());
+            assert!(spares.values().all(|c| SPARE.contains(c)));
+        }
+        // Plain text needs no spare keys and no new keymap.
+        assert!(!assign(&mut spares, "Hello, world!").unwrap());
     }
 
     #[test]

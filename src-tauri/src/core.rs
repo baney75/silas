@@ -296,7 +296,8 @@ impl Core {
 
     /// Every key event from the global listener lands here.
     pub fn on_key(self: &Shared, ev: &handy_keys::KeyEvent) {
-        self.mods_held.store(!ev.modifiers.is_empty(), Ordering::Relaxed);
+        use handy_keys::Modifiers as M;
+        self.mods_held.store(ev.modifiers.intersects(M::CMD | M::CTRL | M::OPT | M::SHIFT), Ordering::Relaxed);
         if self.typing.load(Ordering::Relaxed) {
             // Silas's own text arrives as key events too, so only keys it never sends
             // (deleting, moving the cursor) mean the user edited mid-typing.
@@ -518,16 +519,19 @@ impl Core {
             // Guard the typing only when Silas knows where the text belongs.
             let guarded = matches!(restored, Restore::InPlace | Restore::Restored | Restore::Elsewhere);
             let still_here = |after_focus_key: bool| !guarded || target.as_ref().is_none_or(|t| t.still_here(after_focus_key));
-            if !lost_focus {
-                // Keys typed while the user still holds Super or Ctrl from a keybinding would
-                // reach the compositor as shortcuts.
-                #[cfg(target_os = "linux")]
-                {
-                    let until = Instant::now() + Duration::from_secs(1);
-                    while me.mods_held.load(Ordering::Relaxed) && Instant::now() < until {
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
+            // Keys typed while the user still holds Super or Ctrl from a keybinding would reach
+            // the compositor as shortcuts, so wait for the keys to come up, or don't type.
+            #[cfg(target_os = "linux")]
+            if !lost_focus && me.listener_ok.load(Ordering::Relaxed) {
+                let until = Instant::now() + Duration::from_secs(3);
+                while me.mods_held.load(Ordering::Relaxed) && Instant::now() < until {
+                    std::thread::sleep(Duration::from_millis(10));
                 }
+                if me.mods_held.load(Ordering::Relaxed) {
+                    typing_error = Some("Let go of Ctrl, Alt, Shift and Super so Silas can type".into());
+                }
+            }
+            if !lost_focus && typing_error.is_none() {
                 me.set_status(Status::Typing, None);
                 me.typed_over.store(false, Ordering::Relaxed);
                 me.typing.store(true, Ordering::Relaxed);

@@ -45,9 +45,18 @@ pub fn serve(core: Shared) {
         }
     });
     std::thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            if let Some(cmd) = read(&stream) {
-                let _ = tx.send((cmd, Instant::now()));
+        for stream in listener.incoming() {
+            match stream {
+                Ok(stream) => {
+                    if let Some(cmd) = read(&stream) {
+                        let _ = tx.send((cmd, Instant::now()));
+                    }
+                }
+                Err(e) => {
+                    // Out of file descriptors, say: don't spin.
+                    log::warn!("control socket: {e}");
+                    std::thread::sleep(Duration::from_millis(100));
+                }
             }
         }
     });

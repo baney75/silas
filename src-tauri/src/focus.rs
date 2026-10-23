@@ -115,12 +115,14 @@ mod hypr {
 
     pub struct Target {
         window: parking_lot::Mutex<Window>,
+        /// Where the pointer was when the hotkey went down.
+        pointer: Option<(i64, i64)>,
     }
 
     impl Target {
         pub fn capture() -> Option<Self> {
             let window = hypr::active()?;
-            Some(Self { window: parking_lot::Mutex::new(window) })
+            Some(Self { window: parking_lot::Mutex::new(window), pointer: hypr::cursor() })
         }
 
         fn address(&self) -> String {
@@ -144,10 +146,11 @@ mod hypr {
                 return Restore::InPlace;
             }
             let now = now.expect("checked above");
-            // Focus went where the pointer is: the user clicked (or, with focus following the
-            // mouse, moved) there, so that is where the text goes. A window that grabs focus
-            // on its own rarely opens under the pointer.
-            if hypr::cursor().is_some_and(|p| now.contains(p) && !want.contains(p)) {
+            // The user moved the pointer into the window that has focus now: they clicked (or,
+            // with focus following the mouse, moved) there, so that is where the text goes. A
+            // window that grabs focus on its own leaves the pointer where it was.
+            let moved_in = |p: (i64, i64)| self.pointer != Some(p) && now.contains(p) && !want.contains(p);
+            if hypr::cursor().is_some_and(moved_in) {
                 log::info!("you moved to another window; typing there");
                 *self.window.lock() = now;
                 return Restore::Elsewhere;

@@ -96,7 +96,8 @@ pub fn type_text(
     still_here: &dyn Fn(bool) -> bool,
 ) -> anyhow::Result<bool> {
     let mut k = Keyboard::new()?;
-    k.prepare(text)?;
+    // One keymap for the whole text when it fits; otherwise each chunk brings its own.
+    let _ = k.prepare(text);
     // A Tab or Return may move focus to the next field on purpose.
     let mut after_focus_key = false;
     for piece in pieces(text) {

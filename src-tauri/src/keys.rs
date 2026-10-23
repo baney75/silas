@@ -166,6 +166,10 @@ impl Machine {
 
     pub fn on_event(&mut self, ev: &KeyEvent, now: Instant) -> Out {
         if let Some(down) = self.trigger.matches(ev) {
+            // A hold from a compositor binding ends with its own release, not this key's.
+            if matches!(self.state, State::Held { external: true, .. }) {
+                return Out::Nothing;
+            }
             return self.on_trigger(down, now, false);
         }
         let is_mouse = matches!(
@@ -532,5 +536,12 @@ mod tests {
         assert_eq!(m.external(true, t0), Out::Start);
         assert_eq!(m.cancel(), Out::Cancel);
         assert_eq!(m.cancel(), Out::Nothing);
+
+        // The configured key going up and down during a binding's hold changes nothing.
+        assert_eq!(m.external(true, t0), Out::Start);
+        assert_eq!(m.on_event(&modifier(Modifiers::CTRL_RIGHT, true), t0), Out::Nothing);
+        assert_eq!(m.on_event(&modifier(Modifiers::CTRL_RIGHT, false), t0 + Duration::from_secs(1)), Out::Nothing);
+        assert!(m.is_active());
+        assert_eq!(m.external(false, t0 + Duration::from_secs(2)), Out::Finish);
     }
 }
