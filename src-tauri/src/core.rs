@@ -187,6 +187,8 @@ impl Core {
                 let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
             }
             let _ = w.show();
+            #[cfg(target_os = "macos")]
+            show_on_this_space(&w);
         } else {
             let _ = w.hide();
         }
@@ -647,4 +649,27 @@ impl Core {
             .count() as u64;
         s
     }
+}
+
+/// Puts the overlay on the Space in front, full-screen apps included. Tao sets "all Spaces"
+/// once at launch, but a hidden window misses Spaces made after that (a window going full
+/// screen) and shows on its old Space, covered. Setting the behavior again on every show puts
+/// it back on every Space; full-screen auxiliary lets it sit over a full-screen app.
+#[cfg(target_os = "macos")]
+fn show_on_this_space(w: &tauri::WebviewWindow) {
+    let Ok(ns) = w.ns_window() else { return };
+    let ns = ns as usize;
+    let _ = w.run_on_main_thread(move || {
+        use objc2::msg_send;
+        use objc2::runtime::AnyObject;
+        // NSWindowCollectionBehavior: CanJoinAllSpaces | Stationary | IgnoresCycle |
+        // FullScreenAuxiliary.
+        const BEHAVIOR: usize = 1 | 1 << 4 | 1 << 6 | 1 << 8;
+        let Some(win) = (unsafe { (ns as *mut AnyObject).as_ref() }) else { return };
+        unsafe {
+            let _: () = msg_send![win, setCollectionBehavior: BEHAVIOR];
+            // Silas runs in the background, so order the window in without activating it.
+            let _: () = msg_send![win, orderFrontRegardless];
+        }
+    });
 }
