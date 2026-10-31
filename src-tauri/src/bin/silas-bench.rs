@@ -1,6 +1,10 @@
 //! Benchmark the speech engines Silas can ship on real recordings.
 //!
 //! Usage: silas-bench <parakeet|cohere> <model-dir> <wav>...
+//!        silas-bench suite [model-id...]
+//! `suite` runs the bundled speech set (the same one the app uses to pick a model for each
+//! computer) through the installed models, default all of them, and prints the Report JSON
+//! and the link that would share it. Progress goes to stderr.
 //! Set SILAS_DICT=<dictionary.json> to also print the text after the dictionary.
 //! Prints load time, then per-file seconds of audio, seconds to transcribe and the text.
 
@@ -11,8 +15,44 @@ use transcribe_rs::onnx::cohere::{CohereModel, CohereParams};
 use transcribe_rs::onnx::parakeet::{ParakeetModel, ParakeetParams};
 use transcribe_rs::onnx::Quantization;
 
+fn suite(ids: &[String]) -> anyhow::Result<()> {
+    use silas_lib::{benchmark, models};
+    let ids: Vec<String> = if ids.is_empty() {
+        models::MODELS.iter().filter(|m| models::installed(m.id)).map(|m| m.id.to_string()).collect()
+    } else {
+        ids.to_vec()
+    };
+    anyhow::ensure!(!ids.is_empty(), "no model is installed");
+    let mut results = vec![];
+    for id in &ids {
+        anyhow::ensure!(models::spec(id).is_some(), "unknown model {id}");
+        let t = Instant::now();
+        let mut engine = models::Engine::load(id)?;
+        eprintln!("{id}: loaded in {:.2}s", t.elapsed().as_secs_f32());
+        let r = benchmark::run_suite(
+            id,
+            &mut |s: &[f32]| engine.transcribe(s, "en"),
+            &|done, total| eprintln!("{id}: {done}/{total}"),
+        )?;
+        eprintln!(
+            "{id}: {:.1}x real time, {:.1}% word errors, {}",
+            r.speed,
+            r.wer * 100.0,
+            if benchmark::passes(&r) { "passes both bars" } else { "misses a bar" }
+        );
+        results.push(r);
+    }
+    let report = benchmark::Report::new(benchmark::detect(), results);
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    println!("report_url: {}", benchmark::report_url(&report));
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("suite") {
+        return suite(&args[2..]);
+    }
     if args.len() < 4 {
         anyhow::bail!("usage: silas-bench <parakeet|cohere> <model-dir> <wav>...");
     }

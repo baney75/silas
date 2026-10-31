@@ -6,3 +6,4 @@ src-tauri/gen/
 migration/
 *.part
 .DS_Store
+__pycache__/

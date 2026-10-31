@@ -1,0 +1,90 @@
+name: Device registry
+# Device reports arrive as issues (from Silas's "Share results"). Each valid report becomes a
+# PR that adds registry/reports/<issue>.json; a maintainer merges it; then devices.json is
+# rebuilt on main. The issue body is untrusted: it reaches the script only through an
+# environment variable and is parsed as JSON there, never interpolated into a shell line.
+on:
+  issues:
+    types: [opened, edited, labeled]
+  pull_request:
+    paths: [registry/**, .github/workflows/registry.yml]
+  push:
+    branches: [main]
+    paths: [registry/reports/**]
+permissions:
+  contents: read
+jobs:
+  test:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - run: python3 -I registry/test_ingest.py
+
+  report:
+    if: github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'device-report') && github.event.issue.state == 'open'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    concurrency:
+      group: registry-report-${{ github.event.issue.number }}
+      cancel-in-progress: true
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_BODY: ${{ github.event.issue.body }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { ref: main }
+      - name: Validate and store
+        id: ingest
+        run: |
+          set +e
+          python3 -I registry/ingest.py > "$RUNNER_TEMP/result.txt"
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/result.txt"
+      - name: Reject
+        if: steps.ingest.outputs.code == '2'
+        run: |
+          { echo "Silas couldn't use this report:"; echo; cat "$RUNNER_TEMP/result.txt"; } > "$RUNNER_TEMP/comment.md"
+          gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/comment.md"
+      - name: Open or update the report PR
+        if: steps.ingest.outputs.code == '0'
+        run: |
+          branch="registry/report-$ISSUE_NUMBER"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add "registry/reports/$ISSUE_NUMBER.json"
+          git commit -q -m "Device report from #$ISSUE_NUMBER"
+          git push -f -q origin "$branch"
+          if [ -z "$(gh pr list --head "$branch" --json number -q '.[].number')" ]; then
+            gh pr create --base main --head "$branch" --title "Device report from #$ISSUE_NUMBER" \
+              --body "Adds the validated report from #$ISSUE_NUMBER. Merging rebuilds registry/devices.json on main."
+          fi
+          gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/result.txt"
+      - name: Script error
+        if: steps.ingest.outputs.code != '0' && steps.ingest.outputs.code != '2'
+        run: exit 1
+
+  rebuild:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: registry-rebuild
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: python3 -I registry/ingest.py --rebuild
+      - name: Commit devices.json
+        run: |
+          git diff --quiet registry/devices.json && exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -q -am "Rebuild device registry"
+          git push -q origin HEAD:main

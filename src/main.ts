@@ -36,15 +36,17 @@ let unmount: (() => void) | null = null;
 
 async function boot() {
   try {
-    const [state, settings, models, history, dict, stats] = await Promise.all([
+    const [state, settings, models, history, dict, stats, device, benchmark] = await Promise.all([
       api.getState(),
       api.getSettings(),
       api.listModels(),
       api.getHistory(HISTORY_LIMIT),
       api.getDictionary(),
       api.getStats(),
+      api.getDevice(),
+      api.getBenchmark(),
     ]);
-    Object.assign(store, { state, settings, models, history, dict, stats });
+    Object.assign(store, { state, settings, models, history, dict, stats, device, benchmark });
   } catch (e) {
     clear(app, h("div", { class: "fatal" }, logo(48), h("h1", null, "Silas couldn't start"), h("p", null, errorText(e))));
     return;
@@ -86,6 +88,26 @@ function wireEvents() {
       void refreshModels();
       void refreshState();
     }
+  });
+  void on("benchmark-progress", (progress) => {
+    store.bench = { running: true, progress, error: null };
+    notify("benchmark");
+  });
+  void on("benchmark-done", (report) => {
+    store.benchmark = report;
+    store.bench = { running: false, progress: null, error: null };
+    notify("benchmark");
+    // The pick may have changed the recommended model or the one in use.
+    void refreshModels();
+    void refreshState();
+    void api.getSettings().then((next) => {
+      store.settings = next;
+      notify("settings");
+    });
+  });
+  void on("benchmark-error", ({ message }) => {
+    store.bench = { running: false, progress: null, error: message };
+    notify("benchmark");
   });
   void on("update-available", (info) => {
     store.update = info;

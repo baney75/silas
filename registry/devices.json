@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "devices": {
+    "macos/apple-m5/10": {
+      "model": "parakeet-v3",
+      "speed": 20.08,
+      "wer": 0.0056,
+      "reports": 1
+    }
+  }
+}

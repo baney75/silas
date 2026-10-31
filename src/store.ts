@@ -5,10 +5,13 @@ import {
   api,
   errorText,
   type AppState,
+  type BenchmarkProgress,
+  type Device,
   type Dictionary,
   type HistoryItem,
   type ModelEntry,
   type ModelProgress,
+  type Report,
   type Settings,
   type Stats,
   type Status,
@@ -17,7 +20,7 @@ import {
 } from "./api";
 import { toast } from "./ui";
 
-export type Topic = "state" | "settings" | "models" | "history" | "dict" | "stats" | "progress" | "update";
+export type Topic = "state" | "settings" | "models" | "history" | "dict" | "stats" | "progress" | "update" | "benchmark";
 
 export const store = {
   state: null as unknown as AppState,
@@ -28,11 +31,22 @@ export const store = {
   stats: null as Stats | null,
   progress: {} as Record<string, ModelProgress>,
   microphones: [] as string[],
+  device: null as Device | null,
+  /** The last saved benchmark of this computer. */
+  benchmark: null as Report | null,
+  /** The benchmark in flight (or its last error); `null` when none has run since launch. */
+  bench: null as BenchRun | null,
   update: null as UpdateInfo | null,
   /** Result of the last manual check: "none" means up to date. */
   updateCheck: "idle" as "idle" | "checking" | "none" | "found" | "error",
   updateProgress: null as UpdateProgress | null,
 };
+
+export interface BenchRun {
+  running: boolean;
+  progress: BenchmarkProgress | null;
+  error: string | null;
+}
 
 const subs = new Map<Topic, Set<() => void>>();
 
@@ -70,6 +84,11 @@ export async function refreshDict() {
 export async function refreshStats() {
   store.stats = await api.getStats();
   notify("stats");
+}
+
+export async function refreshBenchmark() {
+  store.benchmark = await api.getBenchmark();
+  notify("benchmark");
 }
 
 export function setDict(d: Dictionary) {
@@ -121,15 +140,40 @@ export async function downloadModel(id: string) {
   await refreshModels();
 }
 
-export async function selectModel(id: string) {
+export async function selectModel(id: string, auto = false) {
   try {
-    await api.selectModel(id);
+    await api.selectModel(id, auto);
     store.settings = { ...store.settings, model: id };
     notify("settings");
   } catch (e) {
     toast(`Couldn't load that model. ${errorText(e)}`, "error", 6000);
   }
   await Promise.all([refreshModels(), refreshState()]);
+}
+
+/** Measure the active model, or every installed one. Progress arrives as events. */
+export async function runBenchmark(all: boolean) {
+  store.bench = { running: true, progress: null, error: null };
+  notify("benchmark");
+  try {
+    await api.runBenchmark(all);
+  } catch (e) {
+    store.bench = { running: false, progress: null, error: errorText(e) };
+    notify("benchmark");
+    return;
+  }
+  // The benchmark-done event has normally landed already; this covers one that didn't.
+  await Promise.all([refreshBenchmark(), refreshModels()]);
+  store.bench = { running: false, progress: null, error: null };
+  notify("benchmark");
+}
+
+export async function shareBenchmark() {
+  try {
+    await api.shareBenchmark();
+  } catch (e) {
+    toast(`Couldn't open the report. ${errorText(e)}`, "error", 6000);
+  }
 }
 
 export async function checkForUpdate() {

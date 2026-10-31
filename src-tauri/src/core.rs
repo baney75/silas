@@ -12,6 +12,7 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::audio::Recording;
+use crate::benchmark::{self, ModelResult, Report};
 use crate::dictionary::{Dictionary, LearnResult};
 use crate::keys::{EditWatch, Machine, Out, Trigger, Watch};
 use crate::models::{self, Engine};
@@ -56,9 +57,20 @@ pub struct Core {
     pub capture: Mutex<Option<std::sync::mpsc::Sender<String>>>,
     pub last_activity: Mutex<Instant>,
     downloading: Mutex<Vec<String>>,
+    /// A benchmark is running; only one at a time.
+    bench_running: AtomicBool,
 }
 
 pub type Shared = Arc<Core>;
+
+/// Frees the benchmark slot when dropped.
+pub struct BenchGuard(Shared);
+
+impl Drop for BenchGuard {
+    fn drop(&mut self) {
+        self.0.bench_running.store(false, Ordering::Release);
+    }
+}
 
 const MAX_RECORDING: Duration = Duration::from_secs(300);
 
@@ -75,6 +87,11 @@ pub fn key_access_message() -> String {
 impl Core {
     pub fn new(app: AppHandle) -> Shared {
         let mut settings: Settings = store::load("settings.json");
+        // Settings from before per-device picks have no modelSource. A model other than the
+        // default was chosen by the user then, so no benchmark or registry may move them off it.
+        if store::exists("settings.json") {
+            store::migrate_model_source(&mut settings, &store::read_raw("settings.json"));
+        }
         // A fresh nightly install stays on nightly instead of jumping to stable.
         if !store::exists("settings.json") && app.package_info().version.pre.as_str().starts_with("nightly") {
             settings.update_channel = "nightly".into();
@@ -103,6 +120,7 @@ impl Core {
             capture: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
             downloading: Mutex::new(vec![]),
+            bench_running: AtomicBool::new(false),
             settings: Mutex::new(settings),
         })
     }
@@ -267,11 +285,190 @@ impl Core {
         Ok(())
     }
 
-    pub fn select_model(self: &Shared, id: &str) {
-        self.settings.lock().model = id.to_string();
+    /// Load this model. With `auto` false the user chose it, and from then on nothing but the
+    /// user changes it; setup's own choice (`auto`) leaves the device pick free to apply.
+    pub fn select_model(self: &Shared, id: &str, auto: bool) {
+        {
+            let mut s = self.settings.lock();
+            s.model = id.to_string();
+            if !auto {
+                s.model_source = "user".into();
+            }
+        }
         self.save_settings();
         *self.engine.lock() = None;
         self.load_model();
+    }
+
+    // ------------------------------------------------------------ device pick
+
+    /// At startup, in the background: look this computer up in the registry, and with no
+    /// answer there, measure the active model once.
+    pub fn start_device_pick(self: &Shared) {
+        let me = self.clone();
+        std::thread::spawn(move || me.device_pick());
+    }
+
+    fn device_pick(self: &Shared) {
+        let key = benchmark::device().key.clone();
+        let entry = benchmark::fetch_registry().lookup(&key).cloned();
+        if let Some(entry) = entry {
+            // A device the registry knows needs no benchmark. Switch only if that model is
+            // here, or if no model is installed yet (onboarding downloads the recommended one);
+            // never strand someone who has a working model on one they haven't downloaded.
+            let usable = models::installed(&entry.model) || !models::MODELS.iter().any(|m| models::installed(m.id));
+            let apply = {
+                let mut s = self.settings.lock();
+                let apply = s.model_source == "default" && usable;
+                if apply {
+                    s.model = entry.model.clone();
+                    s.model_source = "registry".into();
+                }
+                apply
+            };
+            if apply {
+                self.save_settings();
+                if models::installed(&entry.model) {
+                    self.load_model();
+                }
+            }
+            return;
+        }
+        if benchmark::load_report().is_some() {
+            return;
+        }
+        while self.active_model().is_none() {
+            std::thread::sleep(Duration::from_secs(2));
+        }
+        match self.begin_benchmark() {
+            Ok(guard) => {
+                if let Err(e) = self.run_benchmark(false, guard) {
+                    log::warn!("device benchmark failed: {e}");
+                }
+            }
+            Err(e) => log::info!("device benchmark skipped: {e}"),
+        }
+    }
+
+    /// Claim the single benchmark slot; it frees itself when the guard drops.
+    pub fn begin_benchmark(self: &Shared) -> anyhow::Result<BenchGuard> {
+        anyhow::ensure!(
+            !self.bench_running.swap(true, Ordering::AcqRel),
+            "A benchmark is already running"
+        );
+        Ok(BenchGuard(self.clone()))
+    }
+
+    /// Hold until no dictation is happening, so a recording is never delayed by more than
+    /// the one clip in flight.
+    fn wait_quiet(&self) {
+        loop {
+            let busy = matches!(
+                self.status().0,
+                Status::Recording | Status::Transcribing | Status::Typing | Status::Loading
+            ) || self.recording.lock().is_some();
+            if !busy {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(300));
+        }
+    }
+
+    /// Measure the active model, and with `all` every other installed one. Saves the report,
+    /// emits `benchmark-progress` then `benchmark-done` (or `benchmark-error`), and moves to the
+    /// pick unless the user chose a model themselves.
+    pub fn run_benchmark(self: &Shared, all: bool, _guard: BenchGuard) -> anyhow::Result<Report> {
+        let result = self.measure(all);
+        match &result {
+            Ok(report) => {
+                let _ = self.app.emit("benchmark-done", report);
+                if let Some(pick) = &report.pick {
+                    self.apply_pick(pick);
+                }
+            }
+            Err(e) => {
+                let _ = self.app.emit("benchmark-error", json!({ "message": e.to_string() }));
+            }
+        }
+        result
+    }
+
+    fn measure(self: &Shared, all: bool) -> anyhow::Result<Report> {
+        let active = self
+            .active_model()
+            .ok_or_else(|| anyhow::anyhow!("No model is loaded yet"))?;
+        let mut ids = vec![active.clone()];
+        if all {
+            ids.extend(
+                models::MODELS
+                    .iter()
+                    .filter(|m| m.id != active && models::installed(m.id))
+                    .map(|m| m.id.to_string()),
+            );
+        }
+        let mut fresh: Vec<ModelResult> = vec![];
+        for id in &ids {
+            let progress = |clip: usize, clips: usize| {
+                // Every clip starts after this returns, outside the timing.
+                if clip < clips {
+                    self.wait_quiet();
+                }
+                let _ = self.app.emit("benchmark-progress", json!({ "model": id, "clip": clip, "clips": clips }));
+            };
+            let run = if *id == active {
+                // The live engine, one clip per lock, so a dictation waits at most one clip.
+                let mut clip = |samples: &[f32]| -> anyhow::Result<String> {
+                    let mut engine = self.engine.lock();
+                    match engine.as_mut() {
+                        Some((loaded, e)) if loaded == id => e.transcribe(samples, "en"),
+                        _ => anyhow::bail!("The active model changed during the benchmark"),
+                    }
+                };
+                benchmark::run_suite(id, &mut clip, &progress)
+            } else {
+                models::Engine::load(id).and_then(|mut engine| {
+                    benchmark::run_suite(id, &mut |s: &[f32]| engine.transcribe(s, "en"), &progress)
+                })
+            };
+            match run {
+                Ok(r) => fresh.push(r),
+                // A model that won't load shouldn't sink the rest; the active one must work.
+                Err(e) if *id != active => log::warn!("benchmark of {id} failed: {e}"),
+                Err(e) => return Err(e),
+            }
+        }
+        // Keep earlier results for models this run skipped.
+        let mut results: Vec<ModelResult> = benchmark::load_report()
+            .map(|r| r.results)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|old| models::spec(&old.model).is_some() && !fresh.iter().any(|f| f.model == old.model))
+            .collect();
+        results.extend(fresh);
+        results.sort_by_key(|r| models::MODELS.iter().position(|m| m.id == r.model));
+        let report = Report::new(benchmark::device().clone(), results);
+        benchmark::save_report(&report);
+        Ok(report)
+    }
+
+    /// Move to the benchmark's pick if it is installed and the user hasn't chosen.
+    fn apply_pick(self: &Shared, pick: &str) {
+        if !models::installed(pick) {
+            return;
+        }
+        let switch = {
+            let mut s = self.settings.lock();
+            let switch = s.model_source != "user" && s.model != pick;
+            if switch {
+                s.model = pick.to_string();
+                s.model_source = "benchmark".into();
+            }
+            switch
+        };
+        if switch {
+            self.save_settings();
+            self.load_model();
+        }
     }
 
     pub fn save_settings(&self) {

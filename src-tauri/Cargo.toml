@@ -45,6 +45,7 @@ flate2 = "1"
 hound = "3.5"
 tokio = { version = "1", features = ["time"] }
 chrono = { version = "0.4", features = ["serde"] }
+sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 enigo = "0.6"

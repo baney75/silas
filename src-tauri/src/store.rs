@@ -47,6 +47,11 @@ pub fn save<T: Serialize>(name: &str, value: &T) {
     }
 }
 
+/// The file's text, or "" when it can't be read.
+pub fn read_raw(name: &str) -> String {
+    fs::read_to_string(data_dir().join(name)).unwrap_or_default()
+}
+
 pub fn exists(name: &str) -> bool {
     Path::new(&data_dir().join(name)).exists()
 }
@@ -57,6 +62,8 @@ pub struct Settings {
     pub hotkey: String,
     pub tap_to_toggle: bool,
     pub model: String,
+    /// Who chose `model`: default | registry | benchmark | user. A user choice is never overridden.
+    pub model_source: String,
     pub language: String,
     pub remove_fillers: bool,
     pub trailing_space: bool,
@@ -72,12 +79,25 @@ pub struct Settings {
     pub auto_update: bool,
 }
 
+/// Settings saved before per-device picks have no `modelSource`. A model other than the
+/// default was the user's own choice then, so mark it so no benchmark or registry moves it.
+pub fn migrate_model_source(settings: &mut Settings, raw: &str) {
+    let has_source = serde_json::from_str::<serde_json::Value>(raw)
+        .map(|v| v.get("modelSource").is_some())
+        .unwrap_or(true);
+    if !has_source {
+        let chosen = settings.model != Settings::default().model;
+        settings.model_source = if chosen { "user" } else { "default" }.into();
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
             hotkey: default_hotkey().into(),
             tap_to_toggle: true,
             model: "parakeet-v3".into(),
+            model_source: "default".into(),
             language: "en".into(),
             remove_fillers: true,
             trailing_space: true,
@@ -163,4 +183,33 @@ pub struct Stats {
     pub avg_wpm: f32,
     pub minutes_saved: f32,
     pub learned: u64,
+}
+
+#[cfg(test)]
+mod migrate_tests {
+    use super::*;
+
+    #[test]
+    fn old_settings_with_a_chosen_model_become_user() {
+        let raw = r#"{"model":"cohere-int4","onboarded":true}"#;
+        let mut s: Settings = serde_json::from_str(raw).unwrap();
+        migrate_model_source(&mut s, raw);
+        assert_eq!(s.model_source, "user");
+    }
+
+    #[test]
+    fn old_settings_on_the_default_stay_default() {
+        let raw = r#"{"model":"parakeet-v3","onboarded":true}"#;
+        let mut s: Settings = serde_json::from_str(raw).unwrap();
+        migrate_model_source(&mut s, raw);
+        assert_eq!(s.model_source, "default");
+    }
+
+    #[test]
+    fn new_settings_keep_their_source() {
+        let raw = r#"{"model":"cohere-int4","modelSource":"benchmark"}"#;
+        let mut s: Settings = serde_json::from_str(raw).unwrap();
+        migrate_model_source(&mut s, raw);
+        assert_eq!(s.model_source, "benchmark");
+    }
 }

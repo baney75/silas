@@ -9,6 +9,7 @@ use transcribe_rs::onnx::cohere::{CohereModel, CohereParams};
 use transcribe_rs::onnx::parakeet::{ParakeetModel, ParakeetParams};
 use transcribe_rs::onnx::Quantization;
 
+use crate::benchmark::{self, ModelResult};
 use crate::store::models_dir;
 
 pub struct Spec {
@@ -95,9 +96,15 @@ pub struct ModelEntry {
     pub installed: bool,
     pub active: bool,
     pub recommended: bool,
+    /// This computer's measured speed and accuracy for the model, if it has been run.
+    pub device_result: Option<ModelResult>,
+    /// The registry's or this computer's own benchmark's pick for this device.
+    pub best_for_device: bool,
 }
 
 pub fn list(active: Option<&str>) -> Vec<ModelEntry> {
+    let report = benchmark::load_report();
+    let best = benchmark::best_for_device();
     MODELS
         .iter()
         .map(|m| ModelEntry {
@@ -109,7 +116,10 @@ pub fn list(active: Option<&str>) -> Vec<ModelEntry> {
             languages: m.languages.into(),
             installed: installed(m.id),
             active: active == Some(m.id) && installed(m.id),
-            recommended: m.recommended,
+            // Recommend what is known to suit this computer; the static flag otherwise.
+            recommended: best.as_deref().map_or(m.recommended, |b| b == m.id),
+            device_result: report.as_ref().and_then(|r| r.results.iter().find(|x| x.model == m.id).cloned()),
+            best_for_device: best.as_deref() == Some(m.id),
         })
         .collect()
 }

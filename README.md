@@ -61,6 +61,23 @@ is never rewritten into jargon, which is the failure that made us leave TypeWhis
 
 Measured on eight real dictations (175 s of speech) with `silas-bench`.
 
+### The right model for your computer
+
+Silas picks the model for your computer by itself:
+
+1. It looks your computer up (operating system, processor, core count) in the
+   [device registry](registry/devices.json). If your kind of computer is there, it uses that model.
+2. If not, once the default model is ready it measures it in the background on a minute of public
+   recordings with known text ([LibriSpeech](https://www.openslr.org/12), CC BY 4.0). A model passes
+   when it runs at least **10x real time** (10 s of speech ready in 1 s) and gets at least **92% of
+   words** right. Silas uses the most accurate model that passes. **Model › This computer › Include
+   all installed models** measures every model you've downloaded.
+3. You can still pick any model. Once you choose one, Silas never switches it for you.
+
+**Share results** opens a GitHub issue with your device type, OS, Silas version and the numbers.
+No audio or dictated text is sent. Each valid report becomes a pull request; once it's merged, everyone
+with the same computer gets your result. `silas-bench suite` runs the same measurement from a terminal.
+
 ## Updates
 
 | Channel | Platforms | Source |
@@ -93,7 +110,8 @@ is on), and keeps history and the dictionary as JSON in its app-data folder.
 
 Speech engines through [transcribe-rs](https://github.com/cjpais/transcribe-rs) (MIT), keys
 through [handy-keys](https://github.com/handy-computer/handy-keys) (MIT); both come from the
-[Handy](https://github.com/cjpais/Handy) project. Parakeet is NVIDIA's (CC-BY-4.0). The
+[Handy](https://github.com/cjpais/Handy) project. Parakeet is NVIDIA's (CC-BY-4.0). The benchmark
+clips come from [LibriSpeech](https://www.openslr.org/12) (CC BY 4.0; Panayotov et al., ICASSP 2015). The
 common-word list comes from [FrequencyWords](https://github.com/hermitdave/FrequencyWords)
 (CC-BY-SA-4.0 content).
 

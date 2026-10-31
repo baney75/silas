@@ -1349,6 +1349,118 @@ button {
   color: var(--text-3);
 }
 
+/* ---------- This computer (benchmark) ---------- */
+
+.device-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 24px;
+  padding: 24px;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+.device-title {
+  margin: 0;
+  font: 600 18px/1.2 var(--serif);
+}
+
+.device-line {
+  margin: 0;
+  color: var(--text-2);
+}
+
+.bench-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-weight: 600;
+}
+
+.bench-meta {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.bench-running {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bench-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-radius: var(--r);
+  border: 1px solid var(--line);
+}
+
+.bench-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(220px, 2fr) minmax(130px, 1fr) minmax(190px, 1fr);
+  align-items: center;
+  gap: 8px 16px;
+  padding: 12px 16px;
+}
+
+.bench-row + .bench-row {
+  border-top: 1px solid var(--line);
+}
+
+.bench-row.is-pick {
+  background: var(--gold-soft);
+}
+
+.bench-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.bench-num {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.bench-marks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mark-ok {
+  color: var(--green);
+}
+
+.mark-miss {
+  color: var(--red);
+}
+
+.bench-actions {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 760px) {
+  .bench-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ---------- Settings ---------- */
 
 .settings {
