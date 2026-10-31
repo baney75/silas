@@ -32,6 +32,8 @@ export interface Settings {
   hotkey: string;
   tapToToggle: boolean;
   model: string;
+  /** Who chose the model: the app's default, the device registry, a benchmark, or the user. */
+  modelSource: ModelSource;
   language: string;
   removeFillers: boolean;
   trailingSpace: boolean;
@@ -46,6 +48,8 @@ export interface Settings {
   updateChannel: UpdateChannel;
   autoUpdate: boolean;
 }
+
+export type ModelSource = "default" | "registry" | "benchmark" | "user";
 
 export type UpdateChannel = "stable" | "nightly";
 
@@ -74,6 +78,50 @@ export interface ModelEntry {
   installed: boolean;
   active: boolean;
   recommended: boolean;
+  /** This computer's measurement of the model, once it has been run. */
+  deviceResult: ModelResult | null;
+  /** The registry's or this computer's own benchmark's pick. */
+  bestForDevice: boolean;
+}
+
+// The benchmark types keep the core's snake_case: the same JSON goes into the shared report.
+
+export interface Device {
+  key: string;
+  os: string;
+  os_version: string;
+  cpu: string;
+  cores: number;
+  memory_gb: number;
+  hw_model: string | null;
+}
+
+export interface ModelResult {
+  model: string;
+  /** Seconds of audio per second of compute. */
+  speed: number;
+  /** Word error rate, 0..1. */
+  wer: number;
+  audio_seconds: number;
+  compute_seconds: number;
+  clips: number;
+}
+
+export interface Report {
+  schema: number;
+  silas: string;
+  suite: string;
+  device: Device;
+  results: ModelResult[];
+  pick: string | null;
+  ran_at: string;
+}
+
+/** `clip` clips of `clips` are finished for `model`. */
+export interface BenchmarkProgress {
+  model: string;
+  clip: number;
+  clips: number;
 }
 
 export interface HistoryItem {
@@ -154,6 +202,9 @@ export interface EventMap {
   transcript: HistoryItem;
   learned: LearnResult;
   "model-progress": ModelProgress;
+  "benchmark-progress": BenchmarkProgress;
+  "benchmark-done": Report;
+  "benchmark-error": { message: string };
   "update-available": UpdateInfo;
   "update-progress": UpdateProgress;
 }
@@ -179,7 +230,8 @@ export const api = {
 
   listModels: () => call<ModelEntry[]>("list_models"),
   downloadModel: (id: string) => call<null>("download_model", { id }),
-  selectModel: (id: string) => call<null>("select_model", { id }),
+  selectModel: (id: string, auto = false) => call<null>("select_model", { id, auto }),
+  waitDevicePick: () => call<null>("wait_device_pick"),
   deleteModel: (id: string) => call<null>("delete_model", { id }),
 
   getHistory: (limit: number) => call<HistoryItem[]>("get_history", { limit }),
@@ -207,6 +259,12 @@ export const api = {
   resetAccessibility: () => call<null>("reset_accessibility"),
   listMicrophones: () => call<string[]>("list_microphones"),
   showMain: () => call<null>("show_main"),
+  getBenchmark: () => call<Report | null>("get_benchmark"),
+  /** Resolves when the run ends; progress and the result also arrive as events. */
+  runBenchmark: (all: boolean) => call<null>("run_benchmark", { all }),
+  /** Opens a prefilled GitHub issue in the browser; the user reviews and submits it. */
+  shareBenchmark: () => call<null>("share_benchmark"),
+  getDevice: () => call<Device>("get_device"),
   checkUpdate: () => call<UpdateInfo | null>("check_update"),
   installUpdate: () => call<null>("install_update"),
 };

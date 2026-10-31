@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "suite": "librispeech-test-clean-9clips-v1",
+  "silas": "0.1.6",
+  "device": {
+    "key": "macos/apple-m5/10",
+    "os": "macos",
+    "os_version": "macOS 27.2",
+    "cpu": "Apple M5",
+    "cores": 10,
+    "memory_gb": 32,
+    "hw_model": "Mac17,2"
+  },
+  "results": [
+    {
+      "model": "parakeet-v3",
+      "speed": 20.083675,
+      "wer": 0.005586592,
+      "clips": 9,
+      "audio_seconds": 62.215,
+      "compute_seconds": 3.0977895
+    }
+  ]
+}

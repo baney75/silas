@@ -4,16 +4,21 @@
 //   ?platform=windows  pretend to be another OS (macos | windows | linux)
 //   ?empty             no history, no dictionary
 //   ?update            an update is waiting
+//   ?unmeasured        this computer has not been benchmarked yet
+//   ?benchmarking      a benchmark is running when the page opens
 
 import type {
   AppState,
   Correction,
   Dictionary,
   HistoryItem,
+  Device,
   LearnResult,
   ModelEntry,
+  ModelResult,
   Pending,
   Platform,
+  Report,
   Settings,
   Stats,
   Status,
@@ -63,6 +68,7 @@ const settings: Settings = {
   hotkey: platform === "macos" ? "CmdRight" : "CtrlRight",
   tapToToggle: true,
   model: "parakeet-v3",
+  modelSource: "default",
   language: "en",
   removeFillers: true,
   trailingSpace: true,
@@ -105,6 +111,8 @@ const models: ModelEntry[] = [
     installed: !onboarding,
     active: !onboarding,
     recommended: true,
+    deviceResult: null,
+    bestForDevice: false,
   },
   {
     id: "cohere-int4",
@@ -116,8 +124,97 @@ const models: ModelEntry[] = [
     installed: false,
     active: false,
     recommended: false,
+    deviceResult: null,
+    bestForDevice: false,
   },
 ];
+
+// ---- Benchmark ----
+
+const device: Device = {
+  key: `${platform}/apple-m5/10`,
+  os: platform,
+  os_version: platform === "macos" ? "macOS 27.2" : platform === "windows" ? "Windows 11 (26200)" : "Ubuntu 26.04",
+  cpu: "Apple M5",
+  cores: 10,
+  memory_gb: 32,
+  hw_model: platform === "macos" ? "Mac17,2" : null,
+};
+
+/** What each mock model scores, so every state of the page can be previewed. */
+const mockScores: Record<string, ModelResult> = {
+  "parakeet-v3": { model: "parakeet-v3", speed: 23.4, wer: 0.019, audio_seconds: 62.2, compute_seconds: 2.66, clips: 9 },
+  "cohere-int4": { model: "cohere-int4", speed: 4.1, wer: 0.012, audio_seconds: 62.2, compute_seconds: 15.2, clips: 9 },
+};
+
+const SUITE = "librispeech-test-clean-9clips-v1";
+const BAR_SPEED = 10;
+const BAR_WER = 0.08;
+
+/** The same rule as benchmark::pick in the core. */
+function pickModel(results: ModelResult[]): string | null {
+  const passing = results.filter((r) => r.speed >= BAR_SPEED && r.wer <= BAR_WER);
+  const fastest = (rs: ModelResult[]) => rs.reduce((a, b) => (b.speed > a.speed ? b : a)).model;
+  if (passing.length) {
+    const best = Math.min(...passing.map((r) => r.wer));
+    return fastest(passing.filter((r) => r.wer - best <= 0.005));
+  }
+  const accurate = results.filter((r) => r.wer <= BAR_WER);
+  if (accurate.length) return fastest(accurate);
+  return results.length ? fastest(results) : null;
+}
+
+let report: Report | null = null;
+let benchmarking = false;
+
+function applyReport(next: Report) {
+  report = next;
+  for (const m of models) {
+    m.deviceResult = next.results.find((r) => r.model === m.id) ?? null;
+    // Only a pick that clears both bars is "best for this computer".
+    const best = next.results.find((r) => r.model === next.pick);
+    const passes = !!best && best.speed >= BAR_SPEED && best.wer <= BAR_WER;
+    m.bestForDevice = passes && next.pick === m.id;
+    m.recommended = passes ? next.pick === m.id : m.id === "parakeet-v3";
+  }
+}
+
+async function benchmark(all: boolean) {
+  if (benchmarking) throw "A benchmark is already running";
+  benchmarking = true;
+  try {
+    const ids = [state.model ?? "parakeet-v3", ...(all ? models.filter((m) => m.installed && m.id !== state.model).map((m) => m.id) : [])];
+    const fresh: ModelResult[] = [];
+    for (const id of ids) {
+      for (let clip = 0; clip <= 9; clip++) {
+        emit("benchmark-progress", { model: id, clip, clips: 9 });
+        await delay(id === "cohere-int4" ? 420 : 180);
+      }
+      fresh.push({ ...mockScores[id], speed: mockScores[id].speed * (0.95 + Math.random() * 0.1) });
+    }
+    const kept = (report?.results ?? []).filter((r) => !fresh.some((f) => f.model === r.model));
+    const results = [...kept, ...fresh].sort((a, b) => models.findIndex((m) => m.id === a.model) - models.findIndex((m) => m.id === b.model));
+    const next: Report = { schema: 1, silas: state.version, suite: SUITE, device, results, pick: pickModel(results), ran_at: new Date().toISOString() };
+    applyReport(next);
+    if (next.pick && next.pick !== settings.model && settings.modelSource !== "user" && models.find((m) => m.id === next.pick)?.installed) {
+      settings.model = next.pick;
+      settings.modelSource = "benchmark";
+      state.model = next.pick;
+      models.forEach((m) => (m.active = m.id === next.pick));
+    }
+    emit("benchmark-done", next);
+  } finally {
+    benchmarking = false;
+  }
+}
+
+if (!onboarding && !params.has("unmeasured")) {
+  report = { schema: 1, silas: "0.1.0", suite: SUITE, device, results: [mockScores["parakeet-v3"]], pick: "parakeet-v3", ran_at: iso(2 * HOUR) };
+  applyReport(report);
+}
+if (params.has("benchmarking")) {
+  window.setTimeout(() => void benchmark(false).catch(() => {}), 600);
+}
 
 const sample: Array<[string, number, number]> = [
   ["Can you check whether Parish1 is on AC power before we start the render tonight?", 4.8, 310],
@@ -305,7 +402,8 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
     case "get_settings":
       return out(settings);
     case "set_settings": {
-      const next = args.settings as Settings;
+      // Like the core: the model and who chose it are not changed through here.
+      const next = { ...(args.settings as Settings), model: settings.model, modelSource: settings.modelSource };
       Object.assign(settings, next);
       state.hotkey = settings.hotkey;
       state.hotkeyLabel = labelFor(settings.hotkey);
@@ -326,11 +424,28 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
       emit("model-progress", { id: m.id, downloaded: total, total, stage: "done" });
       return null as T;
     }
+    case "get_benchmark":
+      return out(report);
+    case "wait_device_pick":
+      await delay(300);
+      return null as T;
+    case "get_device":
+      return out(device);
+    case "run_benchmark":
+      await benchmark(Boolean(args.all));
+      return null as T;
+    case "share_benchmark":
+      if (!report) throw "Run the benchmark first";
+      window.open("https://github.com/baney75/silas/issues/new?template=device-report.yml", "_blank", "noopener");
+      return null as T;
     case "select_model": {
+      // Like the core: setup's automatic choice never overrides the user's.
+      if (args.auto && settings.modelSource === "user") return null as T;
       setStatus("loading", "Loading model");
       await delay(900);
       models.forEach((m) => (m.active = m.id === args.id));
       settings.model = String(args.id);
+      if (!args.auto) settings.modelSource = "user";
       state.model = String(args.id);
       setStatus("ready");
       return null as T;

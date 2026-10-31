@@ -1,0 +1,20 @@
+name: Device report
+description: Share how Silas's speech models ran on your computer. Silas fills this in for you.
+title: "Device report: "
+labels: [device-report]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Silas measured each speech model on this computer with a short set of public recordings
+        (LibriSpeech). The report below holds your device type, operating system, Silas version and
+        those numbers. It holds no audio and nothing you dictated. Submitting it helps Silas pick the
+        right model for people with the same computer.
+  - type: textarea
+    id: report
+    attributes:
+      label: Report
+      description: Filled in by Silas. Please don't edit it.
+      render: json
+    validations:
+      required: true

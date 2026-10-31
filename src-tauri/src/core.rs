@@ -1,7 +1,7 @@
 //! The running app: owns settings, the dictionary, the loaded model and the
 //! record → transcribe → type → learn loop.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -12,6 +12,7 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::audio::Recording;
+use crate::benchmark::{self, ModelResult, Report, Timed};
 use crate::dictionary::{Dictionary, LearnResult};
 use crate::keys::{EditWatch, Machine, Out, Trigger, Watch};
 use crate::models::{self, Engine};
@@ -56,9 +57,52 @@ pub struct Core {
     pub capture: Mutex<Option<std::sync::mpsc::Sender<String>>>,
     pub last_activity: Mutex<Instant>,
     downloading: Mutex<Vec<String>>,
+    /// A benchmark is running; only one at a time.
+    bench_running: AtomicBool,
+    /// Recordings started so far; a benchmark clip that saw this change overlapped a dictation.
+    dictations: AtomicU64,
+    /// The model a background load is working on, so one model is never loaded twice at once.
+    loading: Mutex<Option<String>>,
 }
 
 pub type Shared = Arc<Core>;
+
+/// Which models a benchmark run measures.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Scope {
+    /// Just the active model.
+    Active,
+    /// The active model and every other installed one.
+    All,
+    /// The active model, then every other installed one (nothing is downloaded), so a better
+    /// model already on disk is never passed over. Switches only to a pick that passes both bars.
+    Auto,
+}
+
+/// May a model change go ahead? A user's choice is never overridden by an automatic one,
+/// unless the model they chose is no longer installed and so there is no choice left to keep.
+pub fn allows_model_change(source: &str, auto: bool, chosen_installed: bool) -> bool {
+    !(auto && source == "user" && chosen_installed)
+}
+
+/// A finished load is stale when another model was chosen while it ran.
+fn load_is_stale(current: &str, loaded: &str) -> bool {
+    current != loaded
+}
+
+/// A load for `id` should start unless one for `id` is already running.
+fn should_start_load(loading: Option<&str>, id: &str) -> bool {
+    loading != Some(id)
+}
+
+/// Frees the benchmark slot when dropped.
+pub struct BenchGuard(Shared);
+
+impl Drop for BenchGuard {
+    fn drop(&mut self) {
+        self.0.bench_running.store(false, Ordering::Release);
+    }
+}
 
 const MAX_RECORDING: Duration = Duration::from_secs(300);
 
@@ -75,6 +119,12 @@ pub fn key_access_message() -> String {
 impl Core {
     pub fn new(app: AppHandle) -> Shared {
         let mut settings: Settings = store::load("settings.json");
+        // Settings from before per-device picks have no modelSource. A model other than the
+        // default was chosen by the user then, so no benchmark or registry may move them off it.
+        if store::exists("settings.json") {
+            let installed = models::MODELS.iter().filter(|m| models::installed(m.id)).count();
+            store::migrate_model_source(&mut settings, &store::read_raw("settings.json"), installed);
+        }
         // A fresh nightly install stays on nightly instead of jumping to stable.
         if !store::exists("settings.json") && app.package_info().version.pre.as_str().starts_with("nightly") {
             settings.update_channel = "nightly".into();
@@ -103,6 +153,9 @@ impl Core {
             capture: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
             downloading: Mutex::new(vec![]),
+            bench_running: AtomicBool::new(false),
+            dictations: AtomicU64::new(0),
+            loading: Mutex::new(None),
             settings: Mutex::new(settings),
         })
     }
@@ -214,16 +267,41 @@ impl Core {
             self.set_status(Status::Ready, None);
             return;
         }
+        {
+            let mut loading = self.loading.lock();
+            if !should_start_load(loading.as_deref(), &id) {
+                return;
+            }
+            *loading = Some(id.clone());
+        }
         self.set_status(Status::Loading, Some("Loading the speech model".into()));
         let me = self.clone();
         std::thread::spawn(move || {
             let t = Instant::now();
-            match Engine::load(&id) {
-                Ok(mut engine) => {
+            // A panic in the runtime must not leave the status at Loading for good.
+            let loaded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Engine::load(&id).map(|mut engine| {
                     // Warm up so the first real dictation is as fast as the rest.
                     let _ = engine.transcribe(&vec![0.0; 16_000], "en");
-                    // Another model may have been chosen while this one loaded.
-                    if me.settings.lock().model != id {
+                    engine
+                })
+            }))
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("the speech runtime crashed")));
+            // Done loading: free the slot (unless a newer load has taken it).
+            {
+                let mut loading = me.loading.lock();
+                if loading.as_deref() == Some(id.as_str()) {
+                    *loading = None;
+                }
+            }
+            match loaded {
+                Ok(engine) => {
+                    // Another model may have been chosen while this one loaded. Don't leave the
+                    // status at Loading: load whatever is chosen now (a no-op if its own load is
+                    // already running and will report Ready).
+                    let current = me.settings.lock().model.clone();
+                    if load_is_stale(&current, &id) {
+                        me.load_model();
                         return;
                     }
                     *me.engine.lock() = Some((id.clone(), engine));
@@ -267,11 +345,257 @@ impl Core {
         Ok(())
     }
 
-    pub fn select_model(self: &Shared, id: &str) {
-        self.settings.lock().model = id.to_string();
+    /// Load this model. With `auto` false the user chose it, and from then on nothing but the
+    /// user changes it; setup's own choice (`auto`) leaves the device pick free to apply.
+    pub fn select_model(self: &Shared, id: &str, auto: bool) {
+        let allowed = {
+            let mut s = self.settings.lock();
+            let allowed = allows_model_change(&s.model_source, auto, models::installed(&s.model));
+            if allowed {
+                s.model = id.to_string();
+                if !auto {
+                    s.model_source = "user".into();
+                }
+            }
+            allowed
+        };
+        if !allowed {
+            // Setup asked for its pick, but the user's own model is here: make sure that one is
+            // loaded, so setup never ends with no model.
+            self.load_model();
+            return;
+        }
         self.save_settings();
         *self.engine.lock() = None;
         self.load_model();
+    }
+
+    // ------------------------------------------------------------ device pick
+
+    /// At startup, in the background: look this computer up in the registry, and with no
+    /// answer there, measure the active model once.
+    pub fn start_device_pick(self: &Shared) {
+        let me = self.clone();
+        std::thread::spawn(move || me.device_pick());
+    }
+
+    fn device_pick(self: &Shared) {
+        let key = benchmark::device().key.clone();
+        let entry = benchmark::fetch_registry().lookup(&key).cloned();
+        if let Some(entry) = entry {
+            // A device the registry knows needs no benchmark. Switch only if that model is
+            // here, or if no model is installed yet (onboarding downloads the recommended one);
+            // never strand someone who has a working model on one they haven't downloaded.
+            let usable = models::installed(&entry.model) || !models::MODELS.iter().any(|m| models::installed(m.id));
+            // (applies, the model changed)
+            let (apply, changed) = {
+                let mut s = self.settings.lock();
+                let apply = s.model_source == "default" && usable;
+                let changed = apply && s.model != entry.model;
+                if apply {
+                    s.model = entry.model.clone();
+                    s.model_source = "registry".into();
+                }
+                (apply, changed)
+            };
+            if apply {
+                self.save_settings();
+                if changed && models::installed(&entry.model) {
+                    self.wait_quiet();
+                    self.load_model();
+                }
+            }
+            return;
+        }
+        if benchmark::load_report().is_some() {
+            return;
+        }
+        while self.active_model().is_none() {
+            std::thread::sleep(Duration::from_secs(2));
+        }
+        match self.begin_benchmark() {
+            Ok(guard) => {
+                if let Err(e) = self.run_benchmark(Scope::Auto, guard) {
+                    log::warn!("device benchmark failed: {e}");
+                }
+            }
+            Err(e) => log::info!("device benchmark skipped: {e}"),
+        }
+    }
+
+    /// Claim the single benchmark slot; it frees itself when the guard drops.
+    pub fn begin_benchmark(self: &Shared) -> anyhow::Result<BenchGuard> {
+        anyhow::ensure!(
+            !self.bench_running.swap(true, Ordering::AcqRel),
+            "A benchmark is already running"
+        );
+        Ok(BenchGuard(self.clone()))
+    }
+
+    /// A dictation is under way or a model is loading: not a moment to time anything.
+    fn busy(&self) -> bool {
+        matches!(
+            self.status().0,
+            Status::Recording | Status::Transcribing | Status::Typing | Status::Loading
+        ) || self.recording.lock().is_some()
+    }
+
+    /// Hold until no dictation is happening, so a recording is never delayed by more than
+    /// the one clip in flight.
+    fn wait_quiet(&self) {
+        while self.busy() {
+            std::thread::sleep(Duration::from_millis(300));
+        }
+    }
+
+    /// Hold until nothing is happening and nothing has for `idle`, so loading a second model
+    /// next to the live one doesn't land in the middle of someone's dictating.
+    fn wait_idle(&self, idle: Duration) {
+        while self.busy() || self.last_activity.lock().elapsed() < idle {
+            std::thread::sleep(Duration::from_millis(300));
+        }
+    }
+
+    /// Run one benchmark clip. `run` does the transcribing (holding whatever lock it needs for
+    /// that clip only) and returns its own compute time. A clip that overlapped a dictation
+    /// is timed against a busy machine, so it runs again.
+    fn quiet_clip(&self, run: &mut dyn FnMut() -> Timed) -> Timed {
+        loop {
+            // Snapshot first, then require quiet: a dictation that starts in between bumps
+            // the counter and the clip runs again.
+            let before = self.dictations.load(Ordering::Acquire);
+            if self.busy() {
+                std::thread::sleep(Duration::from_millis(300));
+                continue;
+            }
+            let out = run()?;
+            if self.dictations.load(Ordering::Acquire) == before && !self.busy() {
+                return Ok(out);
+            }
+        }
+    }
+
+    /// Measure the active model, and with `all` every other installed one. Saves the report,
+    /// emits `benchmark-progress` then `benchmark-done` (or `benchmark-error`), and moves to the
+    /// pick unless the user chose a model themselves.
+    pub fn run_benchmark(self: &Shared, scope: Scope, _guard: BenchGuard) -> anyhow::Result<Report> {
+        let result = self.measure(scope);
+        match &result {
+            Ok(report) => {
+                let _ = self.app.emit("benchmark-done", report);
+                self.apply_pick(report);
+            }
+            Err(e) => {
+                let _ = self.app.emit("benchmark-error", json!({ "message": e.to_string() }));
+            }
+        }
+        result
+    }
+
+    fn measure(self: &Shared, scope: Scope) -> anyhow::Result<Report> {
+        let active = self
+            .active_model()
+            .ok_or_else(|| anyhow::anyhow!("No model is loaded yet"))?;
+        let mut ids = vec![active.clone()];
+        // The other installed models (nothing is downloaded for a benchmark).
+        let others: Vec<String> = models::MODELS
+            .iter()
+            .filter(|m| m.id != active && models::installed(m.id))
+            .map(|m| m.id.to_string())
+            .collect();
+        if scope == Scope::All {
+            ids.extend(others.iter().cloned());
+        }
+        let mut fresh: Vec<ModelResult> = vec![];
+        let mut next = 0;
+        while next < ids.len() {
+            let id = &ids[next];
+            next += 1;
+            let progress = |clip: usize, clips: usize| {
+                let _ = self.app.emit("benchmark-progress", json!({ "model": id, "clip": clip, "clips": clips }));
+            };
+            let run = if *id == active {
+                // The live engine, one clip per lock, so a dictation waits at most one clip.
+                let mut clip = |samples: &[f32]| -> anyhow::Result<(String, Duration)> {
+                    self.quiet_clip(&mut || {
+                        let mut engine = self.engine.lock();
+                        match engine.as_mut() {
+                            Some((loaded, e)) if loaded == id => {
+                                let t = Instant::now();
+                                let text = e.transcribe(samples, "en")?;
+                                Ok((text, t.elapsed()))
+                            }
+                            _ => anyhow::bail!("The active model changed during the benchmark"),
+                        }
+                    })
+                };
+                benchmark::run_suite(id, &mut clip, &progress)
+            } else {
+                self.wait_idle(Duration::from_secs(30));
+                // A dictation may start during the load; quiet_clip reruns any clip it touches.
+                models::Engine::load(id).and_then(|mut engine| {
+                    let mut clip = |samples: &[f32]| -> anyhow::Result<(String, Duration)> {
+                        self.quiet_clip(&mut || {
+                            let t = Instant::now();
+                            let text = engine.transcribe(samples, "en")?;
+                            Ok((text, t.elapsed()))
+                        })
+                    };
+                    benchmark::run_suite(id, &mut clip, &progress)
+                })
+            };
+            match run {
+                Ok(r) => {
+                    // Automatic runs measure every installed model (no downloads), so a more
+                    // accurate model already on disk is never passed over.
+                    if scope == Scope::Auto && *id == active {
+                        ids.extend(others.iter().cloned());
+                    }
+                    fresh.push(r);
+                }
+                // A model that won't load shouldn't sink the rest; the active one must work.
+                Err(e) if *id != active => log::warn!("benchmark of {id} failed: {e}"),
+                Err(e) => return Err(e),
+            }
+        }
+        // Keep earlier results for models this run skipped, but only from this version of Silas
+        // and this speech set: numbers from another build aren't comparable.
+        let mut results: Vec<ModelResult> = benchmark::load_report()
+            .filter(|r| r.silas == env!("CARGO_PKG_VERSION") && r.suite == benchmark::SUITE_ID)
+            .map(|r| r.results)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|old| models::spec(&old.model).is_some() && !fresh.iter().any(|f| f.model == old.model))
+            .collect();
+        results.extend(fresh);
+        results.sort_by_key(|r| models::MODELS.iter().position(|m| m.id == r.model));
+        let report = Report::new(benchmark::device().clone(), results);
+        benchmark::save_report(&report);
+        Ok(report)
+    }
+
+    /// Move to the benchmark's pick if it is installed, passes both bars, and the user
+    /// hasn't chosen. A pick that misses a bar is only shown, never switched to.
+    fn apply_pick(self: &Shared, report: &Report) {
+        let Some(pick) = report.pick.as_deref() else { return };
+        let passes = report.results.iter().any(|r| r.model == pick && benchmark::passes(r));
+        if !passes || !models::installed(pick) {
+            return;
+        }
+        let switch = {
+            let mut s = self.settings.lock();
+            let switch = s.model_source != "user" && s.model != pick;
+            if switch {
+                s.model = pick.to_string();
+                s.model_source = "benchmark".into();
+            }
+            switch
+        };
+        if switch {
+            self.save_settings();
+            self.wait_quiet();
+            self.load_model();
+        }
     }
 
     pub fn save_settings(&self) {
@@ -407,6 +731,7 @@ impl Core {
                 // The mic is already running; publish the target before the recording, so a
                 // release can never find a recording without its target.
                 *self.target.lock() = capture.join().ok().flatten();
+                self.dictations.fetch_add(1, Ordering::AcqRel);
                 *self.recording.lock() = Some((r, Instant::now()));
                 let gen = self.recording_gen.fetch_add(1, Ordering::Relaxed) + 1;
                 self.cue("start");
@@ -696,5 +1021,35 @@ fn order_overlay(w: &tauri::WebviewWindow, show: bool) {
             let _: () = msg_send![win, setCollectionBehavior: BEHAVIOR];
         }
         let _: () = msg_send![win, orderFrontRegardless];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_load_for_a_model_no_longer_chosen_is_stale() {
+        assert!(load_is_stale("cohere-int4", "parakeet-v3"));
+        assert!(!load_is_stale("parakeet-v3", "parakeet-v3"));
+    }
+
+    #[test]
+    fn one_model_is_never_loaded_twice_at_once() {
+        assert!(should_start_load(None, "parakeet-v3"));
+        assert!(should_start_load(Some("cohere-int4"), "parakeet-v3"));
+        assert!(!should_start_load(Some("parakeet-v3"), "parakeet-v3"));
+    }
+
+    #[test]
+    fn automatic_changes_never_override_the_user() {
+        assert!(!allows_model_change("user", true, true));
+        assert!(allows_model_change("user", false, true));
+        // The user's model was deleted: setup may load its pick.
+        assert!(allows_model_change("user", true, false));
+        for src in ["default", "registry", "benchmark"] {
+            assert!(allows_model_change(src, true, true));
+            assert!(allows_model_change(src, false, true));
+        }
     }
 }

@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod benchmark;
 pub mod commands;
 pub mod core;
 pub mod dictionary;
@@ -95,6 +96,7 @@ pub fn run() {
 
             tray::build(&handle)?;
             core.load_model();
+            core.start_device_pick();
             start_listener(core.clone());
             updates::schedule(handle.clone());
 
@@ -150,6 +152,11 @@ pub fn run() {
             commands::reset_accessibility,
             commands::list_microphones,
             commands::show_main,
+            commands::get_benchmark,
+            commands::run_benchmark,
+            commands::share_benchmark,
+            commands::get_device,
+            commands::wait_device_pick,
             commands::check_update,
             commands::install_update,
         ])

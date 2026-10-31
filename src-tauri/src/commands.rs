@@ -5,12 +5,12 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
-use crate::core::{Shared, Status};
+use crate::core::{Scope, Shared, Status};
 use crate::dictionary::{Dictionary, LearnResult};
 use crate::keys::Trigger;
 use crate::models::{self, ModelEntry};
 use crate::store::{self, HistoryItem, Settings, Stats};
-use crate::{audio, permissions, updates};
+use crate::{audio, benchmark, permissions, updates};
 
 type R<T> = Result<T, String>;
 
@@ -70,7 +70,15 @@ pub fn set_settings(core: State<Shared>, app: AppHandle, settings: Settings) -> 
     if !cfg!(target_os = "macos") {
         settings.update_channel = "nightly".into();
     }
-    let old = std::mem::replace(&mut *core.settings.lock(), settings.clone());
+    // The model and who chose it belong to the core: a benchmark can switch models while the
+    // UI holds an older copy of the settings, and saving that copy must not undo the switch.
+    // The UI changes models with select_model.
+    let old = {
+        let mut cur = core.settings.lock();
+        settings.model = cur.model.clone();
+        settings.model_source = cur.model_source.clone();
+        std::mem::replace(&mut *cur, settings.clone())
+    };
     {
         let mut m = core.machine.lock();
         m.trigger = trigger;
@@ -86,18 +94,19 @@ pub fn set_settings(core: State<Shared>, app: AppHandle, settings: Settings) -> 
         };
     }
     core.save_settings();
-    if old.model != settings.model {
-        core.inner().select_model(&settings.model);
-    } else if old.hotkey != settings.hotkey && core.status().0 == Status::Ready {
+    if old.hotkey != settings.hotkey && core.status().0 == Status::Ready {
         core.set_status(Status::Ready, None); // refresh the tray label
     }
     Ok(settings)
 }
 
 #[tauri::command]
-pub fn list_models(core: State<Shared>) -> Vec<ModelEntry> {
+pub async fn list_models(core: State<'_, Shared>) -> R<Vec<ModelEntry>> {
     let active = core.settings.lock().model.clone();
-    models::list(Some(&active))
+    // Reads the benchmark and registry files, and the first call detects the device.
+    tauri::async_runtime::spawn_blocking(move || models::list(Some(&active)))
+        .await
+        .map_err(err)
 }
 
 #[tauri::command]
@@ -109,12 +118,13 @@ pub async fn download_model(core: State<'_, Shared>, id: String) -> R<()> {
         .map_err(err)
 }
 
+/// `auto` is setup choosing for the user (the device pick still applies); otherwise the user chose.
 #[tauri::command]
-pub fn select_model(core: State<Shared>, id: String) -> R<()> {
+pub fn select_model(core: State<Shared>, id: String, auto: Option<bool>) -> R<()> {
     if !models::installed(&id) {
         return Err("Download that model first".into());
     }
-    core.inner().select_model(&id);
+    core.inner().select_model(&id, auto.unwrap_or(false));
     Ok(())
 }
 
@@ -270,6 +280,49 @@ pub fn list_microphones() -> Vec<String> {
 #[tauri::command]
 pub fn show_main(app: AppHandle) {
     crate::show_main(&app);
+}
+
+#[tauri::command]
+pub async fn get_benchmark() -> R<Option<benchmark::Report>> {
+    tauri::async_runtime::spawn_blocking(benchmark::load_report).await.map_err(err)
+}
+
+/// Returns when the run ends; progress and the result also arrive as events.
+#[tauri::command]
+pub async fn run_benchmark(core: State<'_, Shared>, all: bool) -> R<()> {
+    let core = core.inner().clone();
+    // Refuse here, before the thread starts, so the caller hears about it.
+    let guard = core.begin_benchmark().map_err(err)?;
+    if core.active_model().is_none() {
+        return Err("No model is loaded yet".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || core.run_benchmark(if all { Scope::All } else { Scope::Active }, guard).map(|_| ()))
+        .await
+        .map_err(err)?
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn share_benchmark() -> R<()> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let report = benchmark::load_report().ok_or("Run the benchmark first".to_string())?;
+        benchmark::open_url(&benchmark::report_url(&report)).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Resolves once this run has asked the device registry (at most 6 s), for first-run setup.
+#[tauri::command]
+pub async fn wait_device_pick() -> R<()> {
+    tauri::async_runtime::spawn_blocking(|| benchmark::wait_for_registry(std::time::Duration::from_secs(6)))
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn get_device() -> R<benchmark::Device> {
+    tauri::async_runtime::spawn_blocking(|| benchmark::device().clone()).await.map_err(err)
 }
 
 #[tauri::command]

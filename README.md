@@ -89,6 +89,26 @@ is never rewritten into jargon, which is the failure that made us leave TypeWhis
 
 Measured on eight real dictations (175 s of speech) with `silas-bench`.
 
+### The right model for your computer
+
+Silas picks the model for your computer by itself:
+
+1. It looks your computer up (operating system, processor, core count) in the
+   [device registry](registry/devices.json). If your kind of computer is there, it uses that model.
+2. If not, once the default model is ready it measures it in the background on a minute of public
+   recordings with known text ([LibriSpeech](https://www.openslr.org/12), CC BY 4.0), along with every
+   other model you've already downloaded (Silas downloads nothing for this). A model passes when it
+   runs at least **10x real time** (10 s of speech ready in 1 s) and gets at least **92% of words**
+   right. Silas switches to the most accurate model that passes. If none passes, it shows the
+   numbers and keeps your model. Measuring the other models starts only after 30 seconds without
+   dictation, and while it runs it can make a dictation slower.
+3. You can still pick any model. Once you choose one, Silas never switches it for you.
+
+**Share results** opens a GitHub issue with your device type, OS, Silas version and the numbers.
+No audio or dictated text is sent. A bot checks the report and comments; once a maintainer approves
+it, everyone with the same computer gets your result. `silas-bench suite` runs the same measurement
+from a terminal.
+
 ## Updates
 
 | Channel | Platforms | Source |
@@ -149,7 +169,8 @@ is on), and keeps history and the dictionary as JSON in its app-data folder.
 
 Speech engines through [transcribe-rs](https://github.com/cjpais/transcribe-rs) (MIT), keys
 through [handy-keys](https://github.com/handy-computer/handy-keys) (MIT); both come from the
-[Handy](https://github.com/cjpais/Handy) project. Parakeet is NVIDIA's (CC-BY-4.0). The
+[Handy](https://github.com/cjpais/Handy) project. Parakeet is NVIDIA's (CC-BY-4.0). The benchmark
+clips come from [LibriSpeech](https://www.openslr.org/12) (CC BY 4.0; Panayotov et al., ICASSP 2015). The
 common-word list comes from [FrequencyWords](https://github.com/hermitdave/FrequencyWords)
 (CC-BY-SA-4.0 content).
 

@@ -1,6 +1,6 @@
 import { api, type PermissionState } from "./api";
 import { modelCard } from "./models";
-import { downloadModel, hotkeyLabel, refreshState, selectModel, statusText, store, subscribe, updateSettings } from "./store";
+import { downloadModel, hotkeyLabel, refreshModels, refreshState, selectModel, statusText, store, subscribe, updateSettings } from "./store";
 import { clear, h, icon, keycap, logo } from "./ui";
 
 type Step = "welcome" | "permissions" | "model" | "try";
@@ -35,13 +35,17 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, opts: { s
   // Start the model download at once so it is done by the time permissions are.
   const recommended = () => store.models.find((x) => x.recommended) ?? store.models[0];
   async function prepareModel() {
+    // First run: let the device registry answer (a few seconds at most) so setup downloads
+    // the model picked for this computer.
+    await api.waitDevicePick().catch(() => undefined);
+    await refreshModels();
     const m = recommended();
     if (!m) return;
     if (!m.installed && !store.progress[m.id]) await downloadModel(m.id);
     const fresh = store.models.find((x) => x.id === m.id);
     if (fresh?.installed && !store.models.some((x) => x.active)) {
       autoSelected = true;
-      await selectModel(m.id);
+      await selectModel(m.id, true);
     }
   }
   function drawBg() {
@@ -258,7 +262,7 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, opts: { s
     if (m && ready && !autoSelected && !store.models.some((x) => x.active)) {
       // Downloaded but not loaded yet: load it so the next step works.
       autoSelected = true;
-      void selectModel(m.id);
+      void selectModel(m.id, true);
     }
     return [
       h("h1", { class: "onb-title" }, ready ? "Your voice model is ready" : "Getting your voice model"),

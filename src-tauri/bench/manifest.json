@@ -1,0 +1,70 @@
+{
+  "source": "LibriSpeech test-clean (openslr.org/12), via the Hugging Face dataset openslr/librispeech_asr",
+  "license": "CC BY 4.0",
+  "attribution": "V. Panayotov, G. Chen, D. Povey, S. Khudanpur. LibriSpeech: an ASR corpus based on public domain audio books. ICASSP 2015.",
+  "clips": [
+    {
+      "file": "6930-75918-0002.wav",
+      "text": "congratulations were poured in upon the princess everywhere during her journey",
+      "seconds": 5.03,
+      "speaker": 6930,
+      "id": "6930-75918-0002"
+    },
+    {
+      "file": "7729-102255-0039.wav",
+      "text": "the inmates being removed at the appointed hour a few cannon balls were fired through the stone walls",
+      "seconds": 6.82,
+      "speaker": 7729,
+      "id": "7729-102255-0039"
+    },
+    {
+      "file": "8463-294828-0027.wav",
+      "text": "i left instructions for shipping my containers of stuffed animals and dried plants to paris france",
+      "seconds": 5.98,
+      "speaker": 8463,
+      "id": "8463-294828-0027"
+    },
+    {
+      "file": "5142-33396-0024.wav",
+      "text": "i stood with my back to the wall for i wanted no sword reaching out of the dark for me",
+      "seconds": 5.34,
+      "speaker": 5142,
+      "id": "5142-33396-0024"
+    },
+    {
+      "file": "4446-2275-0007.wav",
+      "text": "she pushed him toward the big chair by the fire and sat down on a stool at the opposite side of the hearth her knees drawn up to her chin laughing like a happy little girl",
+      "seconds": 8.97,
+      "speaker": 4446,
+      "id": "4446-2275-0007"
+    },
+    {
+      "file": "4507-16021-0033.wav",
+      "text": "do we really know the mountain well when we are not acquainted with the cavern",
+      "seconds": 5.54,
+      "speaker": 4507,
+      "id": "4507-16021-0033"
+    },
+    {
+      "file": "1188-133604-0032.wav",
+      "text": "it is only a pencil outline by edward burne jones in illustration of the story of psyche it is the introduction of psyche after all her troubles into heaven",
+      "seconds": 10.98,
+      "speaker": 1188,
+      "id": "1188-133604-0032"
+    },
+    {
+      "file": "4970-29093-0007.wav",
+      "text": "it is such a noble ambition that it is a pity it has usually such a shallow foundation",
+      "seconds": 7.0,
+      "speaker": 4970,
+      "id": "4970-29093-0007"
+    },
+    {
+      "file": "237-134493-0015.wav",
+      "text": "there was something individual about the great farm a most unusual trimness and care for detail",
+      "seconds": 6.55,
+      "speaker": 237,
+      "id": "237-134493-0015"
+    }
+  ]
+}
