@@ -112,7 +112,9 @@ linux_uninstall() {
     as_root apt-get remove -y silas
     found=deb
   elif command -v rpm >/dev/null 2>&1 && rpm -q silas >/dev/null 2>&1; then
-    if command -v dnf >/dev/null 2>&1; then as_root dnf remove -y silas; else as_root zypper --non-interactive remove silas; fi
+    # zypper rebuilds the package's full name from its version, and the hyphen in a nightly
+    # version ("0.1.7-nightly…") makes rpm miss it, so remove by name with rpm itself.
+    if command -v dnf >/dev/null 2>&1; then as_root dnf remove -y silas; else as_root rpm -e silas; fi
     found=rpm
   fi
   if [ -e "$HOME/.local/bin/silas" ]; then
