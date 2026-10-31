@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::io::Cursor;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -36,17 +36,18 @@ pub struct Device {
     pub hw_model: Option<String>,
 }
 
-/// Lowercase, runs of non-alphanumerics become `-`, trimmed of `-`.
+/// Lowercase a-z and 0-9; everything else (non-ASCII included) becomes `-`; runs collapse
+/// and the ends are trimmed. `registry/ingest.py` computes the same.
 pub fn slug(s: &str) -> String {
     let mut out = String::new();
     let mut gap = false;
-    for c in s.to_lowercase().chars() {
+    for c in s.chars() {
         if c.is_ascii_alphanumeric() {
             if gap && !out.is_empty() {
                 out.push('-');
             }
             gap = false;
-            out.push(c);
+            out.push(c.to_ascii_lowercase());
         } else {
             gap = true;
         }
@@ -56,6 +57,44 @@ pub fn slug(s: &str) -> String {
 
 pub fn device_key(os: &str, cpu: &str, cores: u32) -> String {
     format!("{}/{}/{}", slug(os), slug(cpu), cores)
+}
+
+/// Text that goes into a shared report: ASCII letters, digits and ` ()@.,_+/:-` only, other
+/// characters become spaces, spaces collapse, at most 120 characters, "unknown" if nothing is left.
+pub fn sanitize_text(s: &str) -> String {
+    let kept: String = s
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || " ()@.,_+/:-".contains(c) { c } else { ' ' })
+        .collect();
+    let mut out = kept.split_whitespace().collect::<Vec<_>>().join(" ");
+    out.truncate(120);
+    let out = out.trim().to_string();
+    if out.is_empty() {
+        "unknown".into()
+    } else {
+        out
+    }
+}
+
+/// The hardware model as the registry accepts it: `[A-Za-z0-9,._ -]`, 1 to 40 characters.
+fn clean_hw_model(s: Option<String>) -> Option<String> {
+    s.filter(|m| {
+        (1..=40).contains(&m.len()) && m.chars().all(|c| c.is_ascii_alphanumeric() || ",._ -".contains(c))
+    })
+}
+
+/// Assemble the device from raw readings. The key comes from the sanitized CPU name.
+pub fn build_device(os: &str, cpu: &str, os_version: &str, cores: u32, memory_gb: u32, hw_model: Option<String>) -> Device {
+    let cpu = sanitize_text(cpu);
+    Device {
+        key: device_key(os, &cpu, cores),
+        os: os.into(),
+        os_version: sanitize_text(os_version),
+        cpu,
+        cores,
+        memory_gb,
+        hw_model: clean_hw_model(hw_model),
+    }
 }
 
 fn os_name() -> &'static str {
@@ -88,27 +127,21 @@ pub fn detect() -> Device {
             .with_cpu(CpuRefreshKind::nothing())
             .with_memory(MemoryRefreshKind::nothing().with_ram()),
     );
-    let cpu = sys
-        .cpus()
-        .first()
-        .map(|c| c.brand().trim().to_string())
-        .filter(|b| !b.is_empty())
-        .unwrap_or_else(|| "Unknown CPU".into());
+    let cpu = sys.cpus().first().map(|c| c.brand().to_string()).unwrap_or_default();
     let cores = if sys.cpus().is_empty() {
         std::thread::available_parallelism().map_or(1, |n| n.get())
     } else {
         sys.cpus().len()
     } as u32;
     let os = os_name();
-    Device {
-        key: device_key(os, &cpu, cores),
-        os: os.into(),
-        os_version: System::long_os_version().unwrap_or_else(|| os.into()),
-        cpu,
+    build_device(
+        os,
+        &cpu,
+        &System::long_os_version().unwrap_or_else(|| os.into()),
         cores,
-        memory_gb: (sys.total_memory() as f64 / (1u64 << 30) as f64).round() as u32,
-        hw_model: hardware_model(),
-    }
+        (sys.total_memory() as f64 / (1u64 << 30) as f64).round() as u32,
+        hardware_model(),
+    )
 }
 
 /// The device, detected once per run of the app.
@@ -241,15 +274,24 @@ pub struct ModelResult {
     pub clips: u32,
 }
 
+/// Fast enough and accurate enough: both bars cleared.
+pub fn passes_bars(speed: f32, wer: f32) -> bool {
+    speed >= MIN_SPEED && wer <= MAX_WER
+}
+
 pub fn passes(r: &ModelResult) -> bool {
-    r.speed >= MIN_SPEED && r.wer <= MAX_WER
+    passes_bars(r.speed, r.wer)
 }
 
 /// The model this device should use. Fast and accurate enough wins on accuracy (a tie
 /// within `TIE_WER` goes to the faster); else the fastest accurate one; else the fastest.
+/// Exactly equal speeds go to the lower model id, in every branch.
 pub fn pick(results: &[ModelResult]) -> Option<String> {
     let fastest = |rs: &[&ModelResult]| {
-        rs.iter().copied().max_by(|a, b| a.speed.total_cmp(&b.speed)).map(|r| r.model.clone())
+        rs.iter()
+            .copied()
+            .max_by(|a, b| a.speed.total_cmp(&b.speed).then_with(|| b.model.cmp(&a.model)))
+            .map(|r| r.model.clone())
     };
     let passing: Vec<&ModelResult> = results.iter().filter(|r| passes(r)).collect();
     if !passing.is_empty() {
@@ -264,12 +306,16 @@ pub fn pick(results: &[ModelResult]) -> Option<String> {
     fastest(&results.iter().collect::<Vec<_>>())
 }
 
-/// Run the bundled set through `transcribe`. The first clip runs once untimed as a warm-up.
-/// `progress(done, total)` is called before each clip starts (and so is the place to wait
-/// for a quiet moment: it is outside the timing) and once more when the set is finished.
+/// A transcript and the compute time it took.
+pub type Timed = anyhow::Result<(String, Duration)>;
+
+/// Run the bundled set through `transcribe`, which returns the text and its own compute time
+/// (so waits for a lock or a quiet moment stay out of the timing). The first clip runs once
+/// as a warm-up and is not counted. `progress(done, total)` is called before each clip starts
+/// and once more when the set is finished.
 pub fn run_suite(
     model_id: &str,
-    transcribe: &mut dyn FnMut(&[f32]) -> anyhow::Result<String>,
+    transcribe: &mut dyn FnMut(&[f32]) -> Timed,
     progress: &dyn Fn(usize, usize),
 ) -> anyhow::Result<ModelResult> {
     let clips = load_clips()?;
@@ -280,9 +326,8 @@ pub fn run_suite(
     let (mut errors, mut words) = (0usize, 0usize);
     for (i, clip) in clips.iter().enumerate() {
         progress(i, total);
-        let t = Instant::now();
-        let text = transcribe(&clip.samples)?;
-        compute += t.elapsed().as_secs_f64();
+        let (text, took) = transcribe(&clip.samples)?;
+        compute += took.as_secs_f64();
         audio += clip.samples.len() as f64 / 16_000.0;
         let (e, w) = word_errors(&clip.text, &text);
         errors += e;
@@ -326,12 +371,17 @@ impl Report {
     }
 }
 
+/// The report if it is a real one measured on the computer with this device key. A data
+/// folder carried over from another computer says nothing about this one.
+fn report_for(r: Report, key: &str) -> Option<Report> {
+    (!r.ran_at.is_empty() && r.device.key == key).then_some(r)
+}
+
 pub fn load_report() -> Option<Report> {
     if !store::exists(REPORT_FILE) {
         return None;
     }
-    let r: Report = store::load(REPORT_FILE);
-    (!r.ran_at.is_empty()).then_some(r)
+    report_for(store::load(REPORT_FILE), &device().key)
 }
 
 pub fn save_report(r: &Report) {
@@ -371,9 +421,9 @@ pub fn open_url(url: &str) -> anyhow::Result<()> {
     };
     #[cfg(target_os = "windows")]
     let mut cmd = {
-        // cmd treats & as a command separator, so escape it.
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/C", "start", "", &url.replace('&', "^&")]);
+        // Not cmd.exe: it would expand % and split on &. The URL is one argument.
+        let mut c = std::process::Command::new("rundll32.exe");
+        c.args(["url.dll,FileProtocolHandler", url]);
         c
     };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -417,7 +467,9 @@ impl Registry {
     }
 
     pub fn lookup(&self, key: &str) -> Option<&Entry> {
-        self.devices.get(key).filter(|e| models::spec(&e.model).is_some())
+        self.devices
+            .get(key)
+            .filter(|e| models::spec(&e.model).is_some() && passes_bars(e.speed, e.wer))
     }
 }
 
@@ -477,13 +529,15 @@ pub fn cached_registry() -> Registry {
     Registry::parse(&serde_json::to_string(&r).unwrap_or_default()).unwrap_or_default()
 }
 
-/// The model this device is known to run best: this computer's own measurement if it has
-/// one, else the registry's entry for this device type.
+/// The model this device is known to run well: one that clears both bars, by this computer's
+/// own measurement if it has one, else the registry's entry for this device type.
 pub fn best_for_device() -> Option<String> {
-    if let Some(p) = load_report().and_then(|r| r.pick).filter(|p| models::spec(p).is_some()) {
-        return Some(p);
+    match load_report() {
+        Some(r) => r
+            .pick
+            .filter(|p| r.results.iter().any(|x| &x.model == p && passes(x)) && models::spec(p).is_some()),
+        None => cached_registry().lookup(&device().key).map(|e| e.model.clone()),
     }
-    cached_registry().lookup(&device().key).map(|e| e.model.clone())
 }
 
 #[cfg(test)]
@@ -576,6 +630,66 @@ mod tests {
     }
 
     #[test]
+    fn registry_entries_must_clear_both_bars() {
+        let json = r#"{"schema":1,"devices":{
+            "a/slow/1":{"model":"parakeet-v3","speed":9.9,"wer":0.01,"reports":3},
+            "a/sloppy/1":{"model":"parakeet-v3","speed":30.0,"wer":0.081,"reports":3},
+            "a/edge/1":{"model":"parakeet-v3","speed":10.0,"wer":0.08,"reports":3}}}"#;
+        let reg = Registry::parse(json).unwrap();
+        assert!(reg.lookup("a/slow/1").is_none());
+        assert!(reg.lookup("a/sloppy/1").is_none());
+        assert!(reg.lookup("a/edge/1").is_some());
+        assert!(passes_bars(10.0, 0.08) && !passes_bars(9.99, 0.0) && !passes_bars(99.0, 0.0801));
+    }
+
+    #[test]
+    fn pick_equal_speeds_go_to_the_lower_id() {
+        // Passing branch (WER tie, same speed).
+        let rs = [r("b", 20.0, 0.03), r("a", 20.0, 0.03)];
+        assert_eq!(pick(&rs).as_deref(), Some("a"));
+        // Accurate-but-slow branch.
+        let rs = [r("z", 5.0, 0.05), r("m", 5.0, 0.06)];
+        assert_eq!(pick(&rs).as_deref(), Some("m"));
+        // Nothing accurate: fastest overall.
+        let rs = [r("y", 5.0, 0.5), r("x", 5.0, 0.4)];
+        assert_eq!(pick(&rs).as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn a_report_from_another_computer_is_ignored() {
+        let rep = Report::new(build_device("macos", "Apple M5", "macOS 27", 10, 32, None), vec![r("parakeet-v3", 20.0, 0.03)]);
+        assert!(report_for(rep.clone(), "macos/apple-m5/10").is_some());
+        assert!(report_for(rep.clone(), "macos/apple-m4/10").is_none());
+        let mut blank = rep;
+        blank.ran_at.clear();
+        assert!(report_for(blank, "macos/apple-m5/10").is_none());
+    }
+
+    #[test]
+    fn sanitized_device_text_and_key_agree_with_the_registry() {
+        let d = build_device("windows", "Intel(R) Core(TM) i7-1165G7 @ 2.80GHz", "Windows 11 (22631)", 8, 16, None);
+        assert_eq!(d.key, "windows/intel-r-core-tm-i7-1165g7-2-80ghz/8");
+        assert_eq!(d.cpu, "Intel(R) Core(TM) i7-1165G7 @ 2.80GHz");
+
+        let d = build_device("windows", "Intel® Core™ Ultra 7", "Windows 11", 16, 32, None);
+        assert_eq!(d.cpu, "Intel Core Ultra 7");
+        assert_eq!(d.key, "windows/intel-core-ultra-7/16");
+        // The key is always os/slug(cpu)/cores of what is reported.
+        assert_eq!(d.key, format!("{}/{}/{}", d.os, slug(&d.cpu), d.cores));
+
+        let d = build_device("linux", "AMD Ryzen", "Ubuntu 24.04!; rm -rf $HOME\n \"x\"", 4, 8, Some("Mac17,2; drop".into()));
+        assert_eq!(d.os_version, "Ubuntu 24.04 rm -rf HOME x");
+        assert!(d.os_version.chars().all(|c| c.is_ascii_alphanumeric() || " ()@.,_+/:-".contains(c)));
+        assert_eq!(d.hw_model, None);
+
+        assert_eq!(build_device("linux", "", "", 1, 1, None).cpu, "unknown");
+        assert_eq!(build_device("linux", "™™", "", 1, 1, None).key, "linux/unknown/1");
+        assert_eq!(sanitize_text(&"a".repeat(300)).len(), 120);
+        assert_eq!(slug("İstanbul Ünï"), "stanbul-n");
+        assert_eq!(build_device("macos", "Apple M5", "x", 10, 32, Some("Mac17,2".into())).hw_model.as_deref(), Some("Mac17,2"));
+    }
+
+    #[test]
     fn manifest_loads_and_every_wav_decodes_to_its_length() {
         let m = manifest().unwrap();
         assert!(!m.clips.is_empty());
@@ -595,17 +709,20 @@ mod tests {
     fn run_suite_scores_a_perfect_transcriber() {
         let texts: Vec<String> = manifest().unwrap().clips.iter().map(|c| c.text.clone()).collect();
         let mut calls = 0usize;
-        let mut transcribe = |_: &[f32]| -> anyhow::Result<String> {
+        let mut transcribe = |_: &[f32]| -> anyhow::Result<(String, Duration)> {
             // Call 0 is the warm-up; calls 1.. are the clips in order.
             let t = texts[calls.saturating_sub(1)].clone();
             calls += 1;
-            Ok(t)
+            Ok((t, Duration::from_millis(100)))
         };
         let res = run_suite("m", &mut transcribe, &|_, _| {}).unwrap();
         assert_eq!(res.wer, 0.0);
         assert_eq!(res.clips as usize, texts.len());
         assert!((res.audio_seconds - 62.2).abs() < 0.5);
         assert_eq!(calls, texts.len() + 1);
+        // Only the returned compute time counts: 9 clips at 100 ms, warm-up excluded.
+        assert!((res.compute_seconds - 0.9).abs() < 1e-3);
+        assert!((res.speed - res.audio_seconds / 0.9).abs() < 0.1);
     }
 
     #[test]
@@ -636,5 +753,6 @@ mod tests {
         assert!(d.cores >= 1);
         assert!(!d.cpu.is_empty());
         assert_eq!(d.key, device_key(&d.os, &d.cpu, d.cores));
+        assert!(d.cpu.len() <= 120 && d.os_version.len() <= 120);
     }
 }

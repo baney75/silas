@@ -31,7 +31,11 @@ fn suite(ids: &[String]) -> anyhow::Result<()> {
         eprintln!("{id}: loaded in {:.2}s", t.elapsed().as_secs_f32());
         let r = benchmark::run_suite(
             id,
-            &mut |s: &[f32]| engine.transcribe(s, "en"),
+            &mut |s: &[f32]| {
+                let t = Instant::now();
+                let text = engine.transcribe(s, "en")?;
+                Ok((text, t.elapsed()))
+            },
             &|done, total| eprintln!("{id}: {done}/{total}"),
         )?;
         eprintln!(

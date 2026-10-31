@@ -164,7 +164,7 @@ function thisComputer(): HTMLElement {
     body = h(
       "div",
       null,
-      h("ul", { class: "bench-list" }, ...report.results.map((r) => resultRow(r, r.model === report.pick))),
+      h("ul", { class: "bench-list" }, ...report.results.map((r) => resultRow(r, r.model === report.pick && r.speed >= MIN_SPEED && r.wer <= MAX_WER))),
       h("div", { class: "card-actions bench-actions" }, ...buttons),
       h(
         "p",

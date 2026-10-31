@@ -23,7 +23,7 @@ GOOD = {
         "hw_model": "Mac17,2",
     },
     "results": [
-        {"model": "parakeet-v3", "speed": 23.0, "wer": 0.021, "clips": 9, "audio_seconds": 62.2, "compute_seconds": 2.7}
+        {"model": "parakeet-v3", "speed": 23.0, "wer": 0.021, "clips": 9, "audio_seconds": 62.2, "compute_seconds": 2.7043}
     ],
     "pick": "parakeet-v3",
     "ran_at": "2026-10-31T20:00:00Z",
@@ -46,6 +46,9 @@ class Pick(unittest.TestCase):
 
     def test_none_pass_fastest_accurate(self):
         self.assertEqual(ingest.pick([self.r("a", 4, 0.05), self.r("b", 2, 0.03), self.r("c", 50, 0.3)]), "a")
+
+    def test_exact_speed_tie_goes_to_lower_id(self):
+        self.assertEqual(ingest.pick([self.r("b", 20, 0.02), self.r("a", 20, 0.02)]), "a")
 
     def test_none_accurate_fastest(self):
         self.assertEqual(ingest.pick([self.r("a", 4, 0.2), self.r("b", 8, 0.3)]), "b")
@@ -84,6 +87,25 @@ class Validate(unittest.TestCase):
         self.rejects(lambda b: b["device"].update(cpu="x\ny", key="macos/x-y/10"))
         self.rejects(lambda b: b["device"].update(os_version="a" * 500))
 
+    def test_rejects_trailing_newline(self):
+        self.rejects(lambda b: b.update(silas="0.1.7\n"))
+        self.rejects(lambda b: b["device"].update(os_version="macOS 27.2\n"))
+
+    def test_rejects_non_finite(self):
+        for bad in ("Infinity", "NaN", "1e999"):
+            with self.assertRaises(ingest.Reject):
+                ingest.validate(ingest.extract(body(GOOD).replace('"cores": 10', f'"cores": {bad}')))
+
+    def test_rejects_deep_nesting(self):
+        with self.assertRaises(ingest.Reject):
+            ingest.extract("```json\n" + "[" * 100000 + "]" * 100000 + "\n```")
+
+    def test_rejects_numbers_not_from_the_suite(self):
+        self.rejects(lambda b: b["results"][0].update(clips=3))
+        self.rejects(lambda b: b["results"][0].update(audio_seconds=600.0, compute_seconds=26.0))
+        self.rejects(lambda b: b["results"][0].update(speed=90.0))  # disagrees with 62.2 / 2.7043
+        self.rejects(lambda b: b["results"][0].update(speed=900.0, compute_seconds=0.0691))
+
     def test_rejects_duplicate_model(self):
         self.rejects(lambda b: b["results"].append(dict(b["results"][0])))
 
@@ -102,6 +124,7 @@ class EndToEnd(unittest.TestCase):
             for n, speed in ((1, 20.0), (2, 30.0), (3, 25.0)):
                 rep = copy.deepcopy(GOOD)
                 rep["results"][0]["speed"] = speed
+                rep["results"][0]["compute_seconds"] = 62.2 / speed
                 p = subprocess.run(
                     [sys.executable, "-I", str(script)],
                     env={**os.environ, "ISSUE_NUMBER": str(n), "ISSUE_BODY": body(rep)},
@@ -109,6 +132,7 @@ class EndToEnd(unittest.TestCase):
                     text=True,
                 )
                 self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertNotIn("Apple M5", p.stdout)  # comments carry the slug key, not free text
             self.assertFalse((reg / "devices.json").exists())  # issues never touch it
             subprocess.run([sys.executable, "-I", str(script), "--rebuild"], check=True)
             dev = json.loads((reg / "devices.json").read_text())["devices"]["macos/apple-m5/10"]

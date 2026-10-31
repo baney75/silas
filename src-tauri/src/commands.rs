@@ -5,7 +5,7 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
-use crate::core::{Shared, Status};
+use crate::core::{Scope, Shared, Status};
 use crate::dictionary::{Dictionary, LearnResult};
 use crate::keys::Trigger;
 use crate::models::{self, ModelEntry};
@@ -293,7 +293,7 @@ pub async fn run_benchmark(core: State<'_, Shared>, all: bool) -> R<()> {
     if core.active_model().is_none() {
         return Err("No model is loaded yet".into());
     }
-    tauri::async_runtime::spawn_blocking(move || core.run_benchmark(all, guard).map(|_| ()))
+    tauri::async_runtime::spawn_blocking(move || core.run_benchmark(if all { Scope::All } else { Scope::Active }, guard).map(|_| ()))
         .await
         .map_err(err)?
         .map_err(err)

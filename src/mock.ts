@@ -170,8 +170,11 @@ function applyReport(next: Report) {
   report = next;
   for (const m of models) {
     m.deviceResult = next.results.find((r) => r.model === m.id) ?? null;
-    m.bestForDevice = next.pick === m.id;
-    m.recommended = next.pick ? next.pick === m.id : m.id === "parakeet-v3";
+    // Only a pick that clears both bars is "best for this computer".
+    const best = next.results.find((r) => r.model === next.pick);
+    const passes = !!best && best.speed >= BAR_SPEED && best.wer <= BAR_WER;
+    m.bestForDevice = passes && next.pick === m.id;
+    m.recommended = passes ? next.pick === m.id : m.id === "parakeet-v3";
   }
 }
 

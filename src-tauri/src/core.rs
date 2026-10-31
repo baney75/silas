@@ -1,7 +1,7 @@
 //! The running app: owns settings, the dictionary, the loaded model and the
 //! record → transcribe → type → learn loop.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -12,7 +12,7 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::audio::Recording;
-use crate::benchmark::{self, ModelResult, Report};
+use crate::benchmark::{self, ModelResult, Report, Timed};
 use crate::dictionary::{Dictionary, LearnResult};
 use crate::keys::{EditWatch, Machine, Out, Trigger, Watch};
 use crate::models::{self, Engine};
@@ -59,9 +59,27 @@ pub struct Core {
     downloading: Mutex<Vec<String>>,
     /// A benchmark is running; only one at a time.
     bench_running: AtomicBool,
+    /// Recordings started so far; a benchmark clip that saw this change overlapped a dictation.
+    dictations: AtomicU64,
 }
 
 pub type Shared = Arc<Core>;
+
+/// Which models a benchmark run measures.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Scope {
+    /// Just the active model.
+    Active,
+    /// The active model and every other installed one.
+    All,
+    /// The active model, and the other installed ones too if it misses a bar.
+    Auto,
+}
+
+/// May a model change go ahead? A user's choice is never overridden by an automatic one.
+pub fn allows_model_change(source: &str, auto: bool) -> bool {
+    !(auto && source == "user")
+}
 
 /// Frees the benchmark slot when dropped.
 pub struct BenchGuard(Shared);
@@ -121,6 +139,7 @@ impl Core {
             last_activity: Mutex::new(Instant::now()),
             downloading: Mutex::new(vec![]),
             bench_running: AtomicBool::new(false),
+            dictations: AtomicU64::new(0),
             settings: Mutex::new(settings),
         })
     }
@@ -290,6 +309,9 @@ impl Core {
     pub fn select_model(self: &Shared, id: &str, auto: bool) {
         {
             let mut s = self.settings.lock();
+            if !allows_model_change(&s.model_source, auto) {
+                return;
+            }
             s.model = id.to_string();
             if !auto {
                 s.model_source = "user".into();
@@ -317,18 +339,20 @@ impl Core {
             // here, or if no model is installed yet (onboarding downloads the recommended one);
             // never strand someone who has a working model on one they haven't downloaded.
             let usable = models::installed(&entry.model) || !models::MODELS.iter().any(|m| models::installed(m.id));
-            let apply = {
+            // (applies, the model changed)
+            let (apply, changed) = {
                 let mut s = self.settings.lock();
                 let apply = s.model_source == "default" && usable;
+                let changed = apply && s.model != entry.model;
                 if apply {
                     s.model = entry.model.clone();
                     s.model_source = "registry".into();
                 }
-                apply
+                (apply, changed)
             };
             if apply {
                 self.save_settings();
-                if models::installed(&entry.model) {
+                if changed && models::installed(&entry.model) {
                     self.load_model();
                 }
             }
@@ -342,7 +366,7 @@ impl Core {
         }
         match self.begin_benchmark() {
             Ok(guard) => {
-                if let Err(e) = self.run_benchmark(false, guard) {
+                if let Err(e) = self.run_benchmark(Scope::Auto, guard) {
                     log::warn!("device benchmark failed: {e}");
                 }
             }
@@ -359,26 +383,41 @@ impl Core {
         Ok(BenchGuard(self.clone()))
     }
 
+    /// A dictation is under way or a model is loading: not a moment to time anything.
+    fn busy(&self) -> bool {
+        matches!(
+            self.status().0,
+            Status::Recording | Status::Transcribing | Status::Typing | Status::Loading
+        ) || self.recording.lock().is_some()
+    }
+
     /// Hold until no dictation is happening, so a recording is never delayed by more than
     /// the one clip in flight.
     fn wait_quiet(&self) {
-        loop {
-            let busy = matches!(
-                self.status().0,
-                Status::Recording | Status::Transcribing | Status::Typing | Status::Loading
-            ) || self.recording.lock().is_some();
-            if !busy {
-                return;
-            }
+        while self.busy() {
             std::thread::sleep(Duration::from_millis(300));
+        }
+    }
+
+    /// Run one benchmark clip. `run` does the transcribing (holding whatever lock it needs for
+    /// that clip only) and returns its own compute time. A clip that overlapped a dictation
+    /// is timed against a busy machine, so it runs again.
+    fn quiet_clip(&self, run: &mut dyn FnMut() -> Timed) -> Timed {
+        loop {
+            self.wait_quiet();
+            let before = self.dictations.load(Ordering::Acquire);
+            let out = run()?;
+            if self.dictations.load(Ordering::Acquire) == before && !self.busy() {
+                return Ok(out);
+            }
         }
     }
 
     /// Measure the active model, and with `all` every other installed one. Saves the report,
     /// emits `benchmark-progress` then `benchmark-done` (or `benchmark-error`), and moves to the
     /// pick unless the user chose a model themselves.
-    pub fn run_benchmark(self: &Shared, all: bool, _guard: BenchGuard) -> anyhow::Result<Report> {
-        let result = self.measure(all);
+    pub fn run_benchmark(self: &Shared, scope: Scope, _guard: BenchGuard) -> anyhow::Result<Report> {
+        let result = self.measure(scope);
         match &result {
             Ok(report) => {
                 let _ = self.app.emit("benchmark-done", report);
@@ -393,45 +432,66 @@ impl Core {
         result
     }
 
-    fn measure(self: &Shared, all: bool) -> anyhow::Result<Report> {
+    fn measure(self: &Shared, scope: Scope) -> anyhow::Result<Report> {
         let active = self
             .active_model()
             .ok_or_else(|| anyhow::anyhow!("No model is loaded yet"))?;
         let mut ids = vec![active.clone()];
-        if all {
-            ids.extend(
-                models::MODELS
-                    .iter()
-                    .filter(|m| m.id != active && models::installed(m.id))
-                    .map(|m| m.id.to_string()),
-            );
+        // The other installed models (nothing is downloaded for a benchmark).
+        let others: Vec<String> = models::MODELS
+            .iter()
+            .filter(|m| m.id != active && models::installed(m.id))
+            .map(|m| m.id.to_string())
+            .collect();
+        if scope == Scope::All {
+            ids.extend(others.iter().cloned());
         }
         let mut fresh: Vec<ModelResult> = vec![];
-        for id in &ids {
+        let mut next = 0;
+        while next < ids.len() {
+            let id = &ids[next];
+            next += 1;
             let progress = |clip: usize, clips: usize| {
-                // Every clip starts after this returns, outside the timing.
-                if clip < clips {
-                    self.wait_quiet();
-                }
                 let _ = self.app.emit("benchmark-progress", json!({ "model": id, "clip": clip, "clips": clips }));
             };
             let run = if *id == active {
                 // The live engine, one clip per lock, so a dictation waits at most one clip.
-                let mut clip = |samples: &[f32]| -> anyhow::Result<String> {
-                    let mut engine = self.engine.lock();
-                    match engine.as_mut() {
-                        Some((loaded, e)) if loaded == id => e.transcribe(samples, "en"),
-                        _ => anyhow::bail!("The active model changed during the benchmark"),
-                    }
+                let mut clip = |samples: &[f32]| -> anyhow::Result<(String, Duration)> {
+                    self.quiet_clip(&mut || {
+                        let mut engine = self.engine.lock();
+                        match engine.as_mut() {
+                            Some((loaded, e)) if loaded == id => {
+                                let t = Instant::now();
+                                let text = e.transcribe(samples, "en")?;
+                                Ok((text, t.elapsed()))
+                            }
+                            _ => anyhow::bail!("The active model changed during the benchmark"),
+                        }
+                    })
                 };
                 benchmark::run_suite(id, &mut clip, &progress)
             } else {
+                self.wait_quiet();
                 models::Engine::load(id).and_then(|mut engine| {
-                    benchmark::run_suite(id, &mut |s: &[f32]| engine.transcribe(s, "en"), &progress)
+                    let mut clip = |samples: &[f32]| -> anyhow::Result<(String, Duration)> {
+                        self.quiet_clip(&mut || {
+                            let t = Instant::now();
+                            let text = engine.transcribe(samples, "en")?;
+                            Ok((text, t.elapsed()))
+                        })
+                    };
+                    benchmark::run_suite(id, &mut clip, &progress)
                 })
             };
             match run {
-                Ok(r) => fresh.push(r),
+                Ok(r) => {
+                    // Automatic runs start with the active model alone. If it misses a bar,
+                    // measure the rest too, so the pick is a comparison and not a default.
+                    if scope == Scope::Auto && *id == active && !benchmark::passes(&r) {
+                        ids.extend(others.iter().cloned());
+                    }
+                    fresh.push(r);
+                }
                 // A model that won't load shouldn't sink the rest; the active one must work.
                 Err(e) if *id != active => log::warn!("benchmark of {id} failed: {e}"),
                 Err(e) => return Err(e),
@@ -467,6 +527,7 @@ impl Core {
         };
         if switch {
             self.save_settings();
+            self.wait_quiet();
             self.load_model();
         }
     }
@@ -604,6 +665,7 @@ impl Core {
                 // The mic is already running; publish the target before the recording, so a
                 // release can never find a recording without its target.
                 *self.target.lock() = capture.join().ok().flatten();
+                self.dictations.fetch_add(1, Ordering::AcqRel);
                 *self.recording.lock() = Some((r, Instant::now()));
                 let gen = self.recording_gen.fetch_add(1, Ordering::Relaxed) + 1;
                 self.cue("start");
@@ -893,5 +955,20 @@ fn order_overlay(w: &tauri::WebviewWindow, show: bool) {
             let _: () = msg_send![win, setCollectionBehavior: BEHAVIOR];
         }
         let _: () = msg_send![win, orderFrontRegardless];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn automatic_changes_never_override_the_user() {
+        assert!(!allows_model_change("user", true));
+        assert!(allows_model_change("user", false));
+        for src in ["default", "registry", "benchmark"] {
+            assert!(allows_model_change(src, true));
+            assert!(allows_model_change(src, false));
+        }
     }
 }

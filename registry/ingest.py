@@ -12,6 +12,7 @@ The bars and the pick rule must match src-tauri/src/benchmark.rs.
 """
 
 import json
+import math
 import os
 import re
 import statistics
@@ -28,6 +29,12 @@ TIE_WER = 0.005
 # Models Silas can install. Add new ids here when the catalog in models.rs grows.
 KNOWN_MODELS = {"parakeet-v3", "cohere-int4"}
 MAX_BODY = 20_000
+# The bundled set in src-tauri/bench (manifest.json). Every honest report measured exactly this
+# much audio; update these when the set changes.
+SUITE_CLIPS = 9
+SUITE_SECONDS = 62.2
+# No CPU transcribes this set 500x faster than real time; a bigger number is made up.
+MAX_SPEED = 500.0
 
 KEY_RE = re.compile(r"^(macos|windows|linux)/[a-z0-9]+(?:-[a-z0-9]+)*/[0-9]{1,4}$")
 # CPU names and OS versions need only these; no brackets, backticks or markup reach a comment.
@@ -51,7 +58,7 @@ def extract(body: str) -> dict:
     text = m.group(1) if m else body[body.find("{") : body.rfind("}") + 1]
     try:
         data = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
         raise Reject("The report isn't valid JSON. Please submit it from Silas without editing it.")
     if not isinstance(data, dict):
         raise Reject("The report isn't a JSON object.")
@@ -61,15 +68,15 @@ def extract(body: str) -> dict:
 def num(v, lo, hi, what, integer=False):
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         raise Reject(f"{what} must be a number.")
+    if not math.isfinite(v) or not lo <= v <= hi:
+        raise Reject(f"{what} is out of range.")
     if integer and int(v) != v:
         raise Reject(f"{what} must be a whole number.")
-    if not lo <= v <= hi:
-        raise Reject(f"{what} is out of range.")
     return int(v) if integer else float(v)
 
 
 def text(v, what, pattern=TEXT_RE):
-    if not isinstance(v, str) or not pattern.match(v):
+    if not isinstance(v, str) or not pattern.fullmatch(v):
         raise Reject(f"{what} has characters or a length Silas doesn't produce.")
     return v
 
@@ -113,17 +120,26 @@ def validate(data: dict) -> dict:
         if model in seen:
             raise Reject("The report lists a model twice.")
         seen.add(model)
-        clean.append(
-            {
-                "model": model,
-                "speed": num(r.get("speed"), 0.01, 10_000, f"{model} speed"),
-                "wer": num(r.get("wer"), 0, 1, f"{model} wer"),
-                "clips": num(r.get("clips"), 1, 1000, f"{model} clips", integer=True),
-                "audio_seconds": num(r.get("audio_seconds"), 1, 100_000, f"{model} audio_seconds"),
-                "compute_seconds": num(r.get("compute_seconds"), 0.0001, 100_000, f"{model} compute_seconds"),
-            }
-        )
+        res = {
+            "model": model,
+            "speed": num(r.get("speed"), 0.01, MAX_SPEED, f"{model} speed"),
+            "wer": num(r.get("wer"), 0, 1, f"{model} wer"),
+            "clips": num(r.get("clips"), 1, 1000, f"{model} clips", integer=True),
+            "audio_seconds": num(r.get("audio_seconds"), 1, 100_000, f"{model} audio_seconds"),
+            "compute_seconds": num(r.get("compute_seconds"), 0.0001, 100_000, f"{model} compute_seconds"),
+        }
+        # The numbers have to come from Silas's own set and agree with each other.
+        if res["clips"] != SUITE_CLIPS or abs(res["audio_seconds"] - SUITE_SECONDS) > 1.0:
+            raise Reject(f"{model} wasn't measured on Silas's benchmark set.")
+        if abs(res["audio_seconds"] / res["compute_seconds"] - res["speed"]) > 0.02 * res["speed"]:
+            raise Reject(f"{model} speed doesn't match its audio and compute seconds.")
+        clean.append(res)
     return {"schema": 1, "silas": silas, "device": device, "results": clean}
+
+
+def fastest(rs):
+    """The fastest; on an exact tie the lower model id, as in Silas."""
+    return min(rs, key=lambda r: (-r["speed"], r["model"]))["model"]
 
 
 def pick(results):
@@ -133,10 +149,9 @@ def pick(results):
     passing = [r for r in results if r["speed"] >= MIN_SPEED and r["wer"] <= MAX_WER]
     if passing:
         best = min(r["wer"] for r in passing)
-        close = [r for r in passing if r["wer"] - best <= TIE_WER]
-        return max(close, key=lambda r: r["speed"])["model"]
+        return fastest([r for r in passing if r["wer"] - best <= TIE_WER])
     accurate = [r for r in results if r["wer"] <= MAX_WER]
-    return max(accurate or results, key=lambda r: r["speed"])["model"]
+    return fastest(accurate or results)
 
 
 def rebuild(write: bool = True) -> dict:
@@ -187,11 +202,10 @@ def main() -> int:
     (REPORTS / f"{int(number)}.json").write_text(json.dumps(report, indent=2) + "\n")
     # The report PR adds only this file; devices.json is rebuilt on main after a maintainer
     # merges it, so report PRs never conflict with each other.
-    entry = rebuild(write=False)["devices"][report["device"]["key"]]
-    print(
-        f"Thanks! Once this is merged, {report['device']['cpu']} ({report['device']['os']}) "
-        f"will get {entry['model']}, from {entry['reports']} report(s)."
-    )
+    # Only validated slug and id text goes into the comment, never free text from the issue.
+    key = report["device"]["key"]
+    entry = rebuild(write=False)["devices"][key]
+    print(f"Thanks! Once this is merged, `{key}` will get `{entry['model']}`, from {entry['reports']} report(s).")
     return 0
 
 
