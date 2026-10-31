@@ -187,7 +187,8 @@ remove_appimage() {
 stop_linux_silas() {
   # The AppImage runtime records the resolved path, so a symlinked home matches too.
   img="$HOME/.local/bin/silas"
-  img_real="$(cd "$HOME/.local/bin" 2>/dev/null && pwd -P)/silas"
+  # "|| true": with no ~/.local/bin the failed cd would end the script under set -e.
+  img_real="$(cd "$HOME/.local/bin" 2>/dev/null && pwd -P || true)/silas"
   for pid in $(pgrep -x silas 2>/dev/null || true); do
     exe=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
     # After a package upgrade the running binary reads "/usr/bin/silas (deleted)".
