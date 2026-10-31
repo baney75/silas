@@ -91,14 +91,30 @@ jobs:
           if SILAS_LINUX_FORMAT=foo sh install.sh; then exit 1; fi
           sh install.sh --uninstall
           test ! -e /usr/bin/silas
-      - name: A user's own ~/.local/bin/silas survives
-        if: matrix.format == 'deb'
+      - name: A user's own ~/.local/bin/silas and launcher survive
         run: |
-          mkdir -p "$HOME/.local/bin"
+          mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
           printf '#!/bin/sh\necho mine\n' > "$HOME/.local/bin/silas"
-          sh install.sh
-          sh install.sh --uninstall
+          printf '[Desktop Entry]\nName=My silas\nExec="%s"\n' "$HOME/.local/bin/silas" > "$HOME/.local/share/applications/silas.desktop"
+          # A user process that is merely named silas must survive both paths.
+          cp /bin/sleep /tmp/silas
+          /tmp/silas 600 &
+          mine=$!
+          sleep 1
+          if [ "${{ matrix.format }}" = appimage ]; then
+            # The AppImage install refuses rather than overwrite someone's own file.
+            if SILAS_LINUX_FORMAT=appimage sh install.sh 2> refuse.txt; then exit 1; fi
+            grep -q "exists and isn't a Silas AppImage" refuse.txt
+          else
+            sh install.sh
+            sh install.sh --uninstall
+          fi
+          if sh install.sh --uninstall 2> err.txt; then exit 1; fi
+          grep -q "isn't a Silas AppImage" err.txt
           grep -q mine "$HOME/.local/bin/silas"
+          grep -q "My silas" "$HOME/.local/share/applications/silas.desktop"
+          kill -0 "$mine" # this exact process survived, not just something named silas
+          kill "$mine"
 
   rpm:
     strategy:
