@@ -7,6 +7,8 @@
 # the only Linux channel. Other knobs: SILAS_INSTALL_DIR (macOS, default /Applications),
 # SILAS_LINUX_FORMAT=appimage (skip the .deb/.rpm), SILAS_NO_OPEN=1 (don't launch Silas).
 set -eu
+# A CDPATH from the user's shell would send `cd` to some other folder of the same name.
+unset CDPATH
 REPO="https://github.com/baney75/silas/releases"
 RAW="https://raw.githubusercontent.com/baney75/silas/main"
 UNINSTALL="curl -fsSL $RAW/install.sh | sh -s -- --uninstall"
@@ -31,11 +33,14 @@ staged=""
 trap 'rm -rf "$tmp"; [ -z "$staged" ] || rm -f "$staged"' EXIT
 trap 'exit 130' INT TERM
 
-# PIDs of processes whose executable lives inside folder $1 or $2 (the same folder with and
-# without symlinks resolved), matched as literal strings, never a regex, so folder names with
-# dots or brackets can't match some other app.
+# PIDs of processes whose executable path starts with $1 or $2 (the same folder with and
+# without symlinks resolved). The folder is compared as a literal prefix, never a regex, and
+# reaches awk through the environment, which keeps backslashes in folder names as they are.
 pids_in() {
-  ps -axo pid=,comm= | awk -v a="$1" -v b="$2" 'index($0, a) || index($0, b) { print $1 }'
+  ps -axo pid=,comm= | A="$1" B="$2" awk '{
+    pid = $1; path = $0; sub(/^[ \t]*[0-9]+[ \t]+/, "", path)
+    if (index(path, ENVIRON["A"]) == 1 || index(path, ENVIRON["B"]) == 1) print pid
+  }'
 }
 
 quit_mac() {
@@ -123,6 +128,7 @@ Exec="$HOME/.local/bin/silas"
 Icon=silas
 Terminal=false
 Categories=Utility;Accessibility;
+X-Silas-Installer=true
 EOF
   if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database "$apps" >/dev/null 2>&1 || true; fi
 }
@@ -143,9 +149,8 @@ remove_appimage() {
     rm -f "$HOME/.local/bin/silas" || die "Couldn't remove $HOME/.local/bin/silas."
     removed=1
     ours=1
-  elif [ ! -e "$HOME/.local/bin/silas" ] && [ ! -L "$HOME/.local/bin/silas" ] &&
-    grep -qxF "Exec=\"$HOME/.local/bin/silas\"" "$share/applications/silas.desktop" 2>/dev/null; then
-    ours=1 # our launcher entry, left behind by an AppImage that's already gone
+  elif grep -qxF "X-Silas-Installer=true" "$share/applications/silas.desktop" 2>/dev/null; then
+    ours=1 # the launcher entry this script wrote (it carries the marker); its AppImage is gone
   fi
   # The launcher entry and icon go only with our AppImage: someone's own silas keeps theirs.
   if [ -n "$ours" ]; then
@@ -164,6 +169,19 @@ remove_appimage() {
   [ -n "$removed" ]
 }
 
+# Stop running Silas processes that belong to this install: the package binary, or our
+# AppImage (an AppImage's process carries APPIMAGE=<its file>). Another program that merely
+# has the name silas is left alone.
+stop_linux_silas() {
+  for pid in $(pgrep -x silas 2>/dev/null || true); do
+    exe=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
+    if [ "$exe" = /usr/bin/silas ] ||
+      tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | grep -qxF "APPIMAGE=$HOME/.local/bin/silas"; then
+      kill "$pid" 2>/dev/null || true
+    fi
+  done
+}
+
 package_installed() {
   if command -v dpkg >/dev/null 2>&1 && dpkg -s silas >/dev/null 2>&1; then return 0; fi
   command -v rpm >/dev/null 2>&1 && rpm -q silas >/dev/null 2>&1
@@ -171,7 +189,7 @@ package_installed() {
 
 linux_uninstall() {
   # Stop Silas only once we know it's ours to remove.
-  if package_installed || is_our_appimage; then pkill -x silas 2>/dev/null || true; fi
+  if package_installed || is_our_appimage; then stop_linux_silas; fi
   found=""
   if command -v dpkg >/dev/null 2>&1 && dpkg -s silas >/dev/null 2>&1; then
     as_root apt-get remove -y silas
@@ -248,7 +266,7 @@ linux_install() {
     say "Downloading Silas (AppImage)"
     curl -fL# "$url" -o "$staged" || die "Could not download $url."
     chmod +x "$staged"
-    if is_our_appimage; then pkill -x silas 2>/dev/null || true; fi
+    stop_linux_silas
     mv -f "$staged" "$HOME/.local/bin/silas"
     staged=""
     linux_desktop_entry
@@ -263,7 +281,7 @@ linux_install() {
   else
     say "Downloading Silas (.$format)"
     curl -fL# "$url" -o "$tmp/silas.$format" || die "Could not download $url."
-    if package_installed || is_our_appimage; then pkill -x silas 2>/dev/null || true; fi
+    stop_linux_silas
     if [ "$format" = deb ]; then
       as_root apt-get install -y "$tmp/silas.deb"
     elif command -v dnf >/dev/null 2>&1; then
@@ -288,9 +306,17 @@ linux_install() {
   say "Then hold Right Ctrl and speak."
 }
 
-# Use the custom folder as one absolute, canonical path: relative or "~/x/" forms would never
-# match the running app's path.
-if [ -n "${SILAS_INSTALL_DIR:-}" ]; then
+# macOS custom folder: one absolute path, so it can be compared with a running app's path.
+# A quoted "~/x" isn't expanded by the shell, so expand it here; "./" keeps a name starting
+# with "-" from reading as an option to cd.
+if [ "$(uname -s)" = Darwin ] && [ -n "${SILAS_INSTALL_DIR:-}" ]; then
+  # shellcheck disable=SC2088 # a literal "~/" is matched and expanded here on purpose
+  case "$SILAS_INSTALL_DIR" in
+  "~") SILAS_INSTALL_DIR=$HOME ;;
+  "~/"*) SILAS_INSTALL_DIR="$HOME/${SILAS_INSTALL_DIR#"~/"}" ;;
+  /*) ;;
+  *) SILAS_INSTALL_DIR="./$SILAS_INSTALL_DIR" ;;
+  esac
   [ "$action" = uninstall ] || mkdir -p "$SILAS_INSTALL_DIR" || die "Can't create $SILAS_INSTALL_DIR."
   [ -d "$SILAS_INSTALL_DIR" ] || die "Silas isn't installed in $SILAS_INSTALL_DIR."
   SILAS_INSTALL_DIR_REAL=$(cd "$SILAS_INSTALL_DIR" && pwd -P)

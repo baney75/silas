@@ -96,9 +96,12 @@ jobs:
           mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
           printf '#!/bin/sh\necho mine\n' > "$HOME/.local/bin/silas"
           printf '[Desktop Entry]\nName=My silas\nExec="%s"\n' "$HOME/.local/bin/silas" > "$HOME/.local/share/applications/silas.desktop"
+          # A user process that is merely named silas must survive both paths.
+          cp /bin/sleep /tmp/silas && /tmp/silas 600 & sleep 1
           if [ "${{ matrix.format }}" = appimage ]; then
             # The AppImage install refuses rather than overwrite someone's own file.
-            if SILAS_LINUX_FORMAT=appimage sh install.sh; then exit 1; fi
+            if SILAS_LINUX_FORMAT=appimage sh install.sh 2> refuse.txt; then exit 1; fi
+            grep -q "exists and isn't a Silas AppImage" refuse.txt
           else
             sh install.sh
             sh install.sh --uninstall
@@ -107,6 +110,7 @@ jobs:
           grep -q "isn't a Silas AppImage" err.txt
           grep -q mine "$HOME/.local/bin/silas"
           grep -q "My silas" "$HOME/.local/share/applications/silas.desktop"
+          pgrep -x silas
 
   rpm:
     strategy:
