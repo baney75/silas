@@ -2,9 +2,10 @@
 #   irm https://raw.githubusercontent.com/baney75/silas/main/install.ps1 | iex
 # Remove it (your dictionary and history stay):
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/baney75/silas/main/install.ps1))) -Uninstall
-param([switch]$Uninstall)
-# Run in a child scope so `irm | iex` leaves the caller's preferences and variables alone.
+# Everything, the -Uninstall switch included, runs in a child scope so `irm | iex` leaves the
+# caller's preferences and variables alone. `@args` carries -Uninstall in from the scriptblock form.
 & {
+  param([switch]$Uninstall)
   $ErrorActionPreference = "Stop"
   # The progress bar makes Invoke-WebRequest many times slower in Windows PowerShell 5.1.
   $ProgressPreference = "SilentlyContinue"
@@ -49,4 +50,4 @@ param([switch]$Uninstall)
   if ($env:SILAS_NO_OPEN) { Write-Host "Silas is installed in $dir." -ForegroundColor Green; return }
   Start-Process $exe
   Write-Host "Silas is installed. Hold Right Ctrl, speak, and let go." -ForegroundColor Green
-}
+} @args

@@ -80,13 +80,25 @@ jobs:
         if: matrix.format == 'appimage'
         run: |
           SILAS_LINUX_FORMAT=appimage sh install.sh
-          sh install.sh
+          SILAS_LINUX_FORMAT=deb sh install.sh
           test -x /usr/bin/silas
           test ! -e "$HOME/.local/bin/silas"
           test ! -e "$HOME/.local/share/applications/silas.desktop"
           test ! -e /etc/udev/rules.d/70-silas-input.rules
+          # An AppImage over the package is refused, and a bad format is refused.
+          if SILAS_LINUX_FORMAT=appimage sh install.sh; then exit 1; fi
+          test ! -e "$HOME/.local/bin/silas"
+          if SILAS_LINUX_FORMAT=foo sh install.sh; then exit 1; fi
           sh install.sh --uninstall
           test ! -e /usr/bin/silas
+      - name: A user's own ~/.local/bin/silas survives
+        if: matrix.format == 'deb'
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          printf '#!/bin/sh\necho mine\n' > "$HOME/.local/bin/silas"
+          sh install.sh
+          sh install.sh --uninstall
+          grep -q mine "$HOME/.local/bin/silas"
 
   rpm:
     strategy:

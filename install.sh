@@ -26,17 +26,25 @@ case "${1:-}" in
 esac
 
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+staged=""
+trap 'rm -rf "$tmp"; [ -z "$staged" ] || rm -f "$staged"' EXIT
+trap 'exit 130' INT TERM
 
 quit_mac() {
+  if [ -n "${SILAS_INSTALL_DIR:-}" ]; then
+    # A custom folder: stop only a Silas running from that folder, never the user's main one.
+    pkill -f "$SILAS_INSTALL_DIR/Silas.app/Contents/MacOS/" 2>/dev/null || true
+    i=0
+    while pgrep -f "$SILAS_INSTALL_DIR/Silas.app/Contents/MacOS/" >/dev/null && [ $i -lt 20 ]; do sleep 0.5; i=$((i + 1)); done
+    return 0
+  fi
   osascript -e 'quit app "Silas"' >/dev/null 2>&1 || true
   i=0
   while pgrep -xq silas && [ $i -lt 20 ]; do sleep 0.5; i=$((i + 1)); done
 }
 
 mac_uninstall() {
-  # A custom folder (tests, scripted installs) never holds the Silas that's running.
-  [ -n "${SILAS_INSTALL_DIR:-}" ] || quit_mac
+  quit_mac
   found=""
   for d in /Applications "$HOME/Applications"; do
     # With SILAS_INSTALL_DIR set, touch only that folder.
@@ -108,14 +116,28 @@ EOF
 }
 
 # Remove the AppImage install: binary, launcher entry, icon and udev rule, each on its own.
+# True if ~/.local/bin/silas is an AppImage this script put there (AppImage magic "AI" 0x02 at
+# byte 8), so a user's own script or build of that name is never deleted.
+is_our_appimage() {
+  f="$HOME/.local/bin/silas"
+  [ -f "$f" ] && [ ! -L "$f" ] && [ "$(od -An -tx1 -j8 -N3 "$f" 2>/dev/null | tr -d ' \n')" = "414902" ]
+}
+
 remove_appimage() {
   share="${XDG_DATA_HOME:-$HOME/.local/share}"
   removed=""
-  for f in "$HOME/.local/bin/silas" "$share/applications/silas.desktop" "$share/icons/hicolor/128x128/apps/silas.png"; do
-    if [ -e "$f" ]; then rm -f "$f"; removed=1; fi
+  if is_our_appimage; then
+    rm -f "$HOME/.local/bin/silas" || die "Couldn't remove $HOME/.local/bin/silas."
+    removed=1
+  fi
+  for f in "$share/applications/silas.desktop" "$share/icons/hicolor/128x128/apps/silas.png"; do
+    if [ -e "$f" ] || [ -L "$f" ]; then
+      rm -f "$f" || die "Couldn't remove $f."
+      removed=1
+    fi
   done
   if [ -f /etc/udev/rules.d/70-silas-input.rules ]; then
-    as_root rm -f /etc/udev/rules.d/70-silas-input.rules
+    as_root rm -f /etc/udev/rules.d/70-silas-input.rules || die "Couldn't remove the udev rule."
     as_root udevadm control --reload 2>/dev/null || true
     removed=1
   fi
@@ -167,6 +189,13 @@ linux_install() {
   deb | rpm | appimage) ;;
   *) die "SILAS_LINUX_FORMAT must be deb, rpm or appimage." ;;
   esac
+  # Fail before any download or stopping Silas when the package tool is missing.
+  if [ "$format" = deb ] && ! command -v apt-get >/dev/null 2>&1; then
+    die "SILAS_LINUX_FORMAT=deb needs apt-get."
+  fi
+  if [ "$format" = rpm ] && ! command -v dnf >/dev/null 2>&1 && ! command -v zypper >/dev/null 2>&1; then
+    die "SILAS_LINUX_FORMAT=rpm needs dnf or zypper."
+  fi
   if [ "$format" = appimage ] && package_installed; then
     die "Silas is installed as a package. Remove it first: sh install.sh --uninstall"
   fi
@@ -191,12 +220,13 @@ linux_install() {
   if [ "$format" = appimage ]; then
     # Stage beside the target so the final mv is a rename on one filesystem.
     mkdir -p "$HOME/.local/bin"
-    staged="$HOME/.local/bin/.silas.new"
+    staged=$(mktemp "$HOME/.local/bin/.silas.XXXXXX")
     say "Downloading Silas (AppImage)"
-    curl -fL# "$url" -o "$staged" || { rm -f "$staged"; die "Could not download $url."; }
+    curl -fL# "$url" -o "$staged" || die "Could not download $url."
     chmod +x "$staged"
     pkill -x silas 2>/dev/null || true
     mv -f "$staged" "$HOME/.local/bin/silas"
+    staged=""
     linux_desktop_entry
     say "Allowing Silas to read the hold-to-talk key (needs sudo once)"
     printf 'KERNEL=="uinput", TAG+="uaccess"\nSUBSYSTEM=="input", KERNEL=="event*", TAG+="uaccess"\n' |
