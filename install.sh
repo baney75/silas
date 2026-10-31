@@ -70,7 +70,8 @@ mac_install() {
   quit_mac
   if [ -n "${SILAS_INSTALL_DIR:-}" ]; then
     dest="$SILAS_INSTALL_DIR"
-    mkdir -p "$dest" && [ -w "$dest" ] || die "Can't write to $dest."
+    mkdir -p "$dest" || die "Can't create $dest."
+    [ -w "$dest" ] || die "Can't write to $dest."
   else
     dest=/Applications
     [ -w "$dest" ] || dest="$HOME/Applications"
@@ -122,8 +123,8 @@ remove_appimage() {
 }
 
 package_installed() {
-  { command -v dpkg >/dev/null 2>&1 && dpkg -s silas >/dev/null 2>&1; } ||
-    { command -v rpm >/dev/null 2>&1 && rpm -q silas >/dev/null 2>&1; }
+  if command -v dpkg >/dev/null 2>&1 && dpkg -s silas >/dev/null 2>&1; then return 0; fi
+  command -v rpm >/dev/null 2>&1 && rpm -q silas >/dev/null 2>&1
 }
 
 linux_uninstall() {
@@ -152,8 +153,9 @@ linux_install() {
   major=${libc%%.*}
   minor=${libc#*.}
   minor=${minor%%.*}
-  [ "$major" -gt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -ge 39 ]; } ||
+  if [ "$major" -lt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -lt 39 ]; }; then
     die "Silas needs glibc 2.39 or newer (Ubuntu 24.04, Fedora 40 or later). This system has $libc."
+  fi
 
   format="${SILAS_LINUX_FORMAT:-}"
   if [ -z "$format" ]; then
