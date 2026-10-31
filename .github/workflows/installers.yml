@@ -97,7 +97,10 @@ jobs:
           printf '#!/bin/sh\necho mine\n' > "$HOME/.local/bin/silas"
           printf '[Desktop Entry]\nName=My silas\nExec="%s"\n' "$HOME/.local/bin/silas" > "$HOME/.local/share/applications/silas.desktop"
           # A user process that is merely named silas must survive both paths.
-          cp /bin/sleep /tmp/silas && /tmp/silas 600 & sleep 1
+          cp /bin/sleep /tmp/silas
+          /tmp/silas 600 &
+          mine=$!
+          sleep 1
           if [ "${{ matrix.format }}" = appimage ]; then
             # The AppImage install refuses rather than overwrite someone's own file.
             if SILAS_LINUX_FORMAT=appimage sh install.sh 2> refuse.txt; then exit 1; fi
@@ -110,7 +113,8 @@ jobs:
           grep -q "isn't a Silas AppImage" err.txt
           grep -q mine "$HOME/.local/bin/silas"
           grep -q "My silas" "$HOME/.local/share/applications/silas.desktop"
-          pgrep -x silas
+          kill -0 "$mine" # this exact process survived, not just something named silas
+          kill "$mine"
 
   rpm:
     strategy:

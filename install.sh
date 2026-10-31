@@ -46,8 +46,9 @@ pids_in() {
 quit_mac() {
   if [ -n "${SILAS_INSTALL_DIR:-}" ]; then
     # A custom folder: stop only a Silas running from that folder, never the user's main one.
-    a="$SILAS_INSTALL_DIR/Silas.app/Contents/MacOS/"
-    b="$SILAS_INSTALL_DIR_REAL/Silas.app/Contents/MacOS/"
+    # ${x%/}: a folder of "/" must give "/Silas.app/...", not "//Silas.app/...".
+    a="${SILAS_INSTALL_DIR%/}/Silas.app/Contents/MacOS/"
+    b="${SILAS_INSTALL_DIR_REAL%/}/Silas.app/Contents/MacOS/"
     pids=$(pids_in "$a" "$b")
     # shellcheck disable=SC2086
     [ -z "$pids" ] || kill $pids 2>/dev/null || true
@@ -145,14 +146,22 @@ remove_appimage() {
   share="${XDG_DATA_HOME:-$HOME/.local/share}"
   removed=""
   ours=""
+  entry="$share/applications/silas.desktop"
+  binary_ours=""
   if is_our_appimage; then
     rm -f "$HOME/.local/bin/silas" || die "Couldn't remove $HOME/.local/bin/silas."
     removed=1
-    ours=1
-  elif grep -qxF "X-Silas-Installer=true" "$share/applications/silas.desktop" 2>/dev/null; then
-    ours=1 # the launcher entry this script wrote (it carries the marker); its AppImage is gone
+    binary_ours=1
   fi
-  # The launcher entry and icon go only with our AppImage: someone's own silas keeps theirs.
+  # The launcher entry (and its icon) is ours if it carries the installer's marker, or, for
+  # entries from installers before the marker, if it is exactly Name=Silas launching our
+  # AppImage. Anyone's own entry or icon stays.
+  if grep -qxF "X-Silas-Installer=true" "$entry" 2>/dev/null; then
+    ours=1
+  elif [ -n "$binary_ours" ] && grep -qxF "Name=Silas" "$entry" 2>/dev/null &&
+    grep -qxF "Exec=\"$HOME/.local/bin/silas\"" "$entry" 2>/dev/null; then
+    ours=1
+  fi
   if [ -n "$ours" ]; then
     for f in "$share/applications/silas.desktop" "$share/icons/hicolor/128x128/apps/silas.png"; do
       if [ -e "$f" ] || [ -L "$f" ]; then
@@ -161,7 +170,10 @@ remove_appimage() {
       fi
     done
   fi
-  if [ -f /etc/udev/rules.d/70-silas-input.rules ]; then
+  # The udev rule only ever came from this script's AppImage install; leave it when someone
+  # else's ~/.local/bin/silas is there.
+  if [ -f /etc/udev/rules.d/70-silas-input.rules ] &&
+    { [ -n "$binary_ours" ] || [ -n "$ours" ] || { [ ! -e "$HOME/.local/bin/silas" ] && [ ! -L "$HOME/.local/bin/silas" ]; }; }; then
     as_root rm -f /etc/udev/rules.d/70-silas-input.rules || die "Couldn't remove the udev rule."
     as_root udevadm control --reload 2>/dev/null || true
     removed=1
@@ -173,17 +185,26 @@ remove_appimage() {
 # AppImage (an AppImage's process carries APPIMAGE=<its file>). Another program that merely
 # has the name silas is left alone.
 stop_linux_silas() {
+  # The AppImage runtime records the resolved path, so a symlinked home matches too.
+  img="$HOME/.local/bin/silas"
+  img_real="$(cd "$HOME/.local/bin" 2>/dev/null && pwd -P)/silas"
   for pid in $(pgrep -x silas 2>/dev/null || true); do
     exe=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
-    if [ "$exe" = /usr/bin/silas ] ||
-      tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | grep -qxF "APPIMAGE=$HOME/.local/bin/silas"; then
+    # After a package upgrade the running binary reads "/usr/bin/silas (deleted)".
+    exe=${exe% (deleted)}
+    case "$exe" in
+    /usr/bin/silas | /bin/silas) kill "$pid" 2>/dev/null || true; continue ;;
+    esac
+    if tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | grep -qxF -e "APPIMAGE=$img" -e "APPIMAGE=$img_real"; then
       kill "$pid" 2>/dev/null || true
     fi
   done
 }
 
 package_installed() {
-  if command -v dpkg >/dev/null 2>&1 && dpkg -s silas >/dev/null 2>&1; then return 0; fi
+  # dpkg keeps a removed package as "config-files"; only an installed one counts.
+  if command -v dpkg-query >/dev/null 2>&1 &&
+    [ "$(dpkg-query -W -f='${Status}' silas 2>/dev/null)" = "install ok installed" ]; then return 0; fi
   command -v rpm >/dev/null 2>&1 && rpm -q silas >/dev/null 2>&1
 }
 
@@ -191,7 +212,8 @@ linux_uninstall() {
   # Stop Silas only once we know it's ours to remove.
   if package_installed || is_our_appimage; then stop_linux_silas; fi
   found=""
-  if command -v dpkg >/dev/null 2>&1 && dpkg -s silas >/dev/null 2>&1; then
+  if command -v dpkg-query >/dev/null 2>&1 &&
+    [ "$(dpkg-query -W -f='${Status}' silas 2>/dev/null)" = "install ok installed" ]; then
     as_root apt-get remove -y silas
     found=deb
   elif command -v rpm >/dev/null 2>&1 && rpm -q silas >/dev/null 2>&1; then
@@ -310,6 +332,10 @@ linux_install() {
 # A quoted "~/x" isn't expanded by the shell, so expand it here; "./" keeps a name starting
 # with "-" from reading as an option to cd.
 if [ "$(uname -s)" = Darwin ] && [ -n "${SILAS_INSTALL_DIR:-}" ]; then
+  case "$SILAS_INSTALL_DIR" in
+  *"
+"*) die "SILAS_INSTALL_DIR can't contain a line break." ;;
+  esac
   # shellcheck disable=SC2088 # a literal "~/" is matched and expanded here on purpose
   case "$SILAS_INSTALL_DIR" in
   "~") SILAS_INSTALL_DIR=$HOME ;;
