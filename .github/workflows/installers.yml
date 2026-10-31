@@ -1,0 +1,112 @@
+name: Installers
+# Runs the real one-line installers against the published releases on each OS, then
+# uninstalls, so a broken install path fails here instead of on someone's computer.
+on:
+  pull_request:
+    paths: [install.sh, install.ps1, .github/workflows/installers.yml]
+  push:
+    branches: [main]
+    paths: [install.sh, install.ps1, .github/workflows/installers.yml]
+  schedule:
+    - cron: "30 9 * * *" # after the nightly build
+  workflow_dispatch:
+concurrency:
+  group: installers-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+env:
+  SILAS_NO_OPEN: "1"
+  GITHUB_TOKEN: ${{ github.token }}
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - run: shellcheck -s sh install.sh
+      - run: dash -n install.sh
+      - name: PowerShell parses
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors; exit 1 }
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - name: Install stable
+        run: SILAS_INSTALL_DIR="$RUNNER_TEMP/apps" sh install.sh
+      - run: codesign --verify --deep --strict "$RUNNER_TEMP/apps/Silas.app"
+      - name: Uninstall
+        run: |
+          SILAS_INSTALL_DIR="$RUNNER_TEMP/apps" sh install.sh --uninstall
+          test ! -e "$RUNNER_TEMP/apps/Silas.app"
+
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        format: [deb, appimage]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - name: Install (${{ matrix.format }})
+        run: SILAS_LINUX_FORMAT=${{ matrix.format }} sh install.sh
+      - name: Installed
+        run: |
+          if [ "${{ matrix.format }}" = deb ]; then
+            test -x /usr/bin/silas && test -f /usr/lib/udev/rules.d/70-silas-input.rules
+          else
+            test -x "$HOME/.local/bin/silas"
+            grep -qx "Exec=\"$HOME/.local/bin/silas\"" "$HOME/.local/share/applications/silas.desktop"
+            test -s "$HOME/.local/share/icons/hicolor/128x128/apps/silas.png"
+            test -f /etc/udev/rules.d/70-silas-input.rules
+          fi
+      - name: Uninstall
+        run: |
+          sh install.sh --uninstall
+          test ! -e /usr/bin/silas && test ! -e "$HOME/.local/bin/silas"
+          test ! -e "$HOME/.local/share/applications/silas.desktop"
+          test ! -e /etc/udev/rules.d/70-silas-input.rules
+
+  rpm:
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["fedora:40", "opensuse/tumbleweed"]
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - name: curl (minimal images may lack it)
+        run: command -v curl || zypper --non-interactive install curl || dnf install -y curl
+      - name: Install (.rpm, as root without sudo)
+        run: sh install.sh
+      - run: test -x /usr/bin/silas && rpm -q silas
+      - name: Uninstall
+        run: |
+          sh install.sh --uninstall
+          test ! -e /usr/bin/silas && ! rpm -q silas
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - name: Install (the README's one-liner, from this checkout)
+        shell: powershell
+        run: Get-Content -Raw install.ps1 | Invoke-Expression
+      - shell: powershell
+        run: if (-not (Test-Path "$env:LOCALAPPDATA\Silas\silas.exe")) { exit 1 }
+      - name: Uninstall
+        shell: powershell
+        run: |
+          & ([scriptblock]::Create((Get-Content -Raw install.ps1))) -Uninstall
+          Start-Sleep -Seconds 3
+          if (Test-Path "$env:LOCALAPPDATA\Silas\silas.exe") { exit 1 }
