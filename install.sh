@@ -9,6 +9,7 @@
 set -eu
 REPO="https://github.com/baney75/silas/releases"
 RAW="https://raw.githubusercontent.com/baney75/silas/main"
+UNINSTALL="curl -fsSL $RAW/install.sh | sh -s -- --uninstall"
 say() { printf '\033[1;33m›\033[0m %s\n' "$1"; }
 die() { printf '\033[1;31m✗\033[0m %s\n' "$1" >&2; exit 1; }
 # Root shells (containers, some servers) have no sudo and don't need it.
@@ -30,12 +31,23 @@ staged=""
 trap 'rm -rf "$tmp"; [ -z "$staged" ] || rm -f "$staged"' EXIT
 trap 'exit 130' INT TERM
 
+# PIDs of processes whose executable lives inside folder $1 or $2 (the same folder with and
+# without symlinks resolved), matched as literal strings, never a regex, so folder names with
+# dots or brackets can't match some other app.
+pids_in() {
+  ps -axo pid=,comm= | awk -v a="$1" -v b="$2" 'index($0, a) || index($0, b) { print $1 }'
+}
+
 quit_mac() {
   if [ -n "${SILAS_INSTALL_DIR:-}" ]; then
     # A custom folder: stop only a Silas running from that folder, never the user's main one.
-    pkill -f "$SILAS_INSTALL_DIR/Silas.app/Contents/MacOS/" 2>/dev/null || true
+    a="$SILAS_INSTALL_DIR/Silas.app/Contents/MacOS/"
+    b="$SILAS_INSTALL_DIR_REAL/Silas.app/Contents/MacOS/"
+    pids=$(pids_in "$a" "$b")
+    # shellcheck disable=SC2086
+    [ -z "$pids" ] || kill $pids 2>/dev/null || true
     i=0
-    while pgrep -f "$SILAS_INSTALL_DIR/Silas.app/Contents/MacOS/" >/dev/null && [ $i -lt 20 ]; do sleep 0.5; i=$((i + 1)); done
+    while [ -n "$(pids_in "$a" "$b")" ] && [ $i -lt 20 ]; do sleep 0.5; i=$((i + 1)); done
     return 0
   fi
   osascript -e 'quit app "Silas"' >/dev/null 2>&1 || true
@@ -126,16 +138,24 @@ is_our_appimage() {
 remove_appimage() {
   share="${XDG_DATA_HOME:-$HOME/.local/share}"
   removed=""
+  ours=""
   if is_our_appimage; then
     rm -f "$HOME/.local/bin/silas" || die "Couldn't remove $HOME/.local/bin/silas."
     removed=1
+    ours=1
+  elif [ ! -e "$HOME/.local/bin/silas" ] && [ ! -L "$HOME/.local/bin/silas" ] &&
+    grep -qxF "Exec=\"$HOME/.local/bin/silas\"" "$share/applications/silas.desktop" 2>/dev/null; then
+    ours=1 # our launcher entry, left behind by an AppImage that's already gone
   fi
-  for f in "$share/applications/silas.desktop" "$share/icons/hicolor/128x128/apps/silas.png"; do
-    if [ -e "$f" ] || [ -L "$f" ]; then
-      rm -f "$f" || die "Couldn't remove $f."
-      removed=1
-    fi
-  done
+  # The launcher entry and icon go only with our AppImage: someone's own silas keeps theirs.
+  if [ -n "$ours" ]; then
+    for f in "$share/applications/silas.desktop" "$share/icons/hicolor/128x128/apps/silas.png"; do
+      if [ -e "$f" ] || [ -L "$f" ]; then
+        rm -f "$f" || die "Couldn't remove $f."
+        removed=1
+      fi
+    done
+  fi
   if [ -f /etc/udev/rules.d/70-silas-input.rules ]; then
     as_root rm -f /etc/udev/rules.d/70-silas-input.rules || die "Couldn't remove the udev rule."
     as_root udevadm control --reload 2>/dev/null || true
@@ -150,7 +170,8 @@ package_installed() {
 }
 
 linux_uninstall() {
-  pkill -x silas 2>/dev/null || true
+  # Stop Silas only once we know it's ours to remove.
+  if package_installed || is_our_appimage; then pkill -x silas 2>/dev/null || true; fi
   found=""
   if command -v dpkg >/dev/null 2>&1 && dpkg -s silas >/dev/null 2>&1; then
     as_root apt-get remove -y silas
@@ -162,7 +183,7 @@ linux_uninstall() {
     found=rpm
   fi
   if remove_appimage; then found=appimage; fi
-  [ -n "$found" ] || die "Silas isn't installed (no package and no ~/.local/bin/silas)."
+  [ -n "$found" ] || die "Silas isn't installed (no silas package, and ~/.local/bin/silas is missing or isn't a Silas AppImage)."
   say "Removed Silas. Your dictionary, history and voice model are still in ${XDG_DATA_HOME:-$HOME/.local/share}/Silas."
   say "Delete that folder too if you want them gone."
 }
@@ -197,7 +218,10 @@ linux_install() {
     die "SILAS_LINUX_FORMAT=rpm needs dnf or zypper."
   fi
   if [ "$format" = appimage ] && package_installed; then
-    die "Silas is installed as a package. Remove it first: sh install.sh --uninstall"
+    die "Silas is installed as a package. Remove it first: $UNINSTALL"
+  fi
+  if [ "$format" = appimage ] && { [ -e "$HOME/.local/bin/silas" ] || [ -L "$HOME/.local/bin/silas" ]; } && ! is_our_appimage; then
+    die "$HOME/.local/bin/silas exists and isn't a Silas AppImage. Move it, then run this again."
   fi
 
   api="https://api.github.com/repos/baney75/silas/releases/tags/nightly"
@@ -224,7 +248,7 @@ linux_install() {
     say "Downloading Silas (AppImage)"
     curl -fL# "$url" -o "$staged" || die "Could not download $url."
     chmod +x "$staged"
-    pkill -x silas 2>/dev/null || true
+    if is_our_appimage; then pkill -x silas 2>/dev/null || true; fi
     mv -f "$staged" "$HOME/.local/bin/silas"
     staged=""
     linux_desktop_entry
@@ -239,7 +263,7 @@ linux_install() {
   else
     say "Downloading Silas (.$format)"
     curl -fL# "$url" -o "$tmp/silas.$format" || die "Could not download $url."
-    pkill -x silas 2>/dev/null || true
+    if package_installed || is_our_appimage; then pkill -x silas 2>/dev/null || true; fi
     if [ "$format" = deb ]; then
       as_root apt-get install -y "$tmp/silas.deb"
     elif command -v dnf >/dev/null 2>&1; then
@@ -263,6 +287,15 @@ linux_install() {
   fi
   say "Then hold Right Ctrl and speak."
 }
+
+# Use the custom folder as one absolute, canonical path: relative or "~/x/" forms would never
+# match the running app's path.
+if [ -n "${SILAS_INSTALL_DIR:-}" ]; then
+  [ "$action" = uninstall ] || mkdir -p "$SILAS_INSTALL_DIR" || die "Can't create $SILAS_INSTALL_DIR."
+  [ -d "$SILAS_INSTALL_DIR" ] || die "Silas isn't installed in $SILAS_INSTALL_DIR."
+  SILAS_INSTALL_DIR_REAL=$(cd "$SILAS_INSTALL_DIR" && pwd -P)
+  SILAS_INSTALL_DIR=$(cd "$SILAS_INSTALL_DIR" && pwd)
+fi
 
 case "$(uname -s)" in
 Darwin) "mac_$action" ;;
