@@ -1,27 +1,73 @@
 #!/bin/sh
 # Install Silas on macOS or Linux:
 #   curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | sh
-# macOS gets the stable channel; Linux gets nightly (the only Linux channel).
+# Remove it (your dictionary and history stay):
+#   curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | sh -s -- --uninstall
+# macOS gets the stable channel (SILAS_CHANNEL=nightly for nightly); Linux gets nightly,
+# the only Linux channel. Other knobs: SILAS_INSTALL_DIR (macOS, default /Applications),
+# SILAS_LINUX_FORMAT=appimage (skip the .deb/.rpm), SILAS_NO_OPEN=1 (don't launch Silas).
 set -eu
 REPO="https://github.com/baney75/silas/releases"
+RAW="https://raw.githubusercontent.com/baney75/silas/main"
 say() { printf '\033[1;33m›\033[0m %s\n' "$1"; }
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+die() { printf '\033[1;31m✗\033[0m %s\n' "$1" >&2; exit 1; }
+# Root shells (containers, some servers) have no sudo and don't need it.
+as_root() { if [ "$(id -u)" = 0 ]; then "$@"; else sudo "$@"; fi; }
 
-case "$(uname -s)" in
-Darwin)
-  [ "$(uname -m)" = arm64 ] || { echo "Silas needs a Mac with Apple silicon (M1 or newer)." >&2; exit 1; }
+action=install
+case "${1:-}" in
+--uninstall | uninstall) action=uninstall ;;
+"" | --install | install) ;;
+-h | --help)
+  echo "usage: install.sh [--uninstall]"
+  exit 0
+  ;;
+*) die "Unknown option '$1'. Use --uninstall to remove Silas." ;;
+esac
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+quit_mac() {
+  osascript -e 'quit app "Silas"' >/dev/null 2>&1 || true
+  i=0
+  while pgrep -xq silas && [ $i -lt 20 ]; do sleep 0.5; i=$((i + 1)); done
+}
+
+mac_uninstall() {
+  quit_mac
+  found=""
+  for d in /Applications "$HOME/Applications"; do
+    # With SILAS_INSTALL_DIR set, touch only that folder.
+    [ -z "${SILAS_INSTALL_DIR:-}" ] || d="$SILAS_INSTALL_DIR"
+    [ -d "$d/Silas.app" ] || continue
+    rm -rf "$d/Silas.app" 2>/dev/null || as_root rm -rf "$d/Silas.app"
+    found="$d"
+  done
+  [ -n "$found" ] || die "Silas isn't installed in /Applications or ~/Applications."
+  say "Removed Silas from $found."
+  say "Your dictionary, history and voice model are still in ~/Library/Application Support/Silas."
+  say "Delete that folder too if you want them gone. You can also remove Silas from"
+  say "System Settings › Privacy & Security › Accessibility and Microphone."
+}
+
+mac_install() {
+  # uname -m says x86_64 in a Rosetta terminal, so ask the hardware instead.
+  [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = 1 ] ||
+    die "Silas needs a Mac with Apple silicon (M1 or newer). Intel Macs aren't supported."
+  major=$(sw_vers -productVersion | cut -d. -f1)
+  [ "$major" -ge 12 ] || die "Silas needs macOS 12 Monterey or newer (this Mac runs $(sw_vers -productVersion))."
   if [ "${SILAS_CHANNEL:-stable}" = nightly ]; then
     url="$REPO/download/nightly/Silas_aarch64.app.tar.gz"
   else
     url="$REPO/latest/download/Silas_aarch64.app.tar.gz"
   fi
   say "Downloading Silas for macOS"
-  curl -fL# "$url" -o "$tmp/silas.tar.gz" || { echo "Could not download Silas from $url" >&2; exit 1; }
+  curl -fL# "$url" -o "$tmp/silas.tar.gz" || die "Could not download Silas from $url. Check your connection and try again."
   tar -xzf "$tmp/silas.tar.gz" -C "$tmp"
-  [ -d "$tmp/Silas.app" ] || { echo "The download did not contain Silas.app" >&2; exit 1; }
-  osascript -e 'quit app "Silas"' >/dev/null 2>&1 || true
-  i=0; while pgrep -xq silas && [ $i -lt 20 ]; do sleep 0.5; i=$((i+1)); done
-  dest=/Applications
+  [ -d "$tmp/Silas.app" ] || die "The download did not contain Silas.app."
+  quit_mac
+  dest="${SILAS_INSTALL_DIR:-/Applications}"
   [ -w "$dest" ] || dest="$HOME/Applications"
   mkdir -p "$dest"
   # Stage beside the old copy, then swap, so a failure never leaves half an app.
@@ -30,35 +76,107 @@ Darwin)
   rm -rf "$dest/Silas.app"
   mv "$dest/Silas.app.new" "$dest/Silas.app"
   xattr -dr com.apple.quarantine "$dest/Silas.app" 2>/dev/null || true
+  [ -z "${SILAS_NO_OPEN:-}" ] || { say "Installed to $dest."; return; }
   say "Installed to $dest. Opening Silas…"
   open "$dest/Silas.app" || { sleep 2; open "$dest/Silas.app"; }
-  ;;
-Linux)
+  say "Allow Microphone and Accessibility when Silas asks. Then hold Right ⌘ and speak."
+}
+
+linux_desktop_entry() {
+  apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+  icons="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/128x128/apps"
+  mkdir -p "$apps" "$icons"
+  curl -fsSL "$RAW/src-tauri/icons/128x128.png" -o "$icons/silas.png" 2>/dev/null || true
+  cat >"$apps/silas.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Silas
+Comment=Hold a key, speak, and Silas types it.
+Exec=$HOME/.local/bin/silas
+Icon=silas
+Terminal=false
+Categories=Utility;Accessibility;
+EOF
+  command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$apps" >/dev/null 2>&1 || true
+}
+
+linux_uninstall() {
+  pkill -x silas 2>/dev/null || true
+  found=""
+  if command -v dpkg >/dev/null 2>&1 && dpkg -s silas >/dev/null 2>&1; then
+    as_root apt-get remove -y silas && found=deb
+  elif command -v rpm >/dev/null 2>&1 && rpm -q silas >/dev/null 2>&1; then
+    if command -v dnf >/dev/null 2>&1; then as_root dnf remove -y silas; else as_root zypper --non-interactive remove silas; fi
+    found=rpm
+  fi
+  if [ -e "$HOME/.local/bin/silas" ]; then
+    rm -f "$HOME/.local/bin/silas" "${XDG_DATA_HOME:-$HOME/.local/share}/applications/silas.desktop" \
+      "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/128x128/apps/silas.png"
+    [ -f /etc/udev/rules.d/70-silas-input.rules ] && as_root rm -f /etc/udev/rules.d/70-silas-input.rules
+    found=appimage
+  fi
+  [ -n "$found" ] || die "Silas isn't installed (no package and no ~/.local/bin/silas)."
+  say "Removed Silas. Your dictionary, history and voice model are still in ${XDG_DATA_HOME:-$HOME/.local/share}/Silas."
+  say "Delete that folder too if you want them gone."
+}
+
+linux_install() {
+  arch=$(uname -m)
+  [ "$arch" = x86_64 ] || die "Silas builds are x86_64 only for now (this machine is $arch)."
   api="https://api.github.com/repos/baney75/silas/releases/tags/nightly"
   assets=$(curl -fsSL "$api" | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4) || true
-  [ -n "$assets" ] || { echo "The nightly release is being rebuilt. Try again in a few minutes." >&2; exit 1; }
-  arch=$(uname -m); [ "$arch" = x86_64 ] || { echo "Silas builds are x86_64 only for now" >&2; exit 1; }
-  if command -v apt-get >/dev/null 2>&1; then
+  [ -n "$assets" ] || die "The nightly release is being rebuilt. Try again in a few minutes."
+  format="${SILAS_LINUX_FORMAT:-}"
+  if [ -z "$format" ]; then
+    if command -v apt-get >/dev/null 2>&1; then format=deb
+    elif command -v dnf >/dev/null 2>&1 || command -v zypper >/dev/null 2>&1; then format=rpm
+    else format=appimage; fi
+  fi
+  if [ "$format" = deb ]; then
     deb=$(echo "$assets" | grep '\.deb$' | head -1)
-    say "Downloading Silas (.deb)"; curl -fL# "$deb" -o "$tmp/silas.deb"
-    sudo apt-get install -y "$tmp/silas.deb"
-  elif command -v dnf >/dev/null 2>&1; then
+    say "Downloading Silas (.deb)"
+    curl -fL# "$deb" -o "$tmp/silas.deb"
+    as_root apt-get install -y "$tmp/silas.deb"
+  elif [ "$format" = rpm ]; then
     rpm=$(echo "$assets" | grep '\.rpm$' | head -1)
-    say "Downloading Silas (.rpm)"; curl -fL# "$rpm" -o "$tmp/silas.rpm"
-    sudo dnf install -y "$tmp/silas.rpm"
+    say "Downloading Silas (.rpm)"
+    curl -fL# "$rpm" -o "$tmp/silas.rpm"
+    if command -v dnf >/dev/null 2>&1; then
+      as_root dnf install -y "$tmp/silas.rpm"
+    else
+      as_root zypper --non-interactive install --allow-unsigned-rpm "$tmp/silas.rpm"
+    fi
   else
     img=$(echo "$assets" | grep '\.AppImage$' | head -1)
     mkdir -p "$HOME/.local/bin"
-    say "Downloading Silas (AppImage)"; curl -fL# "$img" -o "$HOME/.local/bin/silas"
+    say "Downloading Silas (AppImage)"
+    curl -fL# "$img" -o "$HOME/.local/bin/silas"
     chmod +x "$HOME/.local/bin/silas"
+    linux_desktop_entry
     say "Allowing Silas to read the hold-to-talk key (needs sudo once)"
-    printf 'KERNEL=="uinput", TAG+="uaccess"\nSUBSYSTEM=="input", KERNEL=="event*", TAG+="uaccess"\n' | sudo tee /etc/udev/rules.d/70-silas-input.rules >/dev/null
-    sudo udevadm control --reload && sudo udevadm trigger
+    printf 'KERNEL=="uinput", TAG+="uaccess"\nSUBSYSTEM=="input", KERNEL=="event*", TAG+="uaccess"\n' |
+      as_root tee /etc/udev/rules.d/70-silas-input.rules >/dev/null
+    as_root udevadm control --reload && as_root udevadm trigger
+    if ! ls /usr/lib*/libfuse.so.2* /usr/lib/*/libfuse.so.2* >/dev/null 2>&1; then
+      say "Tip: AppImages need FUSE 2. If Silas won't start, install your distro's 'fuse2' or 'libfuse2' package."
+    fi
   fi
   if [ -n "${WAYLAND_DISPLAY:-}" ] && ! command -v wtype >/dev/null 2>&1; then
     say "Tip: install 'wtype' so Silas can type into Wayland apps."
   fi
-  say "Done. Start Silas from your app launcher."
-  ;;
-*) echo "On Windows run: irm https://raw.githubusercontent.com/baney75/silas/main/install.ps1 | iex" >&2; exit 1 ;;
+  bin=/usr/bin/silas
+  [ "$format" = appimage ] && bin="$HOME/.local/bin/silas"
+  if [ -z "${SILAS_NO_OPEN:-}" ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+    say "Done. Opening Silas…"
+    nohup "$bin" >/dev/null 2>&1 &
+  else
+    say "Done. Start Silas from your app launcher."
+  fi
+  say "Then hold Right Ctrl and speak."
+}
+
+case "$(uname -s)" in
+Darwin) "mac_$action" ;;
+Linux) "linux_$action" ;;
+*) die "On Windows run this in PowerShell: irm $RAW/install.ps1 | iex" ;;
 esac

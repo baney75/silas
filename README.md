@@ -8,25 +8,53 @@ let go, and Silas types what you said into whatever app has focus. It types real
 keystrokes, so apps never show a paste prompt and your clipboard is left alone. It learns
 your words as you fix them.
 
+<p align="center"><img src="docs/home.png" width="720" alt="Silas home screen: hold Right Command and speak, with words dictated today and recent dictations"></p>
+
 ## Install
 
-**macOS** (stable, Apple silicon):
+Paste one line into a terminal. It downloads Silas, installs it and opens it.
+
+**macOS** (Apple silicon, macOS 12 or newer):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | sh
 ```
 
-**Linux** (nightly, x86_64, glibc 2.39 or newer, e.g. Ubuntu 24.04+): the same command. It installs the `.deb` or `.rpm` when it can,
-otherwise an AppImage plus a udev rule so Silas can read the hold-to-talk key.
-
-**Windows** (nightly), in PowerShell:
+**Windows** (10 or 11, 64-bit), in PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/baney75/silas/main/install.ps1 | iex
 ```
 
-On first launch Silas downloads its speech model (478 MB) while you grant permissions.
-On macOS it needs **Microphone** and **Accessibility** (to read the key and to type).
+**Linux** (x86_64, glibc 2.39 or newer, e.g. Ubuntu 24.04+ or Fedora 40+): the macOS line. It
+installs the `.deb` on Debian and Ubuntu, the `.rpm` on Fedora and openSUSE Tumbleweed, and otherwise an
+AppImage with a launcher entry and a udev rule so Silas can read the hold-to-talk key.
+
+Run the same line again to update by hand. Silas also updates itself.
+
+<details>
+<summary>Rather download it yourself?</summary>
+
+- **macOS:** [Silas_aarch64.dmg](https://github.com/baney75/silas/releases/latest/download/Silas_aarch64.dmg).
+  Drag Silas to Applications and open it. Silas isn't notarized by Apple yet, so the first time
+  macOS says it can't verify the app. Click **Done**, open **System Settings › Privacy &
+  Security**, scroll down and click **Open Anyway**. The one-line installer skips this step.
+- **Windows and Linux:** the `.exe`, `.deb`, `.rpm` and `.AppImage` are on the
+  [nightly release](https://github.com/baney75/silas/releases/tag/nightly). Windows SmartScreen
+  may warn about a new app: click **More info › Run anyway**.
+
+</details>
+
+### First run
+
+1. Silas opens a short setup. The speech model (478 MB) starts downloading right away.
+2. On macOS, click **Allow** for **Microphone**, then turn on Silas under **Accessibility**.
+   Silas moves on by itself once both are on. Windows asks for nothing. On Linux the installer
+   already granted keyboard access; if setup says it can't see your key, log out and back in once.
+3. Try it in the practice box: hold the key, say a sentence, let go.
+
+Silas lives in the menu bar (macOS) or system tray. Close the window and it keeps listening
+for your key.
 
 ## Use it
 
@@ -72,6 +100,33 @@ Silas checks at launch and every four hours. With auto-update on, it installs on
 been idle for two minutes. Each channel has its own signing key, and Silas refuses an update
 that isn't signed by its channel's key. The stable key never leaves the release Mac. Mac nightly
 builds are ad-hoc signed, so macOS asks for Accessibility again after each nightly update.
+
+## If something's off
+
+| Problem | Fix |
+| --- | --- |
+| Holding the key does nothing (macOS) | System Settings › Privacy & Security › Accessibility: turn Silas off and on again. After a nightly update macOS may need this once more. |
+| Words are typed into the wrong place | Silas types where the dictation started. Click into the field before you hold the key. |
+| Nothing is typed into a Wayland app (Linux) | Install `wtype`. |
+| The AppImage won't start (Linux) | Install your distro's FUSE 2 package (`libfuse2` or `fuse2`). |
+
+Still stuck? [Open an issue](https://github.com/baney75/silas/issues/new) with your OS and
+what you saw.
+
+## Uninstall
+
+Your dictionary, history and voice model are kept, so a reinstall picks up where you left off.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | sh -s -- --uninstall
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/baney75/silas/main/install.ps1))) -Uninstall
+```
+
+To erase everything, also delete the `Silas` folder in `~/Library/Application Support` (macOS),
+`%APPDATA%` (Windows) or `~/.local/share` (Linux).
 
 ## Build from source
 

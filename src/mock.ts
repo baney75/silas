@@ -155,7 +155,7 @@ const dict: Dictionary = empty
         { text: "Tauri", source: "user", added: iso(6 * DAY), uses: 5 },
         { text: "Silvanus", source: "user", added: iso(2 * DAY), uses: 1 },
         { text: "BarnLabs", source: "import", added: iso(12 * DAY), uses: 9 },
-        { text: "Polymarket", source: "import", added: iso(12 * DAY), uses: 3 },
+        { text: "Kubernetes", source: "import", added: iso(12 * DAY), uses: 3 },
       ],
       corrections: [
         { from: "Paris one", to: "Parish1", count: 14, source: "learned", added: iso(3 * DAY) },
