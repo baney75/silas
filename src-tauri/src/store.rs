@@ -81,12 +81,14 @@ pub struct Settings {
 
 /// Settings saved before per-device picks have no `modelSource`. A model other than the
 /// default was the user's own choice then, so mark it so no benchmark or registry moves it.
-pub fn migrate_model_source(settings: &mut Settings, raw: &str) {
+/// So was keeping a second model installed after setup: someone who downloaded more than one
+/// model chose among them.
+pub fn migrate_model_source(settings: &mut Settings, raw: &str, installed_models: usize) {
     let has_source = serde_json::from_str::<serde_json::Value>(raw)
         .map(|v| v.get("modelSource").is_some())
         .unwrap_or(true);
     if !has_source {
-        let chosen = settings.model != Settings::default().model;
+        let chosen = settings.model != Settings::default().model || (settings.onboarded && installed_models > 1);
         settings.model_source = if chosen { "user" } else { "default" }.into();
     }
 }
@@ -193,7 +195,7 @@ mod migrate_tests {
     fn old_settings_with_a_chosen_model_become_user() {
         let raw = r#"{"model":"cohere-int4","onboarded":true}"#;
         let mut s: Settings = serde_json::from_str(raw).unwrap();
-        migrate_model_source(&mut s, raw);
+        migrate_model_source(&mut s, raw, 1);
         assert_eq!(s.model_source, "user");
     }
 
@@ -201,7 +203,20 @@ mod migrate_tests {
     fn old_settings_on_the_default_stay_default() {
         let raw = r#"{"model":"parakeet-v3","onboarded":true}"#;
         let mut s: Settings = serde_json::from_str(raw).unwrap();
-        migrate_model_source(&mut s, raw);
+        migrate_model_source(&mut s, raw, 1);
+        assert_eq!(s.model_source, "default");
+    }
+
+    #[test]
+    fn old_settings_with_two_models_installed_become_user() {
+        let raw = r#"{"model":"parakeet-v3","onboarded":true}"#;
+        let mut s: Settings = serde_json::from_str(raw).unwrap();
+        migrate_model_source(&mut s, raw, 2);
+        assert_eq!(s.model_source, "user");
+        // Not yet onboarded: nothing was chosen.
+        let raw = r#"{"model":"parakeet-v3","onboarded":false}"#;
+        let mut s: Settings = serde_json::from_str(raw).unwrap();
+        migrate_model_source(&mut s, raw, 2);
         assert_eq!(s.model_source, "default");
     }
 
@@ -209,7 +224,7 @@ mod migrate_tests {
     fn new_settings_keep_their_source() {
         let raw = r#"{"model":"cohere-int4","modelSource":"benchmark"}"#;
         let mut s: Settings = serde_json::from_str(raw).unwrap();
-        migrate_model_source(&mut s, raw);
+        migrate_model_source(&mut s, raw, 2);
         assert_eq!(s.model_source, "benchmark");
     }
 }

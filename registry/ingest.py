@@ -31,8 +31,10 @@ TIE_WER = 0.005
 # Models Silas can install. Add new ids here when the catalog in models.rs grows.
 KNOWN_MODELS = {"parakeet-v3", "cohere-int4"}
 MAX_BODY = 20_000
-# The bundled set in src-tauri/bench (manifest.json). Every honest report measured exactly this
-# much audio; update these when the set changes.
+# The bundled set in src-tauri/bench (manifest.json), named by benchmark::SUITE_ID in Silas.
+# Every honest report measured exactly this much audio. When the set changes, give it a new id
+# here and in Silas: stored reports from the old set are then skipped, not fatal.
+SUITE_ID = "librispeech-test-clean-9clips-v1"
 SUITE_CLIPS = 9
 SUITE_SECONDS = 62.2
 # No CPU transcribes this set 500x faster than real time; a bigger number is made up.
@@ -47,6 +49,10 @@ VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]{1,40})?$")
 
 class Reject(Exception):
     pass
+
+
+class Stale(Reject):
+    """Valid when it was made, but for a benchmark set or model Silas no longer uses."""
 
 
 def slug(s: str) -> str:
@@ -89,6 +95,10 @@ def text(v, what, pattern=TEXT_RE):
 def validate(data: dict) -> dict:
     if data.get("schema") != 1:
         raise Reject("Unknown report schema.")
+    # Reports from before suite ids existed were all made on this set.
+    suite = data.get("suite", SUITE_ID)
+    if suite != SUITE_ID:
+        raise Stale("This report was made with an older benchmark set. Update Silas and run the benchmark again.")
     silas = text(data.get("silas"), "silas", VERSION_RE)
     d = data.get("device")
     if not isinstance(d, dict):
@@ -120,8 +130,10 @@ def validate(data: dict) -> dict:
         if not isinstance(r, dict):
             raise Reject("Each result must be an object.")
         model = r.get("model")
-        if not isinstance(model, str) or model not in KNOWN_MODELS:
+        if not isinstance(model, str):
             raise Reject("The report names a model Silas doesn't offer.")
+        if model not in KNOWN_MODELS:
+            raise Stale("The report names a model Silas doesn't offer.")
         if model in seen:
             raise Reject("The report lists a model twice.")
         seen.add(model)
@@ -139,7 +151,7 @@ def validate(data: dict) -> dict:
         if abs(res["audio_seconds"] / res["compute_seconds"] - res["speed"]) > 0.02 * res["speed"]:
             raise Reject(f"{model} speed doesn't match its audio and compute seconds.")
         clean.append(res)
-    return {"schema": 1, "silas": silas, "device": device, "results": clean}
+    return {"schema": 1, "suite": SUITE_ID, "silas": silas, "device": device, "results": clean}
 
 
 def fastest(rs):
@@ -160,10 +172,13 @@ def pick(results):
 
 
 def stored():
-    """Every stored report, each validated again: hand-made files get no free pass."""
+    """Every stored report, each validated again: hand-made files get no free pass. A report
+    from a retired benchmark set or model is skipped with a note; anything else invalid stops."""
     for f in sorted(REPORTS.glob("*.json")):
         try:
             yield validate(json.loads(f.read_text()))
+        except Stale as e:
+            print(f"skipping {f.name}: {e}", file=sys.stderr)
         except (Reject, ValueError) as e:
             raise SystemExit(f"{f.name}: {e}")
 
@@ -206,7 +221,12 @@ def main() -> int:
         return 0
     if args == ["--verify"]:
         n = sum(1 for _ in stored())
-        print(f"{n} stored report(s) valid.")
+        # devices.json must be exactly what the stored reports produce: no hand edits.
+        current = json.loads(DEVICES.read_text()) if DEVICES.exists() else None
+        if current != rebuild(write=False):
+            print("registry/devices.json doesn't match the stored reports. Run: python3 registry/ingest.py --rebuild", file=sys.stderr)
+            return 1
+        print(f"{n} stored report(s) valid; devices.json matches them.")
         return 0
     check_only = args == ["--check"]
     if args and not check_only:

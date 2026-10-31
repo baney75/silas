@@ -14,11 +14,15 @@ use crate::models;
 use crate::store;
 
 /// Seconds of audio per second of compute: 10x real time.
-pub const MIN_SPEED: f32 = 10.0;
+pub const MIN_SPEED: f64 = 10.0;
 /// Word error rate.
-pub const MAX_WER: f32 = 0.08;
+pub const MAX_WER: f64 = 0.08;
 /// Two passing models closer than this in WER count as tied; the faster one wins.
 pub const TIE_WER: f32 = 0.005;
+
+/// Names the bundled speech set. Results from different sets are not comparable, so a new
+/// set gets a new id.
+pub const SUITE_ID: &str = "librispeech-test-clean-9clips-v1";
 
 pub const REGISTRY_URL: &str = "https://raw.githubusercontent.com/baney75/silas/main/registry/devices.json";
 const ISSUE_URL: &str = "https://github.com/baney75/silas/issues/new";
@@ -276,12 +280,12 @@ pub struct ModelResult {
 }
 
 /// Fast enough and accurate enough: both bars cleared.
-pub fn passes_bars(speed: f32, wer: f32) -> bool {
+pub fn passes_bars(speed: f64, wer: f64) -> bool {
     speed >= MIN_SPEED && wer <= MAX_WER
 }
 
 pub fn passes(r: &ModelResult) -> bool {
-    passes_bars(r.speed, r.wer)
+    passes_bars(f64::from(r.speed), f64::from(r.wer))
 }
 
 /// The model this device should use. Fast and accurate enough wins on accuracy (a tie
@@ -300,7 +304,7 @@ pub fn pick(results: &[ModelResult]) -> Option<String> {
         let close: Vec<&ModelResult> = passing.iter().copied().filter(|r| r.wer - best <= TIE_WER).collect();
         return fastest(&close);
     }
-    let accurate: Vec<&ModelResult> = results.iter().filter(|r| r.wer <= MAX_WER).collect();
+    let accurate: Vec<&ModelResult> = results.iter().filter(|r| f64::from(r.wer) <= MAX_WER).collect();
     if !accurate.is_empty() {
         return fastest(&accurate);
     }
@@ -351,6 +355,9 @@ pub fn run_suite(
 pub struct Report {
     pub schema: u32,
     pub silas: String,
+    /// Which speech set produced the numbers. Reports saved before this field are v1.
+    #[serde(default = "default_suite")]
+    pub suite: String,
     pub device: Device,
     pub results: Vec<ModelResult>,
     pub pick: Option<String>,
@@ -359,11 +366,16 @@ pub struct Report {
 
 pub const REPORT_FILE: &str = "benchmark.json";
 
+fn default_suite() -> String {
+    SUITE_ID.into()
+}
+
 impl Report {
     pub fn new(device: Device, results: Vec<ModelResult>) -> Self {
         Report {
             schema: 1,
             silas: env!("CARGO_PKG_VERSION").into(),
+            suite: SUITE_ID.into(),
             device,
             pick: pick(&results),
             results,
@@ -443,9 +455,9 @@ pub fn open_url(url: &str) -> anyhow::Result<()> {
 pub struct Entry {
     pub model: String,
     #[serde(default)]
-    pub speed: f32,
+    pub speed: f64,
     #[serde(default)]
-    pub wer: f32,
+    pub wer: f64,
     #[serde(default)]
     pub reports: u32,
 }
@@ -533,9 +545,15 @@ pub fn cached_registry() -> Registry {
 /// The model this device is known to run well: one that clears both bars, by this computer's
 /// own measurement if it has one, else the registry's entry for this device type.
 pub fn best_for_device() -> Option<String> {
-    match load_report() {
+    best_for_device_from(load_report().as_ref())
+}
+
+/// Same, for a report the caller already loaded.
+pub fn best_for_device_from(report: Option<&Report>) -> Option<String> {
+    match report {
         Some(r) => r
             .pick
+            .clone()
             .filter(|p| r.results.iter().any(|x| &x.model == p && passes(x)) && models::spec(p).is_some()),
         None => cached_registry().lookup(&device().key).map(|e| e.model.clone()),
     }
@@ -641,6 +659,13 @@ mod tests {
         assert!(reg.lookup("a/sloppy/1").is_none());
         assert!(reg.lookup("a/edge/1").is_some());
         assert!(passes_bars(10.0, 0.08) && !passes_bars(9.99, 0.0) && !passes_bars(99.0, 0.0801));
+        // Compared exactly as published, not squeezed into f32 first.
+        let json = r#"{"schema":1,"devices":{
+            "a/slow/1":{"model":"parakeet-v3","speed":9.9999999,"wer":0.08,"reports":1},
+            "a/sloppy/1":{"model":"parakeet-v3","speed":10.0,"wer":0.0800000001,"reports":1}}}"#;
+        let reg = Registry::parse(json).unwrap();
+        assert!(reg.lookup("a/slow/1").is_none());
+        assert!(reg.lookup("a/sloppy/1").is_none());
     }
 
     #[test]
@@ -654,6 +679,17 @@ mod tests {
         // Nothing accurate: fastest overall.
         let rs = [r("y", 5.0, 0.5), r("x", 5.0, 0.4)];
         assert_eq!(pick(&rs).as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn reports_carry_the_suite_id_and_old_files_read_as_v1() {
+        let rep = Report::new(build_device("macos", "Apple M5", "x", 10, 32, None), vec![r("parakeet-v3", 20.0, 0.03)]);
+        assert_eq!(rep.suite, SUITE_ID);
+        let mut v: serde_json::Value = serde_json::to_value(&rep).unwrap();
+        assert_eq!(v["suite"], SUITE_ID);
+        v.as_object_mut().unwrap().remove("suite");
+        let old: Report = serde_json::from_value(v).unwrap();
+        assert_eq!(old.suite, "librispeech-test-clean-9clips-v1");
     }
 
     #[test]

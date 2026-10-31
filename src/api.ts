@@ -110,6 +110,7 @@ export interface ModelResult {
 export interface Report {
   schema: number;
   silas: string;
+  suite: string;
   device: Device;
   results: ModelResult[];
   pick: string | null;

@@ -101,9 +101,12 @@ pub fn set_settings(core: State<Shared>, app: AppHandle, settings: Settings) -> 
 }
 
 #[tauri::command]
-pub fn list_models(core: State<Shared>) -> Vec<ModelEntry> {
+pub async fn list_models(core: State<'_, Shared>) -> R<Vec<ModelEntry>> {
     let active = core.settings.lock().model.clone();
-    models::list(Some(&active))
+    // Reads the benchmark and registry files, and the first call detects the device.
+    tauri::async_runtime::spawn_blocking(move || models::list(Some(&active)))
+        .await
+        .map_err(err)
 }
 
 #[tauri::command]
@@ -280,8 +283,8 @@ pub fn show_main(app: AppHandle) {
 }
 
 #[tauri::command]
-pub fn get_benchmark() -> Option<benchmark::Report> {
-    benchmark::load_report()
+pub async fn get_benchmark() -> R<Option<benchmark::Report>> {
+    tauri::async_runtime::spawn_blocking(benchmark::load_report).await.map_err(err)
 }
 
 /// Returns when the run ends; progress and the result also arrive as events.
@@ -300,9 +303,13 @@ pub async fn run_benchmark(core: State<'_, Shared>, all: bool) -> R<()> {
 }
 
 #[tauri::command]
-pub fn share_benchmark() -> R<()> {
-    let report = benchmark::load_report().ok_or("Run the benchmark first")?;
-    benchmark::open_url(&benchmark::report_url(&report)).map_err(err)
+pub async fn share_benchmark() -> R<()> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let report = benchmark::load_report().ok_or("Run the benchmark first".to_string())?;
+        benchmark::open_url(&benchmark::report_url(&report)).map_err(err)
+    })
+    .await
+    .map_err(err)?
 }
 
 /// Resolves once this run has asked the device registry (at most 6 s), for first-run setup.
@@ -314,8 +321,8 @@ pub async fn wait_device_pick() -> R<()> {
 }
 
 #[tauri::command]
-pub fn get_device() -> benchmark::Device {
-    benchmark::device().clone()
+pub async fn get_device() -> R<benchmark::Device> {
+    tauri::async_runtime::spawn_blocking(|| benchmark::device().clone()).await.map_err(err)
 }
 
 #[tauri::command]

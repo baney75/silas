@@ -61,6 +61,8 @@ pub struct Core {
     bench_running: AtomicBool,
     /// Recordings started so far; a benchmark clip that saw this change overlapped a dictation.
     dictations: AtomicU64,
+    /// The model a background load is working on, so one model is never loaded twice at once.
+    loading: Mutex<Option<String>>,
 }
 
 pub type Shared = Arc<Core>;
@@ -72,7 +74,8 @@ pub enum Scope {
     Active,
     /// The active model and every other installed one.
     All,
-    /// The active model, and the other installed ones too if it misses a bar.
+    /// The active model, then every other installed one (nothing is downloaded), so a better
+    /// model already on disk is never passed over. Switches only to a pick that passes both bars.
     Auto,
 }
 
@@ -80,6 +83,16 @@ pub enum Scope {
 /// unless the model they chose is no longer installed and so there is no choice left to keep.
 pub fn allows_model_change(source: &str, auto: bool, chosen_installed: bool) -> bool {
     !(auto && source == "user" && chosen_installed)
+}
+
+/// A finished load is stale when another model was chosen while it ran.
+fn load_is_stale(current: &str, loaded: &str) -> bool {
+    current != loaded
+}
+
+/// A load for `id` should start unless one for `id` is already running.
+fn should_start_load(loading: Option<&str>, id: &str) -> bool {
+    loading != Some(id)
 }
 
 /// Frees the benchmark slot when dropped.
@@ -109,7 +122,8 @@ impl Core {
         // Settings from before per-device picks have no modelSource. A model other than the
         // default was chosen by the user then, so no benchmark or registry may move them off it.
         if store::exists("settings.json") {
-            store::migrate_model_source(&mut settings, &store::read_raw("settings.json"));
+            let installed = models::MODELS.iter().filter(|m| models::installed(m.id)).count();
+            store::migrate_model_source(&mut settings, &store::read_raw("settings.json"), installed);
         }
         // A fresh nightly install stays on nightly instead of jumping to stable.
         if !store::exists("settings.json") && app.package_info().version.pre.as_str().starts_with("nightly") {
@@ -141,6 +155,7 @@ impl Core {
             downloading: Mutex::new(vec![]),
             bench_running: AtomicBool::new(false),
             dictations: AtomicU64::new(0),
+            loading: Mutex::new(None),
             settings: Mutex::new(settings),
         })
     }
@@ -252,16 +267,41 @@ impl Core {
             self.set_status(Status::Ready, None);
             return;
         }
+        {
+            let mut loading = self.loading.lock();
+            if !should_start_load(loading.as_deref(), &id) {
+                return;
+            }
+            *loading = Some(id.clone());
+        }
         self.set_status(Status::Loading, Some("Loading the speech model".into()));
         let me = self.clone();
         std::thread::spawn(move || {
             let t = Instant::now();
-            match Engine::load(&id) {
-                Ok(mut engine) => {
+            // A panic in the runtime must not leave the status at Loading for good.
+            let loaded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Engine::load(&id).map(|mut engine| {
                     // Warm up so the first real dictation is as fast as the rest.
                     let _ = engine.transcribe(&vec![0.0; 16_000], "en");
-                    // Another model may have been chosen while this one loaded.
-                    if me.settings.lock().model != id {
+                    engine
+                })
+            }))
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("the speech runtime crashed")));
+            // Done loading: free the slot (unless a newer load has taken it).
+            {
+                let mut loading = me.loading.lock();
+                if loading.as_deref() == Some(id.as_str()) {
+                    *loading = None;
+                }
+            }
+            match loaded {
+                Ok(engine) => {
+                    // Another model may have been chosen while this one loaded. Don't leave the
+                    // status at Loading: load whatever is chosen now (a no-op if its own load is
+                    // already running and will report Ready).
+                    let current = me.settings.lock().model.clone();
+                    if load_is_stale(&current, &id) {
+                        me.load_model();
                         return;
                     }
                     *me.engine.lock() = Some((id.clone(), engine));
@@ -408,6 +448,14 @@ impl Core {
         }
     }
 
+    /// Hold until nothing is happening and nothing has for `idle`, so loading a second model
+    /// next to the live one doesn't land in the middle of someone's dictating.
+    fn wait_idle(&self, idle: Duration) {
+        while self.busy() || self.last_activity.lock().elapsed() < idle {
+            std::thread::sleep(Duration::from_millis(300));
+        }
+    }
+
     /// Run one benchmark clip. `run` does the transcribing (holding whatever lock it needs for
     /// that clip only) and returns its own compute time. A clip that overlapped a dictation
     /// is timed against a busy machine, so it runs again.
@@ -483,7 +531,8 @@ impl Core {
                 };
                 benchmark::run_suite(id, &mut clip, &progress)
             } else {
-                self.wait_quiet();
+                self.wait_idle(Duration::from_secs(30));
+                // A dictation may start during the load; quiet_clip reruns any clip it touches.
                 models::Engine::load(id).and_then(|mut engine| {
                     let mut clip = |samples: &[f32]| -> anyhow::Result<(String, Duration)> {
                         self.quiet_clip(&mut || {
@@ -509,8 +558,10 @@ impl Core {
                 Err(e) => return Err(e),
             }
         }
-        // Keep earlier results for models this run skipped.
+        // Keep earlier results for models this run skipped, but only from this version of Silas
+        // and this speech set: numbers from another build aren't comparable.
         let mut results: Vec<ModelResult> = benchmark::load_report()
+            .filter(|r| r.silas == env!("CARGO_PKG_VERSION") && r.suite == benchmark::SUITE_ID)
             .map(|r| r.results)
             .unwrap_or_default()
             .into_iter()
@@ -976,6 +1027,19 @@ fn order_overlay(w: &tauri::WebviewWindow, show: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_load_for_a_model_no_longer_chosen_is_stale() {
+        assert!(load_is_stale("cohere-int4", "parakeet-v3"));
+        assert!(!load_is_stale("parakeet-v3", "parakeet-v3"));
+    }
+
+    #[test]
+    fn one_model_is_never_loaded_twice_at_once() {
+        assert!(should_start_load(None, "parakeet-v3"));
+        assert!(should_start_load(Some("cohere-int4"), "parakeet-v3"));
+        assert!(!should_start_load(Some("parakeet-v3"), "parakeet-v3"));
+    }
 
     #[test]
     fn automatic_changes_never_override_the_user() {

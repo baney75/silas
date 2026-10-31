@@ -80,6 +80,7 @@ interface ModelResult {
 interface Report {
   schema: 1;
   silas: string;                  // app version
+  suite: string;                  // which speech set produced the numbers, "librispeech-test-clean-9clips-v1"
   device: Device;
   results: ModelResult[];
   pick: string | null;            // model id; rule in src-tauri/src/benchmark.rs (mirrored in registry/ingest.py)
@@ -173,11 +174,14 @@ cached as `registry.json`) and looks up the device key.
 - A hit while `modelSource` is `"default"` sets `model` and `modelSource = "registry"`, with no benchmark.
   It switches only if that model is installed, or if no model is installed yet.
 - A miss with no `benchmark.json`: once a model is loaded, the core runs the bundled LibriSpeech set
-  (`src-tauri/bench/`) on the active model, clip by clip, waiting while a dictation is happening. It
-  saves the `Report` and, unless `modelSource` is `"user"`, switches to the pick if installed
-  (`modelSource = "benchmark"`).
+  (`src-tauri/bench/`) clip by clip, waiting while a dictation is happening. An automatic run
+  measures the active model and then every other installed model (nothing is downloaded). It saves the
+  `Report` and, unless `modelSource` is `"user"`, switches to the pick only if it is installed and
+  passes both bars (`modelSource = "benchmark"`); a pick that misses a bar is shown, never switched to.
+  Other models load only after 30 s without dictation. Earlier results are kept for models a run
+  skipped only if they came from the same Silas version and `suite`.
 - `select_model` sets `modelSource = "user"` (unless `auto`). Nothing automatic changes the model after that.
-- Settings saved before `modelSource` existed migrate on load: a non-default model becomes `"user"`.
+- Settings saved before `modelSource` existed migrate on load: a non-default model, or a second installed model after onboarding, becomes `"user"`.
 - One benchmark runs at a time. While `status` is `recording`, `transcribing`, `typing` or `loading`
   the benchmark waits (300 ms polls); it holds the engine for one clip at a time.
 

@@ -104,7 +104,7 @@ pub struct ModelEntry {
 
 pub fn list(active: Option<&str>) -> Vec<ModelEntry> {
     let report = benchmark::load_report();
-    let best = benchmark::best_for_device();
+    let best = benchmark::best_for_device_from(report.as_ref());
     MODELS
         .iter()
         .map(|m| ModelEntry {

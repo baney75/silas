@@ -143,7 +143,8 @@ export async function downloadModel(id: string) {
 export async function selectModel(id: string, auto = false) {
   try {
     await api.selectModel(id, auto);
-    store.settings = { ...store.settings, model: id };
+    // The core decides: an automatic choice is ignored when the user already chose.
+    store.settings = await api.getSettings();
     notify("settings");
   } catch (e) {
     toast(`Couldn't load that model. ${errorText(e)}`, "error", 6000);

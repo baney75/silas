@@ -147,6 +147,7 @@ const mockScores: Record<string, ModelResult> = {
   "cohere-int4": { model: "cohere-int4", speed: 4.1, wer: 0.012, audio_seconds: 62.2, compute_seconds: 15.2, clips: 9 },
 };
 
+const SUITE = "librispeech-test-clean-9clips-v1";
 const BAR_SPEED = 10;
 const BAR_WER = 0.08;
 
@@ -193,7 +194,7 @@ async function benchmark(all: boolean) {
     }
     const kept = (report?.results ?? []).filter((r) => !fresh.some((f) => f.model === r.model));
     const results = [...kept, ...fresh].sort((a, b) => models.findIndex((m) => m.id === a.model) - models.findIndex((m) => m.id === b.model));
-    const next: Report = { schema: 1, silas: state.version, device, results, pick: pickModel(results), ran_at: new Date().toISOString() };
+    const next: Report = { schema: 1, silas: state.version, suite: SUITE, device, results, pick: pickModel(results), ran_at: new Date().toISOString() };
     applyReport(next);
     if (next.pick && next.pick !== settings.model && settings.modelSource !== "user" && models.find((m) => m.id === next.pick)?.installed) {
       settings.model = next.pick;
@@ -208,7 +209,7 @@ async function benchmark(all: boolean) {
 }
 
 if (!onboarding && !params.has("unmeasured")) {
-  report = { schema: 1, silas: "0.1.0", device, results: [mockScores["parakeet-v3"]], pick: "parakeet-v3", ran_at: iso(2 * HOUR) };
+  report = { schema: 1, silas: "0.1.0", suite: SUITE, device, results: [mockScores["parakeet-v3"]], pick: "parakeet-v3", ran_at: iso(2 * HOUR) };
   applyReport(report);
 }
 if (params.has("benchmarking")) {
@@ -438,6 +439,8 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
       window.open("https://github.com/baney75/silas/issues/new?template=device-report.yml", "_blank", "noopener");
       return null as T;
     case "select_model": {
+      // Like the core: setup's automatic choice never overrides the user's.
+      if (args.auto && settings.modelSource === "user") return null as T;
       setStatus("loading", "Loading model");
       await delay(900);
       models.forEach((m) => (m.active = m.id === args.id));

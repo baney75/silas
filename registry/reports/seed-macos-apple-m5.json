@@ -1,5 +1,6 @@
 {
   "schema": 1,
+  "suite": "librispeech-test-clean-9clips-v1",
   "silas": "0.1.6",
   "device": {
     "key": "macos/apple-m5/10",

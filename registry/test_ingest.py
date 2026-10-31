@@ -12,6 +12,7 @@ import ingest  # noqa: E402
 
 GOOD = {
     "schema": 1,
+    "suite": "librispeech-test-clean-9clips-v1",
     "silas": "0.1.7",
     "device": {
         "key": "macos/apple-m5/10",
@@ -165,6 +166,33 @@ class EndToEnd(unittest.TestCase):
             p = self.run_ingest(reg, number="9", body_text="hello")
             self.assertEqual(p.returncode, 2)
             self.assertFalse((reg / "reports").exists())
+
+    def test_hand_edited_devices_json_fails_verify(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            reg = self.registry(tmp)
+            self.assertEqual(self.run_ingest(reg, body_text=body(GOOD)).returncode, 0)
+            self.assertEqual(self.run_ingest(reg, "--verify").returncode, 0)
+            d = json.loads((reg / "devices.json").read_text())
+            d["devices"]["macos/apple-m5/10"]["model"] = "cohere-int4"
+            (reg / "devices.json").write_text(json.dumps(d))
+            self.assertNotEqual(self.run_ingest(reg, "--verify").returncode, 0)
+
+    def test_old_suite_and_retired_model_are_skipped_not_fatal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            reg = self.registry(tmp)
+            self.assertEqual(self.run_ingest(reg, number="1", body_text=body(GOOD)).returncode, 0)
+            old = copy.deepcopy(GOOD)
+            old["suite"] = "older-set"
+            (reg / "reports" / "2.json").write_text(json.dumps(old))
+            retired = copy.deepcopy(GOOD)
+            retired["results"][0]["model"] = "retired-model"
+            (reg / "reports" / "3.json").write_text(json.dumps(retired))
+            p = self.run_ingest(reg, "--rebuild")
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertIn("skipping 2.json", p.stderr)
+            self.assertEqual(json.loads((reg / "devices.json").read_text())["devices"]["macos/apple-m5/10"]["reports"], 1)
+            # A new report from an old set is rejected with a reason.
+            self.assertEqual(self.run_ingest(reg, "--check", body_text=body(old)).returncode, 2)
 
     def test_hand_made_report_fails_verify_and_rebuild(self):
         with tempfile.TemporaryDirectory() as tmp:
