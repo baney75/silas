@@ -20,13 +20,13 @@ Paste one line into a terminal. It downloads Silas, installs it and opens it.
 curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | sh
 ```
 
-**Windows** (10 or 11, 64-bit), in PowerShell:
+**Windows** (10 or 11, 64-bit; nightly builds), in PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/baney75/silas/main/install.ps1 | iex
 ```
 
-**Linux** (x86_64, glibc 2.39 or newer, e.g. Ubuntu 24.04+ or Fedora 40+): the macOS line. It
+**Linux** (x86_64, glibc 2.39 or newer, e.g. Ubuntu 24.04+ or Fedora 40+; nightly builds): the macOS line. It
 installs the `.deb` on Debian and Ubuntu, the `.rpm` on Fedora and openSUSE Tumbleweed, and otherwise an
 AppImage with a launcher entry and a udev rule so Silas can read the hold-to-talk key.
 

@@ -17,7 +17,7 @@ permissions:
   contents: read
 env:
   SILAS_NO_OPEN: "1"
-  GITHUB_TOKEN: ${{ github.token }}
+  SILAS_GITHUB_TOKEN: ${{ github.token }}
 jobs:
   lint:
     runs-on: ubuntu-24.04
@@ -70,9 +70,23 @@ jobs:
       - name: Uninstall
         run: |
           sh install.sh --uninstall
-          test ! -e /usr/bin/silas && test ! -e "$HOME/.local/bin/silas"
+          test ! -e /usr/bin/silas
+          test ! -e "$HOME/.local/bin/silas"
           test ! -e "$HOME/.local/share/applications/silas.desktop"
           test ! -e /etc/udev/rules.d/70-silas-input.rules
+          test ! -e /usr/lib/udev/rules.d/70-silas-input.rules
+          if dpkg -s silas >/dev/null 2>&1; then exit 1; fi
+      - name: Switching from AppImage to the .deb removes the AppImage
+        if: matrix.format == 'appimage'
+        run: |
+          SILAS_LINUX_FORMAT=appimage sh install.sh
+          sh install.sh
+          test -x /usr/bin/silas
+          test ! -e "$HOME/.local/bin/silas"
+          test ! -e "$HOME/.local/share/applications/silas.desktop"
+          test ! -e /etc/udev/rules.d/70-silas-input.rules
+          sh install.sh --uninstall
+          test ! -e /usr/bin/silas
 
   rpm:
     strategy:
@@ -88,11 +102,27 @@ jobs:
         run: command -v curl || zypper --non-interactive install curl || dnf install -y curl
       - name: Install (.rpm, as root without sudo)
         run: sh install.sh
-      - run: test -x /usr/bin/silas && rpm -q silas
+      - name: Installed
+        run: |
+          test -x /usr/bin/silas
+          rpm -q silas
       - name: Uninstall
         run: |
           sh install.sh --uninstall
-          test ! -e /usr/bin/silas && ! rpm -q silas
+          test ! -e /usr/bin/silas
+          if rpm -q silas; then exit 1; fi
+
+  old-glibc:
+    runs-on: ubuntu-24.04
+    container: debian:12 # glibc 2.36
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - name: Refuses with a plain message
+        run: |
+          if sh install.sh > out.txt 2>&1; then cat out.txt; exit 1; fi
+          cat out.txt
+          grep -q "needs glibc 2.39 or newer" out.txt
 
   windows:
     runs-on: windows-latest
