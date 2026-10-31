@@ -125,8 +125,9 @@ curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | sh 
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/baney75/silas/main/install.ps1))) -Uninstall
 ```
 
-To erase everything, also delete the `Silas` folder in `~/Library/Application Support` (macOS),
-`%APPDATA%` (Windows) or `~/.local/share` (Linux).
+To erase everything, also delete the `Silas` folder (your data) and any `com.baney.silas`
+folders (window and web caches) in `~/Library/Application Support` and `~/Library/Caches`
+(macOS), `%APPDATA%` and `%LOCALAPPDATA%` (Windows) or `~/.local/share` and `~/.cache` (Linux).
 
 ## Build from source
 

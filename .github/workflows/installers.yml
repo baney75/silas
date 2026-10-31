@@ -13,13 +13,17 @@ on:
 concurrency:
   group: installers-${{ github.ref }}
   cancel-in-progress: true
+permissions:
+  contents: read
 env:
   SILAS_NO_OPEN: "1"
+  GITHUB_TOKEN: ${{ github.token }}
 jobs:
   lint:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
       - run: shellcheck -s sh install.sh
       - run: dash -n install.sh
       - name: PowerShell parses
@@ -33,6 +37,7 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
       - name: Install stable
         run: SILAS_INSTALL_DIR="$RUNNER_TEMP/apps" sh install.sh
       - run: codesign --verify --deep --strict "$RUNNER_TEMP/apps/Silas.app"
@@ -49,6 +54,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
       - name: Install (${{ matrix.format }})
         run: SILAS_LINUX_FORMAT=${{ matrix.format }} sh install.sh
       - name: Installed
@@ -57,7 +63,7 @@ jobs:
             test -x /usr/bin/silas && test -f /usr/lib/udev/rules.d/70-silas-input.rules
           else
             test -x "$HOME/.local/bin/silas"
-            grep -q "^Exec=$HOME/.local/bin/silas$" "$HOME/.local/share/applications/silas.desktop"
+            grep -qx "Exec=\"$HOME/.local/bin/silas\"" "$HOME/.local/share/applications/silas.desktop"
             test -s "$HOME/.local/share/icons/hicolor/128x128/apps/silas.png"
             test -f /etc/udev/rules.d/70-silas-input.rules
           fi
@@ -66,11 +72,33 @@ jobs:
           sh install.sh --uninstall
           test ! -e /usr/bin/silas && test ! -e "$HOME/.local/bin/silas"
           test ! -e "$HOME/.local/share/applications/silas.desktop"
+          test ! -e /etc/udev/rules.d/70-silas-input.rules
+
+  rpm:
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["fedora:40", "opensuse/tumbleweed"]
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - name: curl (minimal images may lack it)
+        run: command -v curl || zypper --non-interactive install curl || dnf install -y curl
+      - name: Install (.rpm, as root without sudo)
+        run: sh install.sh
+      - run: test -x /usr/bin/silas && rpm -q silas
+      - name: Uninstall
+        run: |
+          sh install.sh --uninstall
+          test ! -e /usr/bin/silas && ! rpm -q silas
 
   windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
       - name: Install (the README's one-liner, from this checkout)
         shell: powershell
         run: Get-Content -Raw install.ps1 | Invoke-Expression

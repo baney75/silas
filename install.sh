@@ -67,9 +67,14 @@ mac_install() {
   tar -xzf "$tmp/silas.tar.gz" -C "$tmp"
   [ -d "$tmp/Silas.app" ] || die "The download did not contain Silas.app."
   quit_mac
-  dest="${SILAS_INSTALL_DIR:-/Applications}"
-  [ -w "$dest" ] || dest="$HOME/Applications"
-  mkdir -p "$dest"
+  if [ -n "${SILAS_INSTALL_DIR:-}" ]; then
+    dest="$SILAS_INSTALL_DIR"
+    mkdir -p "$dest" && [ -w "$dest" ] || die "Can't write to $dest."
+  else
+    dest=/Applications
+    [ -w "$dest" ] || dest="$HOME/Applications"
+    mkdir -p "$dest"
+  fi
   # Stage beside the old copy, then swap, so a failure never leaves half an app.
   rm -rf "$dest/Silas.app.new"
   mv "$tmp/Silas.app" "$dest/Silas.app.new"
@@ -92,19 +97,20 @@ linux_desktop_entry() {
 Type=Application
 Name=Silas
 Comment=Hold a key, speak, and Silas types it.
-Exec=$HOME/.local/bin/silas
+Exec="$HOME/.local/bin/silas"
 Icon=silas
 Terminal=false
 Categories=Utility;Accessibility;
 EOF
-  command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$apps" >/dev/null 2>&1 || true
+  if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database "$apps" >/dev/null 2>&1 || true; fi
 }
 
 linux_uninstall() {
   pkill -x silas 2>/dev/null || true
   found=""
   if command -v dpkg >/dev/null 2>&1 && dpkg -s silas >/dev/null 2>&1; then
-    as_root apt-get remove -y silas && found=deb
+    as_root apt-get remove -y silas
+    found=deb
   elif command -v rpm >/dev/null 2>&1 && rpm -q silas >/dev/null 2>&1; then
     if command -v dnf >/dev/null 2>&1; then as_root dnf remove -y silas; else as_root zypper --non-interactive remove silas; fi
     found=rpm
@@ -112,7 +118,10 @@ linux_uninstall() {
   if [ -e "$HOME/.local/bin/silas" ]; then
     rm -f "$HOME/.local/bin/silas" "${XDG_DATA_HOME:-$HOME/.local/share}/applications/silas.desktop" \
       "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/128x128/apps/silas.png"
-    [ -f /etc/udev/rules.d/70-silas-input.rules ] && as_root rm -f /etc/udev/rules.d/70-silas-input.rules
+    if [ -f /etc/udev/rules.d/70-silas-input.rules ]; then
+      as_root rm -f /etc/udev/rules.d/70-silas-input.rules
+      as_root udevadm control --reload 2>/dev/null || true
+    fi
     found=appimage
   fi
   [ -n "$found" ] || die "Silas isn't installed (no package and no ~/.local/bin/silas)."
@@ -124,7 +133,12 @@ linux_install() {
   arch=$(uname -m)
   [ "$arch" = x86_64 ] || die "Silas builds are x86_64 only for now (this machine is $arch)."
   api="https://api.github.com/repos/baney75/silas/releases/tags/nightly"
-  assets=$(curl -fsSL "$api" | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4) || true
+  # GITHUB_TOKEN, when set, lifts the API's 60-requests-an-hour limit for shared IPs (CI).
+  set -- -fsSL
+  [ -z "${GITHUB_TOKEN:-}" ] || set -- "$@" -H "Authorization: Bearer $GITHUB_TOKEN"
+  json=$(curl "$@" "$api") || die "Couldn't reach GitHub ($api). Check your connection and try again."
+  assets=$(echo "$json" | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4) || true
+  pkill -x silas 2>/dev/null || true
   [ -n "$assets" ] || die "The nightly release is being rebuilt. Try again in a few minutes."
   format="${SILAS_LINUX_FORMAT:-}"
   if [ -z "$format" ]; then
@@ -150,8 +164,9 @@ linux_install() {
     img=$(echo "$assets" | grep '\.AppImage$' | head -1)
     mkdir -p "$HOME/.local/bin"
     say "Downloading Silas (AppImage)"
-    curl -fL# "$img" -o "$HOME/.local/bin/silas"
-    chmod +x "$HOME/.local/bin/silas"
+    curl -fL# "$img" -o "$tmp/silas.AppImage"
+    chmod +x "$tmp/silas.AppImage"
+    mv -f "$tmp/silas.AppImage" "$HOME/.local/bin/silas"
     linux_desktop_entry
     say "Allowing Silas to read the hold-to-talk key (needs sudo once)"
     printf 'KERNEL=="uinput", TAG+="uaccess"\nSUBSYSTEM=="input", KERNEL=="event*", TAG+="uaccess"\n' |

@@ -18,9 +18,11 @@ if ($Uninstall) {
   $uninstaller = Join-Path $dir "uninstall.exe"
   if (-not (Test-Path $uninstaller)) { throw "Silas isn't installed in $dir." }
   Stop-Silas
-  Start-Process $uninstaller -ArgumentList "/S" -Wait
+  $run = Start-Process $uninstaller -ArgumentList "/S" -Wait -PassThru
+  if ($run.ExitCode -ne 0) { throw "The Silas uninstaller failed (exit code $($run.ExitCode))." }
   # NSIS uninstallers relaunch from a temp copy, so the wait above returns early.
   for ($i = 0; $i -lt 30 -and (Test-Path $exe); $i++) { Start-Sleep -Milliseconds 500 }
+  if (Test-Path $exe) { throw "The Silas uninstaller didn't finish; $exe is still there." }
   Write-Host "Removed Silas. Your dictionary, history and voice model are still in $env:APPDATA\Silas." -ForegroundColor Green
   Write-Host "Delete that folder too if you want them gone."
   return
@@ -28,7 +30,10 @@ if ($Uninstall) {
 
 if (-not [Environment]::Is64BitOperatingSystem) { throw "Silas needs 64-bit Windows." }
 Write-Host "Finding the latest Silas..." -ForegroundColor Yellow
-$release = Invoke-RestMethod "https://api.github.com/repos/baney75/silas/releases/tags/nightly"
+# GITHUB_TOKEN, when set, lifts the API's 60-requests-an-hour limit for shared IPs (CI).
+$headers = @{}
+if ($env:GITHUB_TOKEN) { $headers.Authorization = "Bearer $env:GITHUB_TOKEN" }
+$release = Invoke-RestMethod "https://api.github.com/repos/baney75/silas/releases/tags/nightly" -Headers $headers
 $asset = $release.assets | Where-Object { $_.name -like "*-setup.exe" } | Select-Object -First 1
 if (-not $asset) { throw "The nightly release is being rebuilt. Try again in a few minutes." }
 $file = Join-Path $env:TEMP $asset.name
