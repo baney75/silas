@@ -1,10 +1,13 @@
 name: Device registry
-# Device reports arrive as issues (from Silas's "Share results"). Each valid report becomes a
-# PR that adds registry/reports/<issue>.json; a maintainer merges it; then devices.json is
-# rebuilt on main. The issue body is untrusted: it reaches the script only through an
-# environment variable and is parsed as JSON there, never interpolated into a shell line.
+# Device reports arrive as issues from Silas's "Share results" (label device-report).
+#   1. On open, the report is validated and the issue gets a comment. Nothing is written.
+#   2. A maintainer adds the `registry-approved` label (only people with triage or higher
+#      access can label). The report is validated again, stored as registry/reports/<n>.json,
+#      devices.json is rebuilt, both are committed to main, and the issue is closed.
+# The issue body is untrusted: it reaches ingest.py only through an environment variable and
+# is parsed as JSON there, never interpolated into a shell line. No bot PRs: the repo doesn't
+# let Actions open them, and a label is the maintainer's review.
 on:
-  # Not `edited`: a report that changes after its PR was reviewed must not slip into that PR.
   issues:
     types: [opened, labeled]
   pull_request:
@@ -22,74 +25,95 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { persist-credentials: false }
       - run: python3 -I registry/test_ingest.py
+      # Hand-made report files fail here, before anyone merges them.
+      - run: python3 -I registry/ingest.py --verify
 
-  report:
-    if: >-
-      github.event_name == 'issues' && github.event.issue.state == 'open' &&
-      contains(github.event.issue.labels.*.name, 'device-report') &&
-      (github.event.action == 'opened' || github.event.label.name == 'device-report')
+  check:
+    if: github.event_name == 'issues' && github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'device-report')
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
-      pull-requests: write
       issues: write
-    concurrency:
-      group: registry-report-${{ github.event.issue.number }}
-      cancel-in-progress: true
     env:
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_BODY: ${{ github.event.issue.body }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with: { ref: main }
-      - name: Validate and store
-        id: ingest
+        with: { ref: main, persist-credentials: false }
+      - name: Validate and comment
         run: |
           set +e
-          python3 -I registry/ingest.py > "$RUNNER_TEMP/result.txt"
-          echo "code=$?" >> "$GITHUB_OUTPUT"
-          cat "$RUNNER_TEMP/result.txt"
-      - name: Reject
-        if: steps.ingest.outputs.code == '2'
-        run: |
-          { echo "Silas couldn't use this report:"; echo; cat "$RUNNER_TEMP/result.txt"; } > "$RUNNER_TEMP/comment.md"
+          python3 -I registry/ingest.py --check > "$RUNNER_TEMP/result.txt"
+          code=$?
+          set -e
+          case $code in
+          0) cp "$RUNNER_TEMP/result.txt" "$RUNNER_TEMP/comment.md" ;;
+          2) { echo "Silas couldn't use this report:"; echo; cat "$RUNNER_TEMP/result.txt"; } > "$RUNNER_TEMP/comment.md" ;;
+          *) exit 1 ;;
+          esac
           gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/comment.md"
-      # Report PRs are opened with GITHUB_TOKEN, so CI doesn't run on them; the validation
-      # above is the check, and the PR adds only the one validated data file.
-      - name: Open the report PR
-        if: steps.ingest.outputs.code == '0'
+
+  approve:
+    if: github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'registry-approved' && contains(github.event.issue.labels.*.name, 'device-report')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      issues: write
+    concurrency:
+      group: registry-write
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_BODY: ${{ github.event.issue.body }}
+      SENDER: ${{ github.event.sender.login }}
+    steps:
+      - name: Only maintainers approve
         run: |
-          branch="registry/report-$ISSUE_NUMBER"
-          # One PR per issue, never rewritten after it opens.
-          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
-            echo "A PR for #$ISSUE_NUMBER already exists; leaving it as reviewed."
-            exit 0
-          fi
+          perm=$(gh api "repos/$GH_REPO/collaborators/$SENDER/permission" -q .permission)
+          case "$perm" in admin | maintain | write) ;; *) echo "$SENDER has $perm access" >&2; exit 1 ;; esac
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { ref: main }
+      - name: Store, rebuild and push, retrying if main moved
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$branch"
-          git add "registry/reports/$ISSUE_NUMBER.json"
-          if git diff --cached --quiet; then
-            echo "This report is already in the registry."
-            exit 0
-          fi
-          git commit -q -m "Device report from #$ISSUE_NUMBER"
-          git push -q origin "$branch"
-          gh pr create --base main --head "$branch" --title "Device report from #$ISSUE_NUMBER" \
-            --body "Adds the validated report from #$ISSUE_NUMBER. Merging rebuilds registry/devices.json on main."
+          for attempt in 1 2 3 4 5; do
+            git fetch -q origin main
+            git reset -q --hard origin/main
+            set +e
+            python3 -I registry/ingest.py > "$RUNNER_TEMP/result.txt"
+            code=$?
+            set -e
+            if [ "$code" = 2 ]; then
+              { echo "Silas couldn't use this report:"; echo; cat "$RUNNER_TEMP/result.txt"; } > "$RUNNER_TEMP/comment.md"
+              gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/comment.md"
+              exit 1
+            fi
+            [ "$code" = 0 ] || exit 1
+            git add registry/reports registry/devices.json
+            if git diff --cached --quiet; then
+              echo "Already in the registry." > "$RUNNER_TEMP/result.txt"
+              break
+            fi
+            git commit -q -m "Device report from #$ISSUE_NUMBER"
+            if git push -q origin HEAD:main; then break; fi
+            [ "$attempt" -lt 5 ] || exit 1
+            sleep $((attempt * 5))
+          done
           gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/result.txt"
-      - name: Script error
-        if: steps.ingest.outputs.code != '0' && steps.ingest.outputs.code != '2'
-        run: exit 1
+          gh issue close "$ISSUE_NUMBER"
 
   rebuild:
+    # A maintainer added or removed a report by hand on main.
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     concurrency:
-      group: registry-rebuild
+      group: registry-write
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

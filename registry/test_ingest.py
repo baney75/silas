@@ -96,6 +96,12 @@ class Validate(unittest.TestCase):
             with self.assertRaises(ingest.Reject):
                 ingest.validate(ingest.extract(body(GOOD).replace('"cores": 10', f'"cores": {bad}')))
 
+    def test_rejects_huge_integer_and_non_string_model(self):
+        with self.assertRaises(ingest.Reject):
+            ingest.validate(ingest.extract(body(GOOD).replace('"cores": 10', '"cores": 1' + "0" * 400)))
+        self.rejects(lambda b: b["results"][0].update(model=[]))
+        self.rejects(lambda b: b["results"][0].update(model={}))
+
     def test_rejects_deep_nesting(self):
         with self.assertRaises(ingest.Reject):
             ingest.extract("```json\n" + "[" * 100000 + "]" * 100000 + "\n```")
@@ -115,42 +121,61 @@ class Validate(unittest.TestCase):
 
 
 class EndToEnd(unittest.TestCase):
-    def test_store_and_rebuild_median(self):
+    def run_ingest(self, reg, *args, number="1", body_text=""):
+        return subprocess.run(
+            [sys.executable, "-I", str(reg / "ingest.py"), *args],
+            env={**os.environ, "ISSUE_NUMBER": number, "ISSUE_BODY": body_text},
+            capture_output=True,
+            text=True,
+        )
+
+    def registry(self, tmp):
+        reg = Path(tmp)
+        (reg / "ingest.py").write_text(Path(ingest.__file__).read_text())
+        return reg
+
+    def test_check_stores_nothing_and_approve_stores_and_rebuilds_median(self):
         with tempfile.TemporaryDirectory() as tmp:
-            reg = Path(tmp)
-            (reg / "reports").mkdir()
-            script = reg / "ingest.py"
-            script.write_text(Path(ingest.__file__).read_text())
+            reg = self.registry(tmp)
+            p = self.run_ingest(reg, "--check", body_text=body(GOOD))
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertFalse((reg / "reports").exists())
             for n, speed in ((1, 20.0), (2, 30.0), (3, 25.0)):
                 rep = copy.deepcopy(GOOD)
                 rep["results"][0]["speed"] = speed
                 rep["results"][0]["compute_seconds"] = 62.2 / speed
-                p = subprocess.run(
-                    [sys.executable, "-I", str(script)],
-                    env={**os.environ, "ISSUE_NUMBER": str(n), "ISSUE_BODY": body(rep)},
-                    capture_output=True,
-                    text=True,
-                )
+                p = self.run_ingest(reg, number=str(n), body_text=body(rep))
                 self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
                 self.assertNotIn("Apple M5", p.stdout)  # comments carry the slug key, not free text
-            self.assertFalse((reg / "devices.json").exists())  # issues never touch it
-            subprocess.run([sys.executable, "-I", str(script), "--rebuild"], check=True)
             dev = json.loads((reg / "devices.json").read_text())["devices"]["macos/apple-m5/10"]
             self.assertEqual(dev, {"model": "parakeet-v3", "speed": 25.0, "wer": 0.021, "reports": 3})
 
+    def test_precision_is_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            reg = self.registry(tmp)
+            rep = copy.deepcopy(GOOD)
+            rep["results"][0].update(speed=9.999, compute_seconds=62.2 / 9.999)
+            self.assertEqual(self.run_ingest(reg, body_text=body(rep)).returncode, 0)
+            dev = json.loads((reg / "devices.json").read_text())["devices"]["macos/apple-m5/10"]
+            self.assertLess(dev["speed"], 10.0)  # never rounded up past the bar
+
     def test_rejected_report_exits_2_and_stores_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
-            reg = Path(tmp)
-            script = reg / "ingest.py"
-            script.write_text(Path(ingest.__file__).read_text())
-            p = subprocess.run(
-                [sys.executable, "-I", str(script)],
-                env={**os.environ, "ISSUE_NUMBER": "9", "ISSUE_BODY": "hello"},
-                capture_output=True,
-                text=True,
-            )
+            reg = self.registry(tmp)
+            p = self.run_ingest(reg, number="9", body_text="hello")
             self.assertEqual(p.returncode, 2)
             self.assertFalse((reg / "reports").exists())
+
+    def test_hand_made_report_fails_verify_and_rebuild(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            reg = self.registry(tmp)
+            (reg / "reports").mkdir()
+            bad = copy.deepcopy(GOOD)
+            bad["results"][0].update(speed=10000, clips=1)
+            (reg / "reports" / "x.json").write_text(json.dumps(bad))
+            self.assertNotEqual(self.run_ingest(reg, "--verify").returncode, 0)
+            self.assertNotEqual(self.run_ingest(reg, "--rebuild").returncode, 0)
+            self.assertFalse((reg / "devices.json").exists())
 
 
 if __name__ == "__main__":

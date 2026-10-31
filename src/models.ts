@@ -116,7 +116,7 @@ const MAX_WER = 0.08;
 
 const speedText = (r: ModelResult) =>
   `${Math.round(r.speed)}× real time · a 10 s dictation in ${(10 / Math.max(r.speed, 0.01)).toFixed(1)} s`;
-const accuracyText = (r: ModelResult) => `${(100 * (1 - r.wer)).toFixed(1)}% of words right`;
+const accuracyText = (r: ModelResult) => `${(100 * Math.max(0, 1 - r.wer)).toFixed(1)}% of words right`;
 
 function mark(ok: boolean, good: string, bad: string): HTMLElement {
   return h("span", { class: `mark ${ok ? "mark-ok" : "mark-miss"}` }, icon(ok ? "check" : "x", 14), ok ? good : bad);

@@ -76,9 +76,10 @@ pub enum Scope {
     Auto,
 }
 
-/// May a model change go ahead? A user's choice is never overridden by an automatic one.
-pub fn allows_model_change(source: &str, auto: bool) -> bool {
-    !(auto && source == "user")
+/// May a model change go ahead? A user's choice is never overridden by an automatic one,
+/// unless the model they chose is no longer installed and so there is no choice left to keep.
+pub fn allows_model_change(source: &str, auto: bool, chosen_installed: bool) -> bool {
+    !(auto && source == "user" && chosen_installed)
 }
 
 /// Frees the benchmark slot when dropped.
@@ -307,15 +308,22 @@ impl Core {
     /// Load this model. With `auto` false the user chose it, and from then on nothing but the
     /// user changes it; setup's own choice (`auto`) leaves the device pick free to apply.
     pub fn select_model(self: &Shared, id: &str, auto: bool) {
-        {
+        let allowed = {
             let mut s = self.settings.lock();
-            if !allows_model_change(&s.model_source, auto) {
-                return;
+            let allowed = allows_model_change(&s.model_source, auto, models::installed(&s.model));
+            if allowed {
+                s.model = id.to_string();
+                if !auto {
+                    s.model_source = "user".into();
+                }
             }
-            s.model = id.to_string();
-            if !auto {
-                s.model_source = "user".into();
-            }
+            allowed
+        };
+        if !allowed {
+            // Setup asked for its pick, but the user's own model is here: make sure that one is
+            // loaded, so setup never ends with no model.
+            self.load_model();
+            return;
         }
         self.save_settings();
         *self.engine.lock() = None;
@@ -353,6 +361,7 @@ impl Core {
             if apply {
                 self.save_settings();
                 if changed && models::installed(&entry.model) {
+                    self.wait_quiet();
                     self.load_model();
                 }
             }
@@ -404,8 +413,13 @@ impl Core {
     /// is timed against a busy machine, so it runs again.
     fn quiet_clip(&self, run: &mut dyn FnMut() -> Timed) -> Timed {
         loop {
-            self.wait_quiet();
+            // Snapshot first, then require quiet: a dictation that starts in between bumps
+            // the counter and the clip runs again.
             let before = self.dictations.load(Ordering::Acquire);
+            if self.busy() {
+                std::thread::sleep(Duration::from_millis(300));
+                continue;
+            }
             let out = run()?;
             if self.dictations.load(Ordering::Acquire) == before && !self.busy() {
                 return Ok(out);
@@ -421,9 +435,7 @@ impl Core {
         match &result {
             Ok(report) => {
                 let _ = self.app.emit("benchmark-done", report);
-                if let Some(pick) = &report.pick {
-                    self.apply_pick(pick);
-                }
+                self.apply_pick(report);
             }
             Err(e) => {
                 let _ = self.app.emit("benchmark-error", json!({ "message": e.to_string() }));
@@ -485,9 +497,9 @@ impl Core {
             };
             match run {
                 Ok(r) => {
-                    // Automatic runs start with the active model alone. If it misses a bar,
-                    // measure the rest too, so the pick is a comparison and not a default.
-                    if scope == Scope::Auto && *id == active && !benchmark::passes(&r) {
+                    // Automatic runs measure every installed model (no downloads), so a more
+                    // accurate model already on disk is never passed over.
+                    if scope == Scope::Auto && *id == active {
                         ids.extend(others.iter().cloned());
                     }
                     fresh.push(r);
@@ -511,9 +523,12 @@ impl Core {
         Ok(report)
     }
 
-    /// Move to the benchmark's pick if it is installed and the user hasn't chosen.
-    fn apply_pick(self: &Shared, pick: &str) {
-        if !models::installed(pick) {
+    /// Move to the benchmark's pick if it is installed, passes both bars, and the user
+    /// hasn't chosen. A pick that misses a bar is only shown, never switched to.
+    fn apply_pick(self: &Shared, report: &Report) {
+        let Some(pick) = report.pick.as_deref() else { return };
+        let passes = report.results.iter().any(|r| r.model == pick && benchmark::passes(r));
+        if !passes || !models::installed(pick) {
             return;
         }
         let switch = {
@@ -964,11 +979,13 @@ mod tests {
 
     #[test]
     fn automatic_changes_never_override_the_user() {
-        assert!(!allows_model_change("user", true));
-        assert!(allows_model_change("user", false));
+        assert!(!allows_model_change("user", true, true));
+        assert!(allows_model_change("user", false, true));
+        // The user's model was deleted: setup may load its pick.
+        assert!(allows_model_change("user", true, false));
         for src in ["default", "registry", "benchmark"] {
-            assert!(allows_model_change(src, true));
-            assert!(allows_model_change(src, false));
+            assert!(allows_model_change(src, true, true));
+            assert!(allows_model_change(src, false, true));
         }
     }
 }

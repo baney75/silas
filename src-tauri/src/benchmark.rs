@@ -257,10 +257,11 @@ fn word_errors(reference: &str, hypothesis: &str) -> (usize, usize) {
 /// Word error rate of one hypothesis against one reference.
 pub fn wer(reference: &str, hypothesis: &str) -> f32 {
     let (errors, words) = word_errors(reference, hypothesis);
+    // Capped at 1: a model that repeats itself can make more errors than there are words.
     if words == 0 {
         return if errors == 0 { 0.0 } else { 1.0 };
     }
-    errors as f32 / words as f32
+    (errors as f32 / words as f32).min(1.0)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -337,7 +338,7 @@ pub fn run_suite(
     Ok(ModelResult {
         model: model_id.into(),
         speed: (audio / compute.max(1e-6)) as f32,
-        wer: if words == 0 { 1.0 } else { errors as f32 / words as f32 },
+        wer: if words == 0 { 1.0 } else { (errors as f32 / words as f32).min(1.0) },
         audio_seconds: audio as f32,
         compute_seconds: compute as f32,
         clips: total as u32,

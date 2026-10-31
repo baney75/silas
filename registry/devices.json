@@ -3,8 +3,8 @@
   "devices": {
     "macos/apple-m5/10": {
       "model": "parakeet-v3",
-      "speed": 20.08,
-      "wer": 0.0056,
+      "speed": 20.083675,
+      "wer": 0.005586592,
       "reports": 1
     }
   }

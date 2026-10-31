@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Turn a device-report issue into a stored report and rebuild registry/devices.json.
 
-    ISSUE_NUMBER=12 ISSUE_BODY="$(cat body.md)" python3 registry/ingest.py   # store reports/12.json
-    python3 registry/ingest.py --rebuild                                      # rewrite devices.json
+    ISSUE_NUMBER=12 ISSUE_BODY="$(cat body.md)" python3 registry/ingest.py --check   # validate only
+    ISSUE_NUMBER=12 ISSUE_BODY="$(cat body.md)" python3 registry/ingest.py           # store + rebuild
+    python3 registry/ingest.py --rebuild    # rewrite devices.json from every stored report
+    python3 registry/ingest.py --verify     # validate every stored report (CI)
 
 The issue body is untrusted. It is only ever parsed as JSON and checked field by field;
-nothing from it is executed or written except the validated values. Exit 0 with the report
-stored, 2 when the report is rejected (the reason is printed for the issue comment).
+nothing from it is executed or written except the validated values. Exit 0 when the report is
+valid (and stored), 2 when it is rejected (the reason is printed for the issue comment).
 
 The bars and the pick rule must match src-tauri/src/benchmark.rs.
 """
@@ -68,7 +70,10 @@ def extract(body: str) -> dict:
 def num(v, lo, hi, what, integer=False):
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         raise Reject(f"{what} must be a number.")
-    if not math.isfinite(v) or not lo <= v <= hi:
+    # Compare before isfinite: a 400-digit int can't convert to float.
+    if isinstance(v, float) and not math.isfinite(v):
+        raise Reject(f"{what} is out of range.")
+    if not lo <= v <= hi:
         raise Reject(f"{what} is out of range.")
     if integer and int(v) != v:
         raise Reject(f"{what} must be a whole number.")
@@ -115,7 +120,7 @@ def validate(data: dict) -> dict:
         if not isinstance(r, dict):
             raise Reject("Each result must be an object.")
         model = r.get("model")
-        if model not in KNOWN_MODELS:
+        if not isinstance(model, str) or model not in KNOWN_MODELS:
             raise Reject("The report names a model Silas doesn't offer.")
         if model in seen:
             raise Reject("The report lists a model twice.")
@@ -154,11 +159,20 @@ def pick(results):
     return fastest(accurate or results)
 
 
-def rebuild(write: bool = True) -> dict:
-    """Median speed and WER per device and model across every stored report."""
-    by_device: dict = {}
+def stored():
+    """Every stored report, each validated again: hand-made files get no free pass."""
     for f in sorted(REPORTS.glob("*.json")):
-        rep = json.loads(f.read_text())
+        try:
+            yield validate(json.loads(f.read_text()))
+        except (Reject, ValueError) as e:
+            raise SystemExit(f"{f.name}: {e}")
+
+
+def rebuild(write: bool = True) -> dict:
+    """Median speed and WER per device and model across every stored report. Full precision is
+    kept: Silas compares these numbers with the bars, so rounding could pass a model that missed."""
+    by_device: dict = {}
+    for rep in stored():
         dev = by_device.setdefault(rep["device"]["key"], {"reports": 0, "models": {}})
         dev["reports"] += 1
         for r in rep["results"]:
@@ -175,8 +189,8 @@ def rebuild(write: bool = True) -> dict:
         chosen = next(r for r in meds if r["model"] == best)
         devices[key] = {
             "model": best,
-            "speed": round(chosen["speed"], 2),
-            "wer": round(chosen["wer"], 4),
+            "speed": chosen["speed"],
+            "wer": chosen["wer"],
             "reports": dev["reports"],
         }
     out = {"schema": 1, "devices": devices}
@@ -186,9 +200,18 @@ def rebuild(write: bool = True) -> dict:
 
 
 def main() -> int:
-    if sys.argv[1:] == ["--rebuild"]:
+    args = sys.argv[1:]
+    if args == ["--rebuild"]:
         rebuild()
         return 0
+    if args == ["--verify"]:
+        n = sum(1 for _ in stored())
+        print(f"{n} stored report(s) valid.")
+        return 0
+    check_only = args == ["--check"]
+    if args and not check_only:
+        print(__doc__, file=sys.stderr)
+        return 1
     number = os.environ.get("ISSUE_NUMBER", "")
     if not number.isdigit():
         print("ISSUE_NUMBER must be the issue number.", file=sys.stderr)
@@ -198,14 +221,18 @@ def main() -> int:
     except Reject as e:
         print(e)
         return 2
+    except Exception:  # anything unexpected is still a rejection with a reason, never a crash
+        print("The report couldn't be read. Please submit it from Silas without editing it.")
+        return 2
+    # Only validated slug and id text goes into a comment, never free text from the issue.
+    key = report["device"]["key"]
+    if check_only:
+        print(f"This report is valid (`{key}`). A maintainer will review it and add it to the registry.")
+        return 0
     REPORTS.mkdir(exist_ok=True)
     (REPORTS / f"{int(number)}.json").write_text(json.dumps(report, indent=2) + "\n")
-    # The report PR adds only this file; devices.json is rebuilt on main after a maintainer
-    # merges it, so report PRs never conflict with each other.
-    # Only validated slug and id text goes into the comment, never free text from the issue.
-    key = report["device"]["key"]
-    entry = rebuild(write=False)["devices"][key]
-    print(f"Thanks! Once this is merged, `{key}` will get `{entry['model']}`, from {entry['reports']} report(s).")
+    entry = rebuild()["devices"][key]
+    print(f"Added to the registry. `{key}` now gets `{entry['model']}`, from {entry['reports']} report(s). Thank you!")
     return 0
 
 
