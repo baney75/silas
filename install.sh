@@ -26,9 +26,18 @@ case "${1:-}" in
 esac
 
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+staged=""
+trap 'rm -rf "$tmp"; [ -z "$staged" ] || rm -f "$staged"' EXIT
+trap 'exit 130' INT TERM
 
 quit_mac() {
+  if [ -n "${SILAS_INSTALL_DIR:-}" ]; then
+    # A custom folder: stop only a Silas running from that folder, never the user's main one.
+    pkill -f "$SILAS_INSTALL_DIR/Silas.app/Contents/MacOS/" 2>/dev/null || true
+    i=0
+    while pgrep -f "$SILAS_INSTALL_DIR/Silas.app/Contents/MacOS/" >/dev/null && [ $i -lt 20 ]; do sleep 0.5; i=$((i + 1)); done
+    return 0
+  fi
   osascript -e 'quit app "Silas"' >/dev/null 2>&1 || true
   i=0
   while pgrep -xq silas && [ $i -lt 20 ]; do sleep 0.5; i=$((i + 1)); done
@@ -44,7 +53,7 @@ mac_uninstall() {
     rm -rf "$d/Silas.app" 2>/dev/null || as_root rm -rf "$d/Silas.app"
     found="$d"
   done
-  [ -n "$found" ] || die "Silas isn't installed in /Applications or ~/Applications."
+  [ -n "$found" ] || die "Silas isn't installed in ${SILAS_INSTALL_DIR:-/Applications or ~/Applications}."
   say "Removed Silas from $found."
   say "Your dictionary, history and voice model are still in ~/Library/Application Support/Silas."
   say "Delete that folder too if you want them gone. You can also remove Silas from"
@@ -69,7 +78,8 @@ mac_install() {
   quit_mac
   if [ -n "${SILAS_INSTALL_DIR:-}" ]; then
     dest="$SILAS_INSTALL_DIR"
-    mkdir -p "$dest" && [ -w "$dest" ] || die "Can't write to $dest."
+    mkdir -p "$dest" || die "Can't create $dest."
+    [ -w "$dest" ] || die "Can't write to $dest."
   else
     dest=/Applications
     [ -w "$dest" ] || dest="$HOME/Applications"
@@ -105,6 +115,40 @@ EOF
   if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database "$apps" >/dev/null 2>&1 || true; fi
 }
 
+# Remove the AppImage install: binary, launcher entry, icon and udev rule, each on its own.
+# True if ~/.local/bin/silas is an AppImage this script put there (AppImage magic "AI" 0x02 at
+# byte 8), so a user's own script or build of that name is never deleted.
+is_our_appimage() {
+  f="$HOME/.local/bin/silas"
+  [ -f "$f" ] && [ ! -L "$f" ] && [ "$(od -An -tx1 -j8 -N3 "$f" 2>/dev/null | tr -d ' \n')" = "414902" ]
+}
+
+remove_appimage() {
+  share="${XDG_DATA_HOME:-$HOME/.local/share}"
+  removed=""
+  if is_our_appimage; then
+    rm -f "$HOME/.local/bin/silas" || die "Couldn't remove $HOME/.local/bin/silas."
+    removed=1
+  fi
+  for f in "$share/applications/silas.desktop" "$share/icons/hicolor/128x128/apps/silas.png"; do
+    if [ -e "$f" ] || [ -L "$f" ]; then
+      rm -f "$f" || die "Couldn't remove $f."
+      removed=1
+    fi
+  done
+  if [ -f /etc/udev/rules.d/70-silas-input.rules ]; then
+    as_root rm -f /etc/udev/rules.d/70-silas-input.rules || die "Couldn't remove the udev rule."
+    as_root udevadm control --reload 2>/dev/null || true
+    removed=1
+  fi
+  [ -n "$removed" ]
+}
+
+package_installed() {
+  if command -v dpkg >/dev/null 2>&1 && dpkg -s silas >/dev/null 2>&1; then return 0; fi
+  command -v rpm >/dev/null 2>&1 && rpm -q silas >/dev/null 2>&1
+}
+
 linux_uninstall() {
   pkill -x silas 2>/dev/null || true
   found=""
@@ -117,15 +161,7 @@ linux_uninstall() {
     if command -v dnf >/dev/null 2>&1; then as_root dnf remove -y silas; else as_root rpm -e silas; fi
     found=rpm
   fi
-  if [ -e "$HOME/.local/bin/silas" ]; then
-    rm -f "$HOME/.local/bin/silas" "${XDG_DATA_HOME:-$HOME/.local/share}/applications/silas.desktop" \
-      "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/128x128/apps/silas.png"
-    if [ -f /etc/udev/rules.d/70-silas-input.rules ]; then
-      as_root rm -f /etc/udev/rules.d/70-silas-input.rules
-      as_root udevadm control --reload 2>/dev/null || true
-    fi
-    found=appimage
-  fi
+  if remove_appimage; then found=appimage; fi
   [ -n "$found" ] || die "Silas isn't installed (no package and no ~/.local/bin/silas)."
   say "Removed Silas. Your dictionary, history and voice model are still in ${XDG_DATA_HOME:-$HOME/.local/share}/Silas."
   say "Delete that folder too if you want them gone."
@@ -134,41 +170,63 @@ linux_uninstall() {
 linux_install() {
   arch=$(uname -m)
   [ "$arch" = x86_64 ] || die "Silas builds are x86_64 only for now (this machine is $arch)."
-  api="https://api.github.com/repos/baney75/silas/releases/tags/nightly"
-  # GITHUB_TOKEN, when set, lifts the API's 60-requests-an-hour limit for shared IPs (CI).
-  set -- -fsSL
-  [ -z "${GITHUB_TOKEN:-}" ] || set -- "$@" -H "Authorization: Bearer $GITHUB_TOKEN"
-  json=$(curl "$@" "$api") || die "Couldn't reach GitHub ($api). Check your connection and try again."
-  assets=$(echo "$json" | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4) || true
-  pkill -x silas 2>/dev/null || true
-  [ -n "$assets" ] || die "The nightly release is being rebuilt. Try again in a few minutes."
+  libc=$(getconf GNU_LIBC_VERSION 2>/dev/null | cut -d' ' -f2) || libc=""
+  [ -n "$libc" ] || die "Silas needs glibc 2.39 or newer, and this system doesn't use glibc."
+  major=${libc%%.*}
+  minor=${libc#*.}
+  minor=${minor%%.*}
+  if [ "$major" -lt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -lt 39 ]; }; then
+    die "Silas needs glibc 2.39 or newer (Ubuntu 24.04, Fedora 40 or later). This system has $libc."
+  fi
+
   format="${SILAS_LINUX_FORMAT:-}"
   if [ -z "$format" ]; then
     if command -v apt-get >/dev/null 2>&1; then format=deb
     elif command -v dnf >/dev/null 2>&1 || command -v zypper >/dev/null 2>&1; then format=rpm
     else format=appimage; fi
   fi
-  if [ "$format" = deb ]; then
-    deb=$(echo "$assets" | grep '\.deb$' | head -1)
-    say "Downloading Silas (.deb)"
-    curl -fL# "$deb" -o "$tmp/silas.deb"
-    as_root apt-get install -y "$tmp/silas.deb"
-  elif [ "$format" = rpm ]; then
-    rpm=$(echo "$assets" | grep '\.rpm$' | head -1)
-    say "Downloading Silas (.rpm)"
-    curl -fL# "$rpm" -o "$tmp/silas.rpm"
-    if command -v dnf >/dev/null 2>&1; then
-      as_root dnf install -y "$tmp/silas.rpm"
-    else
-      as_root zypper --non-interactive install --allow-unsigned-rpm "$tmp/silas.rpm"
-    fi
+  case "$format" in
+  deb | rpm | appimage) ;;
+  *) die "SILAS_LINUX_FORMAT must be deb, rpm or appimage." ;;
+  esac
+  # Fail before any download or stopping Silas when the package tool is missing.
+  if [ "$format" = deb ] && ! command -v apt-get >/dev/null 2>&1; then
+    die "SILAS_LINUX_FORMAT=deb needs apt-get."
+  fi
+  if [ "$format" = rpm ] && ! command -v dnf >/dev/null 2>&1 && ! command -v zypper >/dev/null 2>&1; then
+    die "SILAS_LINUX_FORMAT=rpm needs dnf or zypper."
+  fi
+  if [ "$format" = appimage ] && package_installed; then
+    die "Silas is installed as a package. Remove it first: sh install.sh --uninstall"
+  fi
+
+  api="https://api.github.com/repos/baney75/silas/releases/tags/nightly"
+  # SILAS_GITHUB_TOKEN (CI sets it) lifts the API's 60-requests-an-hour limit on shared IPs.
+  # It goes to curl on stdin, never in argv.
+  if [ -n "${SILAS_GITHUB_TOKEN:-}" ]; then
+    json=$(printf 'header = "Authorization: Bearer %s"\n' "$SILAS_GITHUB_TOKEN" | curl -K - -fsSL "$api") ||
+      die "Couldn't read the nightly release from GitHub with SILAS_GITHUB_TOKEN."
   else
-    img=$(echo "$assets" | grep '\.AppImage$' | head -1)
+    json=$(curl -fsSL "$api") || die "Couldn't reach GitHub ($api). Check your connection and try again."
+  fi
+  assets=$(echo "$json" | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4) || true
+  case "$format" in
+  deb) url=$(echo "$assets" | grep '\.deb$' | head -1) ;;
+  rpm) url=$(echo "$assets" | grep '\.rpm$' | head -1) ;;
+  appimage) url=$(echo "$assets" | grep '\.AppImage$' | head -1) ;;
+  esac
+  [ -n "$url" ] || die "The nightly release is being rebuilt. Try again in a few minutes."
+
+  if [ "$format" = appimage ]; then
+    # Stage beside the target so the final mv is a rename on one filesystem.
     mkdir -p "$HOME/.local/bin"
+    staged=$(mktemp "$HOME/.local/bin/.silas.XXXXXX")
     say "Downloading Silas (AppImage)"
-    curl -fL# "$img" -o "$tmp/silas.AppImage"
-    chmod +x "$tmp/silas.AppImage"
-    mv -f "$tmp/silas.AppImage" "$HOME/.local/bin/silas"
+    curl -fL# "$url" -o "$staged" || die "Could not download $url."
+    chmod +x "$staged"
+    pkill -x silas 2>/dev/null || true
+    mv -f "$staged" "$HOME/.local/bin/silas"
+    staged=""
     linux_desktop_entry
     say "Allowing Silas to read the hold-to-talk key (needs sudo once)"
     printf 'KERNEL=="uinput", TAG+="uaccess"\nSUBSYSTEM=="input", KERNEL=="event*", TAG+="uaccess"\n' |
@@ -177,13 +235,27 @@ linux_install() {
     if ! ls /usr/lib*/libfuse.so.2* /usr/lib/*/libfuse.so.2* >/dev/null 2>&1; then
       say "Tip: AppImages need FUSE 2. If Silas won't start, install your distro's 'fuse2' or 'libfuse2' package."
     fi
+    bin="$HOME/.local/bin/silas"
+  else
+    say "Downloading Silas (.$format)"
+    curl -fL# "$url" -o "$tmp/silas.$format" || die "Could not download $url."
+    pkill -x silas 2>/dev/null || true
+    if [ "$format" = deb ]; then
+      as_root apt-get install -y "$tmp/silas.deb"
+    elif command -v dnf >/dev/null 2>&1; then
+      as_root dnf install -y "$tmp/silas.rpm"
+    else
+      as_root zypper --non-interactive install --allow-unsigned-rpm "$tmp/silas.rpm"
+    fi
+    # An earlier AppImage install would shadow the package on PATH; the package replaces it.
+    if remove_appimage; then say "Removed the earlier AppImage install; the package replaces it."; fi
+    bin=/usr/bin/silas
   fi
   if [ -n "${WAYLAND_DISPLAY:-}" ] && ! command -v wtype >/dev/null 2>&1; then
     say "Tip: install 'wtype' so Silas can type into Wayland apps."
   fi
-  bin=/usr/bin/silas
-  [ "$format" = appimage ] && bin="$HOME/.local/bin/silas"
-  if [ -z "${SILAS_NO_OPEN:-}" ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+  # Never start the app as root: it would own the user's data folder and miss their session.
+  if [ -z "${SILAS_NO_OPEN:-}" ] && [ "$(id -u)" != 0 ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
     say "Done. Opening Silas…"
     nohup "$bin" >/dev/null 2>&1 &
   else
