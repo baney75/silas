@@ -432,11 +432,11 @@ impl Dictionary {
         let mut targets = self.snap_targets();
         targets.sort_by_key(|(t, _)| std::cmp::Reverse(t.len()));
         // Protect every name already spelled right before any matching, so a near twin
-        // ("Parish1" next to "Parish2") can never bend it, whatever order they run in. Only an
+        // ("Argon1" next to "Argon2") can never bend it, whatever order they run in. Only an
         // exact longer name may still claim it ("Baney Spaces" → "BaneySpaces").
         let mut protected = vec![false; toks.len()];
-        // Matched by spelling, ignoring case and a plural or possessive ending ("parish2",
-        // "Parish2's").
+        // Matched by spelling, ignoring case and a plural or possessive ending ("argon2",
+        // "Argon2's").
         for (term, _) in &targets {
             let keys = norm_phrase(term);
             let n = keys.len();
@@ -539,8 +539,8 @@ impl Dictionary {
                     if exact {
                         continue; // spoken as ordinary words: leave them
                     }
-                    // Numbers name different machines: "abby2" is abbey2, never abbey1, and
-                    // "Parish two" is Parish2, never Parish12.
+                    // Numbers name different machines: "xeno2" is xenon2, never xenon1, and
+                    // "Argon two" is Argon2, never Argon12.
                     let digits = |s: &str| s.chars().filter(char::is_ascii_digit).collect::<String>();
                     let term_digits = digits(&target);
                     if !term_digits.is_empty() && digits(&joined) != term_digits {
@@ -953,8 +953,8 @@ mod tests {
         for t in [
             "Claude Code",
             "Claude",
-            "Parish1",
-            "Chapel1",
+            "Argon1",
+            "Krypton1",
             "Ghostty",
             "TypeWhisper",
             "GitHub",
@@ -964,7 +964,7 @@ mod tests {
         ] {
             d.add_term(t, "user");
         }
-        d.add_correction("Paris one", "Parish1", "user");
+        d.add_correction("Argon one", "Argon1", "user");
         d.add_correction("make Azure", "make sure", "user");
         d
     }
@@ -988,10 +988,10 @@ mod tests {
     fn corrections_apply_with_punctuation() {
         let mut d = dict();
         assert_eq!(
-            d.apply("ssh into Paris one, then check.", true),
-            "ssh into Parish1, then check."
+            d.apply("ssh into Argon one, then check.", true),
+            "ssh into Argon1, then check."
         );
-        assert_eq!(d.apply("Paris one is up.", true), "Parish1 is up.");
+        assert_eq!(d.apply("Argon one is up.", true), "Argon1 is up.");
         assert_eq!(
             d.apply("Please make Azure it runs.", true),
             "Please make sure it runs."
@@ -1007,8 +1007,8 @@ mod tests {
         );
         assert_eq!(d.apply("push it to github.", true), "push it to GitHub.");
         assert_eq!(
-            d.apply("restart chapel one now", true),
-            "restart Chapel1 now"
+            d.apply("restart krypton one now", true),
+            "restart Krypton1 now"
         );
         assert_eq!(
             d.apply("I use clot code daily", true),
@@ -1118,7 +1118,7 @@ mod tests {
     #[test]
     fn misses_from_real_history() {
         let mut d = dict();
-        for t in ["BaneySpaces", "Runpod", "abbey1"] {
+        for t in ["BaneySpaces", "Runpod", "xenon1"] {
             d.add_term(t, "user");
         }
         d.add_correction("martry", "Martyr", "import");
@@ -1134,21 +1134,21 @@ mod tests {
         );
         assert_eq!(d.apply("link their run pod to it", true), "link their Runpod to it");
         assert_eq!(
-            d.apply("Maybe not on Abbey One because it needs storage.", true),
-            "Maybe not on abbey1 because it needs storage."
+            d.apply("Maybe not on Xenon One because it needs storage.", true),
+            "Maybe not on xenon1 because it needs storage."
         );
     }
 
     #[test]
     fn near_twin_names_keep_their_own_spelling() {
         let mut d = dict();
-        for t in ["Parish2", "abbey1", "abbey2"] {
+        for t in ["Argon2", "xenon1", "xenon2"] {
             d.add_term(t, "user");
         }
-        let s = "ssh into Parish2 now, then Parish1, abbey1 and abbey2.";
+        let s = "ssh into Argon2 now, then Argon1, xenon1 and xenon2.";
         assert_eq!(d.apply(s, true), s);
-        assert_eq!(d.apply("ssh into parish2 now", true), "ssh into Parish2 now");
-        assert_eq!(d.apply("Parish2's disk is full", true), "Parish2's disk is full");
+        assert_eq!(d.apply("ssh into argon2 now", true), "ssh into Argon2 now");
+        assert_eq!(d.apply("Argon2's disk is full", true), "Argon2's disk is full");
         // A protected name can still be part of a longer name spoken exactly.
         d.add_term("BaneySpaces", "user");
         d.add_correction("Bainey", "Baney", "import");
@@ -1162,12 +1162,12 @@ mod tests {
         assert_eq!(d.apply("restart Tailscale two times", true), "restart Tailscale two times");
         assert_eq!(d.apply("check Tailscal a lot", true), "check Tailscale a lot");
         assert_eq!(d.apply("check Tail Scale", true), "check Tailscale");
-        d.add_term("Parish10", "user");
-        assert_eq!(d.apply("ssh into Parish1 now", true), "ssh into Parish1 now");
+        d.add_term("Argon10", "user");
+        assert_eq!(d.apply("ssh into Argon1 now", true), "ssh into Argon1 now");
         // The digit picks the twin.
-        assert_eq!(d.apply("reboot abby2", true), "reboot abbey2");
-        d.add_term("Parish12", "user");
-        assert_eq!(d.apply("ssh into Parish two now", true), "ssh into Parish2 now");
+        assert_eq!(d.apply("reboot xeno2", true), "reboot xenon2");
+        d.add_term("Argon12", "user");
+        assert_eq!(d.apply("ssh into Argon two now", true), "ssh into Argon2 now");
         // A protected word inside a multi-word name lines up by word, not by letters.
         d.add_term("Code", "user");
         assert_eq!(d.apply("ask Claud Code to do it", true), "ask Claude Code to do it");
@@ -1224,10 +1224,10 @@ mod tests {
     #[test]
     fn diff_finds_small_fixes() {
         let f = diff_fixes(
-            "ssh into Paris one and run it",
-            "ssh into Parish1 and run it",
+            "ssh into Argon one and run it",
+            "ssh into Argon1 and run it",
         );
-        assert_eq!(f, vec![("Paris one".to_string(), "Parish1".to_string())]);
+        assert_eq!(f, vec![("Argon one".to_string(), "Argon1".to_string())]);
         let f = diff_fixes("I love clot code a lot", "I love Claude Code a lot");
         assert_eq!(
             f,
@@ -1265,7 +1265,7 @@ mod tests {
         let r = d.learn("call me at noon", "call me at nine", true);
         assert!(r.learned.is_empty(), "{r:?}");
         // A name is still learned at once.
-        let r = d.learn("ssh into Paris one", "ssh into Parish1", false);
+        let r = d.learn("ssh into Argon one", "ssh into Argon1", false);
         assert_eq!(r.learned.len(), 1, "{r:?}");
     }
 
@@ -1286,8 +1286,8 @@ mod tests {
     #[test]
     fn imports_typewhisper_export() {
         let mut d = Dictionary::default();
-        let json = r#"[{"type":"term","original":"Ghostty","replacement":""},{"type":"correction","original":"Paris one","replacement":"Parish1"}]"#;
+        let json = r#"[{"type":"term","original":"Ghostty","replacement":""},{"type":"correction","original":"Argon one","replacement":"Argon1"}]"#;
         assert_eq!(d.import(json).unwrap(), 2);
-        assert_eq!(d.apply("Paris one", true), "Parish1");
+        assert_eq!(d.apply("Argon one", true), "Argon1");
     }
 }

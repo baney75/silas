@@ -217,9 +217,9 @@ if (params.has("benchmarking")) {
 }
 
 const sample: Array<[string, number, number]> = [
-  ["Can you check whether Parish1 is on AC power before we start the render tonight?", 4.8, 310],
+  ["Can you check whether Argon1 is on AC power before we start the render tonight?", 4.8, 310],
   ["Remind me to send the deck to Claire on Thursday and ask about the venue.", 4.1, 280],
-  ["The coordinator on Chapel1 should retry the job twice and then page me.", 4.6, 295],
+  ["The coordinator on Krypton1 should retry the job twice and then page me.", 4.6, 295],
   ["Let's move the standup to nine thirty so the West Coast folks can join.", 3.9, 260],
   ["Draft a short thank-you note to the Hendersons for dinner on Sunday.", 3.6, 240],
   ["Silas, new paragraph. The second option costs less but takes a week longer.", 5.2, 330],
@@ -235,7 +235,7 @@ let history: HistoryItem[] = empty
         id: String(ts),
         ts: new Date(ts).toISOString(),
         text,
-        raw: text.replace("Parish1", "Paris one").replace("Chapel1", "chapel one"),
+        raw: text.replace("Argon1", "Argon one").replace("Krypton1", "krypton one"),
         durationS,
         latencyMs,
         words: text.split(/\s+/).length,
@@ -247,16 +247,16 @@ const dict: Dictionary = empty
   ? { terms: [], corrections: [], pending: [], fillers: ["um", "uh", "you know"] }
   : {
       terms: [
-        { text: "Parish1", source: "learned", added: iso(3 * DAY), uses: 14 },
-        { text: "Chapel1", source: "user", added: iso(9 * DAY), uses: 22 },
+        { text: "Argon1", source: "learned", added: iso(3 * DAY), uses: 14 },
+        { text: "Krypton1", source: "user", added: iso(9 * DAY), uses: 22 },
         { text: "Tauri", source: "user", added: iso(6 * DAY), uses: 5 },
         { text: "Silvanus", source: "user", added: iso(2 * DAY), uses: 1 },
         { text: "BarnLabs", source: "import", added: iso(12 * DAY), uses: 9 },
         { text: "Kubernetes", source: "import", added: iso(12 * DAY), uses: 3 },
       ],
       corrections: [
-        { from: "Paris one", to: "Parish1", count: 14, source: "learned", added: iso(3 * DAY) },
-        { from: "chapel one", to: "Chapel1", count: 22, source: "user", added: iso(9 * DAY) },
+        { from: "Argon one", to: "Argon1", count: 14, source: "learned", added: iso(3 * DAY) },
+        { from: "krypton one", to: "Krypton1", count: 22, source: "user", added: iso(9 * DAY) },
         { from: "barn labs", to: "BarnLabs", count: 9, source: "import", added: iso(12 * DAY) },
         { from: "towery", to: "Tauri", count: 3, source: "learned", added: iso(DAY) },
       ],
@@ -292,7 +292,7 @@ function setStatus(status: Status, detail: string | null = null) {
 
 let recording: { timer: number; started: number } | null = null;
 const phrases = [
-  "Push the fix to Parish1 and let me know when the build is green.",
+  "Push the fix to Argon1 and let me know when the build is green.",
   "Tell Mark I'll call him back after lunch.",
   "The meeting notes are in the shared folder under October.",
 ];
@@ -570,7 +570,7 @@ export function startOverlayDemo() {
     setStatus("typing");
     await delay(700);
     emit("learned", {
-      learned: [{ from: "Paris one", to: "Parish1", count: 2, source: "learned", added: new Date().toISOString() }],
+      learned: [{ from: "Argon one", to: "Argon1", count: 2, source: "learned", added: new Date().toISOString() }],
       pending: [],
       terms: [],
     });

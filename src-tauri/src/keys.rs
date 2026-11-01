@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn watch_follows_backspace_fixes() {
         let t = Instant::now();
-        let mut w = EditWatch::new("ssh into Paris one ", t, None);
+        let mut w = EditWatch::new("ssh into Argon one ", t, None);
         for _ in 0..10 {
             assert!(matches!(
                 w.on_event(&key(Key::Delete, Modifiers::empty()), t),
@@ -428,12 +428,11 @@ mod tests {
             ));
         }
         for (k, s) in [
-            (Key::P, true),
-            (Key::A, false),
+            (Key::A, true),
             (Key::R, false),
-            (Key::I, false),
-            (Key::S, false),
-            (Key::H, false),
+            (Key::G, false),
+            (Key::O, false),
+            (Key::N, false),
             (Key::Num1, false),
         ] {
             w.on_event(
@@ -450,8 +449,8 @@ mod tests {
         }
         match w.on_event(&key(Key::Return, Modifiers::empty()), t) {
             Watch::Done(Some((a, b))) => {
-                assert_eq!(a, "ssh into Paris one");
-                assert_eq!(b, "ssh into Parish1");
+                assert_eq!(a, "ssh into Argon one");
+                assert_eq!(b, "ssh into Argon1");
             }
             _ => panic!("expected a finished edit"),
         }

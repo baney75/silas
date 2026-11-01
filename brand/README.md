@@ -43,5 +43,5 @@ add effects, or set the wordmark in another face.
 
 ## Voice
 
-Plain, warm and direct. Say what Silas did ("Learned: Paris one → Parish1"), not how clever it is.
+Plain, warm and direct. Say what Silas did ("Learned: Argon one → Argon1"), not how clever it is.
 The scripture line appears once, in About. Don't use it anywhere else.

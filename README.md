@@ -71,7 +71,7 @@ typing speed and the rest in Settings.
 ## It learns
 
 - **Fix it where it typed.** Right after Silas types, backspace over a wrong word and type
-  the right one. Silas follows the edit. A name it didn't know ("Parish1") is learned at
+  the right one. Silas follows the edit. A name it didn't know ("Argon1") is learned at
   once; an ordinary word is learned the second time you make the same fix.
 - **Fix it in History.** Click *Teach a fix* on any dictation, edit the text, save.
 - **Add words.** Dictionary → Words takes names and jargon; Corrections maps what it hears
