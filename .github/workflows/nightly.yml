@@ -50,7 +50,7 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             args: --target aarch64-apple-darwin --bundles app,dmg
           - os: ubuntu-24.04
             args: --bundles deb,rpm,appimage
@@ -62,9 +62,9 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
-          targets: ${{ matrix.os == 'macos-14' && 'aarch64-apple-darwin' || '' }}
+          targets: ${{ matrix.os == 'macos-15' && 'aarch64-apple-darwin' || '' }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with: { workspaces: src-tauri }
+        with: { workspaces: src-tauri, key: "${{ matrix.os }}" }
       - name: Linux packages
         if: runner.os == 'Linux'
         run: |
@@ -80,8 +80,23 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-          APPLE_SIGNING_IDENTITY: "-"
-        run: bunx tauri build ${{ matrix.args }}
+          # macOS keeps Accessibility and Microphone grants only while the signature's
+          # designated requirement stays the same. See docs/signing.md.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          if [ "${{ runner.os }}" = macOS ] && [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "Signing with the stable identity from secrets."
+          else
+            # Tauri tries to import a certificate whenever the variable exists, even empty.
+            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD
+            export APPLE_SIGNING_IDENTITY=-
+            if [ "${{ runner.os }}" = macOS ]; then
+              echo "::warning title=Ad-hoc macOS signature::APPLE_CERTIFICATE or APPLE_SIGNING_IDENTITY is missing, so this nightly is ad-hoc signed: a new identity to macOS, which asks for Accessibility again. See docs/signing.md."
+            fi
+          fi
+          bunx tauri build ${{ matrix.args }}
       - name: Upload to the draft
         shell: bash
         env:

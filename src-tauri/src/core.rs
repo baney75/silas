@@ -720,6 +720,16 @@ impl Core {
                 return;
             }
         }
+        // The hotkey never shows the system mic prompt; only onboarding's Allow asks.
+        if !crate::permissions::mic_ready_for_recording() {
+            self.machine.lock().reset();
+            self.set_status(
+                Status::Error,
+                Some("Microphone: not allowed yet. Open Silas and click Allow for the microphone.".into()),
+            );
+            self.recover_soon();
+            return;
+        }
         // Note where the keyboard is now, at key-down, without making the mic wait for it.
         let capture = std::thread::spawn(crate::focus::Target::capture);
         let device = self.settings.lock().microphone.clone();

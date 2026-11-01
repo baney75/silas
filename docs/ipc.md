@@ -145,7 +145,7 @@ interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string
 | `get_stats` | | `Stats` |
 | `toggle_recording` | | `null` (same as tapping the hotkey) |
 | `capture_hotkey` | | `string` next key/modifier pressed, e.g. `"CmdRight"` (10 s timeout) |
-| `open_permission` | `{ kind: "microphone" \| "accessibility" \| "input" }` | `null` opens the OS settings pane |
+| `open_permission` | `{ kind: "microphone" \| "accessibility" \| "input" }` | `null`. Reads first; shows the system prompt at most once per run and never when already granted, otherwise opens the OS settings pane |
 | `list_microphones` | | `string[]` |
 | `show_main` | | `null` |
 | `get_benchmark` | | `Report \| null` (saved `benchmark.json`) |
