@@ -37,6 +37,14 @@ The script prints the new build's requirement, refuses an ad-hoc one, and stops 
 from the installed `/Applications/Silas.app` (or `~/Applications/Silas.app`). Set
 `ALLOW_NEW_REQUIREMENT=1` for an intended change such as that one-time switch.
 
+`scripts/release-requirement.txt` pins the requirement of the last stable release (v0.1.6,
+Apple Development). `scripts/check-requirement.sh` compares every build to it: the release
+script stops on a mismatch, a signed nightly fails before upload, and CI checks the pin itself.
+Only a stable release with `ALLOW_NEW_REQUIREMENT=1` rewrites the pin, and the release commit
+carries the new line. An ad-hoc installed copy holds no grants worth keeping, so the release
+script skips it and goes by the pin. Once the Developer ID secrets exist, signed nightlies fail
+until the first Developer ID stable release moves the pin.
+
 ## Nightly channel
 
 `.github/workflows/nightly.yml` signs the Mac build with a real certificate when the repo has

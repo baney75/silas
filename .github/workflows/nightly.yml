@@ -97,6 +97,20 @@ jobs:
             fi
           fi
           bunx tauri build ${{ matrix.args }}
+      - name: Check the designated requirement
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          SIGNED: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_SIGNING_IDENTITY != '' }}
+        run: |
+          # A signed nightly must match the last stable release (scripts/release-requirement.txt),
+          # or moving between channels asks for permissions again. See docs/signing.md.
+          if [ "$SIGNED" = true ]; then
+            scripts/check-requirement.sh "$(find src-tauri/target -type d -path '*release/bundle/macos/Silas.app' | head -1)"
+          else
+            scripts/check-requirement.sh --pin
+            echo "::warning title=Requirement not checked::This nightly is ad-hoc signed, so it cannot match the stable requirement in scripts/release-requirement.txt. Stable releases refuse ad-hoc builds. See docs/signing.md."
+          fi
       - name: Upload to the draft
         shell: bash
         env:
