@@ -29,7 +29,7 @@ git fetch -q origin main --tags
 ! git rev-parse -q --verify "refs/tags/v$version" >/dev/null || { echo "v$version already exists" >&2; exit 1; }
 
 # Put the version files back if anything below fails.
-restore() { git checkout -q -- src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock 2>/dev/null || true; }
+restore() { git checkout -q -- src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock scripts/release-requirement.txt 2>/dev/null || true; }
 trap 'status=$?; [ $status -eq 0 ] || restore' EXIT
 
 jq --arg v "$version" '.version = $v' src-tauri/tauri.conf.json > /tmp/silas-conf.json && mv /tmp/silas-conf.json src-tauri/tauri.conf.json
@@ -41,15 +41,18 @@ rustup target add aarch64-apple-darwin >/dev/null
 bunx tauri build --target aarch64-apple-darwin --bundles app
 
 out=src-tauri/target/aarch64-apple-darwin/release/bundle
-# macOS ties the grants to the designated requirement. If it changed since the installed
-# release, every user is asked again; stop unless that is intended (ALLOW_NEW_REQUIREMENT=1).
+# macOS ties the grants to the designated requirement. If it changed since the last stable
+# release (pinned in scripts/release-requirement.txt) or the installed copy, every user is asked
+# again; stop unless that is intended (ALLOW_NEW_REQUIREMENT=1, which also rewrites the pin and
+# commits it with the release).
+scripts/check-requirement.sh --update "$out/macos/Silas.app"
 requirement() { codesign -d -r- "$1" 2>&1 | sed -n 's/^designated => //p'; }
 new_req=$(requirement "$out/macos/Silas.app")
-echo "designated requirement: $new_req"
-case "$new_req" in *'cdhash '*|'') echo "the build has no stable designated requirement (ad-hoc?)" >&2; exit 1 ;; esac
 for installed in /Applications/Silas.app "$HOME/Applications/Silas.app"; do
   [ -d "$installed" ] || continue
   old_req=$(requirement "$installed")
+  # An ad-hoc copy (a local or nightly build) holds no grants a release could keep; the pin decides.
+  case "$old_req" in *'cdhash '*) echo "installed $installed is ad-hoc; checked against the pin only"; break ;; esac
   if [ "$old_req" != "$new_req" ] && [ "${ALLOW_NEW_REQUIREMENT:-}" != 1 ]; then
     echo "designated requirement changed from the installed $installed:" >&2
     echo "  was: $old_req" >&2

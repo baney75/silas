@@ -24,6 +24,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libudev-dev libxdo-dev
+      - name: Release requirement pin
+        if: runner.os == 'Linux'
+        run: scripts/check-requirement.sh --pin && scripts/check-requirement-test.sh
       - run: bun install --frozen-lockfile
       - run: bun run build
       - name: Unit tests
