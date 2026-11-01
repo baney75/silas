@@ -1,0 +1,57 @@
+name: Silas
+options:
+  bundleIdPrefix: com.baney
+  deploymentTarget:
+    iOS: "27.0"
+  createIntermediateGroups: true
+packages:
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio
+    exactVersion: 0.9.1
+  SilasCore:
+    path: SilasCore
+settings:
+  base:
+    DEVELOPMENT_TEAM: 54H7JX2PD4
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Silas:
+    type: application
+    platform: iOS
+    sources:
+      - path: Silas
+    dependencies:
+      - package: FluidAudio
+      - package: SilasCore
+    info:
+      path: Silas/Info.plist
+      properties:
+        CFBundleDisplayName: Silas
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSMicrophoneUsageDescription: >-
+          Silas listens only while you hold the button or turn on hands-free. Your voice is
+          turned into text on this iPad and never leaves it.
+        UILaunchScreen:
+          UIColorName: Ink
+        UIRequiresFullScreen: false
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIUserInterfaceStyle: Dark
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.baney.silas.ipad
+        PRODUCT_NAME: Silas
+        TARGETED_DEVICE_FAMILY: "2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO

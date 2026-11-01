@@ -1,0 +1,4 @@
+Silas.xcodeproj/
+build/
+.build/
+.swiftpm/
