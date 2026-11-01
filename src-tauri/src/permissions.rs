@@ -4,6 +4,11 @@
 //! Reading a permission never asks for it. Asking goes through [`PermissionGate`], which
 //! preflights first, never asks for something already granted, and shows each system prompt
 //! at most once per process: a second click opens the Settings pane instead.
+//!
+//! Dictation never asks. A hotkey press records only when the microphone preflight says
+//! granted ([`mic_ready_for_recording`]); an undetermined microphone is treated like a denied
+//! one, so the first system prompt always comes from the onboarding Allow button, not from a
+//! surprise mid-dictation.
 
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -106,19 +111,33 @@ impl<H: PermissionHost> PermissionGate<H> {
 
     /// The user's explicit "reset it and ask again". macOS can keep a stale entry whose
     /// switch looks on while the grant no longer applies; then the preflight says not
-    /// trusted, and clearing Silas's own entry and asking again fixes it. A trusted process
-    /// has nothing to fix, so it only gets the Settings pane.
+    /// trusted, and clearing Silas's own entry fixes it. A trusted process has nothing to
+    /// fix, so it only gets the Settings pane. The system prompt still shows at most once
+    /// per process: after it, a reset clears the entry and opens Settings without asking.
     pub fn reset_accessibility(&mut self) {
         let status = self.host.ax_status();
         if status == Grant::Granted {
             log::info!(target: LOG, "preflight accessibility=Granted; no reset, no request");
         } else {
-            log::info!(target: LOG, "preflight accessibility={status:?}; user asked to reset, requesting");
             self.host.reset_ax();
-            self.asked_ax = true;
-            self.host.request_ax();
+            if self.asked_ax {
+                log::info!(target: LOG, "preflight accessibility={status:?}; reset, no request (asked=true), opening Settings");
+            } else {
+                log::info!(target: LOG, "preflight accessibility={status:?}; reset, requesting once");
+                self.asked_ax = true;
+                self.host.request_ax();
+            }
         }
         self.host.open_pane(Pane::Accessibility);
+    }
+
+    /// Preflight for a dictation recording. Never asks: only `Granted` may record.
+    pub fn mic_ready_for_recording(&mut self) -> bool {
+        let status = self.host.mic_status();
+        if status != Grant::Granted {
+            log::info!(target: LOG, "preflight microphone={status:?}; dictation not started, no request");
+        }
+        status == Grant::Granted
     }
 }
 
@@ -134,6 +153,10 @@ pub fn open(kind: &str) {
 
 pub fn reset_accessibility() {
     GATE.lock().reset_accessibility();
+}
+
+pub fn mic_ready_for_recording() -> bool {
+    GATE.lock().mic_ready_for_recording()
 }
 
 /// The real OS.
@@ -395,13 +418,41 @@ mod tests {
     }
 
     #[test]
-    fn reset_asks_again_only_when_the_user_resets_an_untrusted_entry() {
+    fn reset_after_open_clears_the_entry_without_a_second_prompt() {
         let mut g = PermissionGate::new(Fake::new(Grant::Granted, Grant::Denied));
         g.open("accessibility");
+        assert_eq!(g.host.ax_requests, 1);
         g.reset_accessibility();
-        assert_eq!((g.host.resets, g.host.ax_requests), (1, 2));
-        // Asking was spent by the reset; plain opens stay on the Settings pane.
+        assert_eq!((g.host.resets, g.host.ax_requests), (1, 1));
+        g.reset_accessibility();
         g.open("accessibility");
-        assert_eq!(g.host.ax_requests, 2);
+        assert_eq!((g.host.resets, g.host.ax_requests), (2, 1));
+        assert_eq!(g.host.panes, vec![Pane::Accessibility; 4]);
+    }
+
+    #[test]
+    fn reset_first_asks_once_then_never_again() {
+        let mut g = PermissionGate::new(Fake::new(Grant::Granted, Grant::Denied));
+        g.reset_accessibility();
+        assert_eq!((g.host.resets, g.host.ax_requests), (1, 1));
+        g.reset_accessibility();
+        assert_eq!((g.host.resets, g.host.ax_requests), (2, 1));
+        g.open("accessibility");
+        assert_eq!(g.host.ax_requests, 1);
+    }
+
+    #[test]
+    fn dictation_records_only_with_a_granted_microphone_and_never_asks() {
+        for (mic, ready) in [(Grant::Granted, true), (Grant::Denied, false), (Grant::Unknown, false)] {
+            let mut g = PermissionGate::new(Fake::new(mic, Grant::Granted));
+            for _ in 0..3 {
+                assert_eq!(g.mic_ready_for_recording(), ready, "{mic:?}");
+            }
+            assert_eq!(g.host.requests(), 0);
+            assert!(g.host.panes.is_empty());
+            // Dictation doesn't spend the one prompt; onboarding's Allow still gets it.
+            g.open("microphone");
+            assert_eq!(g.host.mic_requests, usize::from(mic == Grant::Unknown));
+        }
     }
 }
