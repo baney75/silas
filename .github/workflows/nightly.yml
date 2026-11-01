@@ -80,8 +80,23 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-          APPLE_SIGNING_IDENTITY: "-"
-        run: bunx tauri build ${{ matrix.args }}
+          # macOS keeps Accessibility and Microphone grants only while the signature's
+          # designated requirement stays the same. See docs/signing.md.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          if [ "${{ runner.os }}" = macOS ] && [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "Signing with the stable identity from secrets."
+          else
+            # Tauri tries to import a certificate whenever the variable exists, even empty.
+            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD
+            export APPLE_SIGNING_IDENTITY=-
+            if [ "${{ runner.os }}" = macOS ]; then
+              echo "::warning title=Ad-hoc macOS signature::APPLE_CERTIFICATE or APPLE_SIGNING_IDENTITY is missing, so this nightly is ad-hoc signed: a new identity to macOS, which asks for Accessibility again. See docs/signing.md."
+            fi
+          fi
+          bunx tauri build ${{ matrix.args }}
       - name: Upload to the draft
         shell: bash
         env:

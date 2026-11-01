@@ -4,16 +4,20 @@
 #
 #   scripts/release-stable.sh 0.2.0 "What changed, in a sentence or two."
 #
-# Stable is macOS only: it is the build Donovan tests. It is signed with the local Apple
-# Development identity, so macOS keeps Silas's Microphone and Accessibility grants across
-# updates, and its updates are signed with a stable-only key that never leaves this Mac.
+# Stable is macOS only: it is the build Donovan tests. It is signed with a real identity
+# (Developer ID Application if this Mac has one, else Apple Development; APPLE_SIGNING_IDENTITY
+# overrides), so macOS keeps Silas's Microphone and Accessibility grants across updates as long
+# as the designated requirement stays the same (docs/signing.md). Its updates are signed with a
+# stable-only key that never leaves this Mac.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 version="${1:?usage: release-stable.sh <version> [notes]}"
 notes="${2:-Silas $version}"
 key="${TAURI_SIGNING_KEY_FILE:-$HOME/.tauri/silas-stable.key}"
-identity="${APPLE_SIGNING_IDENTITY:-$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development|Developer ID Application/ {print $2; exit}')}"
+find_identity() { security find-identity -v -p codesigning | awk -F'"' -v kind="$1" 'index($2, kind) == 1 {print $2; exit}'; }
+identity="${APPLE_SIGNING_IDENTITY:-$(find_identity "Developer ID Application:")}"
+identity="${identity:-$(find_identity "Apple Development:")}"
 
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must look like 1.2.3" >&2; exit 1; }
 [ -f "$key" ] || { echo "missing stable updater key $key" >&2; exit 1; }
@@ -37,6 +41,24 @@ rustup target add aarch64-apple-darwin >/dev/null
 bunx tauri build --target aarch64-apple-darwin --bundles app
 
 out=src-tauri/target/aarch64-apple-darwin/release/bundle
+# macOS ties the grants to the designated requirement. If it changed since the installed
+# release, every user is asked again; stop unless that is intended (ALLOW_NEW_REQUIREMENT=1).
+requirement() { codesign -d -r- "$1" 2>&1 | sed -n 's/^designated => //p'; }
+new_req=$(requirement "$out/macos/Silas.app")
+echo "designated requirement: $new_req"
+case "$new_req" in *'cdhash '*|'') echo "the build has no stable designated requirement (ad-hoc?)" >&2; exit 1 ;; esac
+for installed in /Applications/Silas.app "$HOME/Applications/Silas.app"; do
+  [ -d "$installed" ] || continue
+  old_req=$(requirement "$installed")
+  if [ "$old_req" != "$new_req" ] && [ "${ALLOW_NEW_REQUIREMENT:-}" != 1 ]; then
+    echo "designated requirement changed from the installed $installed:" >&2
+    echo "  was: $old_req" >&2
+    echo "  now: $new_req" >&2
+    echo "users would be asked for permissions again; set ALLOW_NEW_REQUIREMENT=1 if intended" >&2
+    exit 1
+  fi
+  break
+done
 dir=$(mktemp -d)
 cp "$out/macos/Silas.app.tar.gz" "$dir/Silas_aarch64.app.tar.gz"
 cp "$out/macos/Silas.app.tar.gz.sig" "$dir/Silas_aarch64.app.tar.gz.sig"

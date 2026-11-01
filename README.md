@@ -119,7 +119,8 @@ from a terminal.
 Silas checks at launch and every four hours. With auto-update on, it installs once it has
 been idle for two minutes. Each channel has its own signing key, and Silas refuses an update
 that isn't signed by its channel's key. The stable key never leaves the release Mac. Mac nightly
-builds are ad-hoc signed, so macOS asks for Accessibility again after each nightly update.
+builds are ad-hoc signed until the repo has a Developer ID certificate in its secrets, so macOS
+asks for Accessibility again after each nightly update. See [docs/signing.md](docs/signing.md).
 
 ## If something's off
 

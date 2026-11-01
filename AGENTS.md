@@ -16,7 +16,11 @@ bun run build && (cd src-tauri && cargo test --lib && cargo clippy --lib -- -D w
   `data/common-en.txt`). Add a test to `common_words_are_never_bent_into_jargon` for any
   new matching rule.
 - Stable releases are macOS only and come from `scripts/release-stable.sh` on Donovan's Mac
-  (Apple Development signing keeps macOS permissions across updates). CI builds nightly only.
+  (Developer ID Application, else Apple Development; a stable designated requirement keeps macOS
+  permissions across updates). CI builds nightly only, ad-hoc unless the signing secrets exist.
+  See `docs/signing.md`.
+- Reading a permission never asks for it. Requests go through `PermissionGate` in
+  `permissions.rs`: preflight first, never ask when granted, each prompt at most once per run.
 - Two updater keys. Nightly: `~/.tauri/silas.key`, also the `TAURI_SIGNING_PRIVATE_KEY` repo
   secret. Stable: `~/.tauri/silas-stable.key`, which never leaves the Mac. `updates.rs` pins each
   channel to its own public key. Never print, copy or commit either private key.
