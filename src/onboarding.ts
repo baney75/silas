@@ -11,7 +11,9 @@ export function needsAccess(): boolean {
   // Windows needs nothing; on Linux a missing udev grant is shown as a Home banner rather
   // than reopening setup on every launch.
   if (s.platform !== "macos") return false;
-  return s.permissions.accessibility !== "granted" || (s.platform === "macos" && s.permissions.microphone === "denied");
+  // An undecided microphone counts as missing: the hotkey never asks, so setup's Allow is the
+  // only place the prompt can come from.
+  return s.permissions.accessibility !== "granted" || s.permissions.microphone !== "granted";
 }
 
 export function mountOnboarding(root: HTMLElement, onDone: () => void, opts: { start?: Step } = {}): () => void {
@@ -228,8 +230,10 @@ export function mountOnboarding(root: HTMLElement, onDone: () => void, opts: { s
         { class: "onb-body" },
         all
           ? "Silas can hear you and type for you."
-          : repair
-            ? "macOS turned off a permission Silas needs, usually after an update. Allow it once more."
+          : repair && p.microphone === "unknown" && p.accessibility === "granted"
+            ? "Silas hasn't been allowed to use the microphone yet. Click Allow, then Allow in the macOS prompt."
+            : repair
+              ? "macOS turned off a permission Silas needs, usually after an update. Allow it once more."
             : "Allow each one when asked. Silas moves on by itself when both are on.",
       ),
       h(

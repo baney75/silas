@@ -106,13 +106,20 @@ export function mountHome(root: HTMLElement, go: Navigate): () => void {
                 ? h("button", { class: "btn btn-primary", type: "button", onclick: () => void api.openPermission("accessibility") }, "Open Settings")
                 : null,
             )
-          : s.permissions.microphone === "denied"
+          : s.platform === "macos" && s.permissions.microphone !== "granted"
             ? h(
                 "div",
                 { class: "banner" },
                 icon("mic", 20),
-                h("div", null, h("strong", null, "Silas can't use the microphone."), " Allow it in Privacy & Security, Microphone."),
-                h("button", { class: "btn btn-primary", type: "button", onclick: () => void api.openPermission("microphone") }, "Open Settings"),
+                s.permissions.microphone === "denied"
+                  ? h("div", null, h("strong", null, "Silas can't use the microphone."), " Allow it in Privacy & Security, Microphone.")
+                  : h("div", null, h("strong", null, "Silas needs the microphone."), " Click Allow, then Allow in the macOS prompt."),
+                // Unknown asks once (PermissionGate); denied, or a second click, opens Settings.
+                h(
+                  "button",
+                  { class: "btn btn-primary", type: "button", onclick: () => void api.openPermission("microphone") },
+                  s.permissions.microphone === "denied" ? "Open Settings" : "Allow",
+                ),
               )
             : null,
     );
