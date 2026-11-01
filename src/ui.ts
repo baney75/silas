@@ -116,7 +116,7 @@ export function toast(message: string | Node, kind: "info" | "learned" | "error"
   }, ms);
 }
 
-/** "Paris one → Parish1" rendered as a chip. */
+/** "Argon one → Argon1" rendered as a chip. */
 export function fixChip(from: string, to: string, kind: "learned" | "pending" = "learned"): HTMLElement {
   return h(
     "span",
