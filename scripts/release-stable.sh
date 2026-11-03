@@ -4,11 +4,14 @@
 #
 #   scripts/release-stable.sh 0.2.0 "What changed, in a sentence or two."
 #
-# Stable is macOS only: it is the build Donovan tests. It is signed with a real identity
-# (Developer ID Application if this Mac has one, else Apple Development; APPLE_SIGNING_IDENTITY
-# overrides), so macOS keeps Silas's Microphone and Accessibility grants across updates as long
-# as the designated requirement stays the same (docs/signing.md). Its updates are signed with a
-# stable-only key that never leaves this Mac.
+# Stable is macOS only: it is the build Donovan tests. It is signed with a stable identity, so
+# macOS keeps Silas's Microphone and Accessibility grants across updates as long as the
+# designated requirement stays the same (docs/signing.md). It picks, in order:
+#   1. APPLE_SIGNING_IDENTITY (an explicit override)
+#   2. a Developer ID Application identity in the keychain
+#   3. Silas Local Signing (scripts/signing-identity.sh; SILAS_LOCAL_SIGNING=0 skips it)
+#   4. an Apple Development identity
+# Its updates are signed with a stable-only key that never leaves this Mac.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -16,17 +19,23 @@ version="${1:?usage: release-stable.sh <version> [notes]}"
 notes="${2:-Silas $version}"
 key="${TAURI_SIGNING_KEY_FILE:-$HOME/.tauri/silas-stable.key}"
 find_identity() { security find-identity -v -p codesigning | awk -F'"' -v kind="$1" 'index($2, kind) == 1 {print $2; exit}'; }
-identity="${APPLE_SIGNING_IDENTITY:-$(find_identity "Developer ID Application:")}"
-identity="${identity:-$(find_identity "Apple Development:")}"
 
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must look like 1.2.3" >&2; exit 1; }
 [ -f "$key" ] || { echo "missing stable updater key $key" >&2; exit 1; }
-[ -n "$identity" ] || { echo "no code-signing identity found" >&2; exit 1; }
 [ "$(git branch --show-current)" = main ] || { echo "release from main" >&2; exit 1; }
 [ -z "$(git status --porcelain)" ] || { echo "commit your changes first" >&2; exit 1; }
 git fetch -q origin main --tags
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "main is not in sync with origin" >&2; exit 1; }
 ! git rev-parse -q --verify "refs/tags/v$version" >/dev/null || { echo "v$version already exists" >&2; exit 1; }
+
+identity="${APPLE_SIGNING_IDENTITY:-$(find_identity "Developer ID Application:")}"
+if [ -z "$identity" ] && [ "${SILAS_LOCAL_SIGNING:-1}" != 0 ]; then
+  # Self-signed, so `find-identity -v` hides it; codesign takes it by SHA-1.
+  identity=$(bash scripts/signing-identity.sh ensure)
+fi
+identity="${identity:-$(find_identity "Apple Development:")}"
+[ -n "$identity" ] || { echo "no code-signing identity found" >&2; exit 1; }
+echo "signing with $identity"
 
 # Put the version files back if anything below fails.
 restore() { git checkout -q -- src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock scripts/release-requirement.txt 2>/dev/null || true; }

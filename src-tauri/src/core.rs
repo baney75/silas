@@ -107,12 +107,17 @@ impl Drop for BenchGuard {
 const MAX_RECORDING: Duration = Duration::from_secs(300);
 
 pub fn key_access_message() -> String {
-    if cfg!(target_os = "macos") {
-        "Silas can't hear your key yet. Turn on Silas in System Settings › Privacy & Security › Accessibility.".into()
-    } else if cfg!(target_os = "linux") {
-        "Silas can't read the keyboard. Reinstall the package, or add the udev rule from the README, then log out and back in.".into()
-    } else {
-        "Silas couldn't start its keyboard listener. Restart Silas.".into()
+    key_access_message_for(std::env::consts::OS)
+}
+
+/// The macOS text also covers a stale grant: after a build with a different signature, the
+/// Accessibility switch can still look on for the old one while this build is not trusted.
+/// Silas can't read the switch, so it never claims it is on.
+fn key_access_message_for(os: &str) -> String {
+    match os {
+        "macos" => "Silas can't hear your key yet. Turn on Silas in System Settings, Privacy & Security, Accessibility. If the switch already looks on, turn it off and on, or remove Silas and add it again.".into(),
+        "linux" => "Silas can't read the keyboard. Reinstall the package, or add the udev rule from the README, then log out and back in.".into(),
+        _ => "Silas couldn't start its keyboard listener. Restart Silas.".into(),
     }
 }
 
@@ -122,11 +127,25 @@ impl Core {
         // Settings from before per-device picks have no modelSource. A model other than the
         // default was chosen by the user then, so no benchmark or registry may move them off it.
         if store::exists("settings.json") {
-            let installed = models::MODELS.iter().filter(|m| models::installed(m.id)).count();
-            store::migrate_model_source(&mut settings, &store::read_raw("settings.json"), installed);
+            let installed = models::MODELS
+                .iter()
+                .filter(|m| models::installed(m.id))
+                .count();
+            store::migrate_model_source(
+                &mut settings,
+                &store::read_raw("settings.json"),
+                installed,
+            );
         }
         // A fresh nightly install stays on nightly instead of jumping to stable.
-        if !store::exists("settings.json") && app.package_info().version.pre.as_str().starts_with("nightly") {
+        if !store::exists("settings.json")
+            && app
+                .package_info()
+                .version
+                .pre
+                .as_str()
+                .starts_with("nightly")
+        {
             settings.update_channel = "nightly".into();
         }
         let trigger = Trigger::parse(&settings.hotkey)
@@ -175,7 +194,8 @@ impl Core {
             if self.listener_ok.swap(ok, Ordering::Relaxed) == ok {
                 return;
             }
-            let missing_key = cur.0 == Status::Error && cur.1.as_deref() == Some(key_access_message().as_str());
+            let missing_key =
+                cur.0 == Status::Error && cur.1.as_deref() == Some(key_access_message().as_str());
             (ok && missing_key) || (!ok && cur.0 == Status::Ready)
         };
         if ok {
@@ -199,7 +219,14 @@ impl Core {
     /// The listener came back before any model was loaded: show what is really pending.
     fn load_status_after_listener(&self) {
         let installed = crate::models::installed(&self.settings.lock().model);
-        self.set_status(if installed { Status::Loading } else { Status::NeedsModel }, None);
+        self.set_status(
+            if installed {
+                Status::Loading
+            } else {
+                Status::NeedsModel
+            },
+            None,
+        );
     }
 
     pub fn set_status(&self, s: Status, detail: Option<String>) {
@@ -227,10 +254,7 @@ impl Core {
         let enabled = self.settings.lock().show_overlay;
         let show = enabled && overlay_status(s);
         if show {
-            if let Ok(Some(monitor)) = w
-                .primary_monitor()
-                .or_else(|_| w.current_monitor())
-            {
+            if let Ok(Some(monitor)) = w.primary_monitor().or_else(|_| w.current_monitor()) {
                 let size = monitor.size();
                 let pos = monitor.position();
                 let scale = monitor.scale_factor();
@@ -386,7 +410,8 @@ impl Core {
             // A device the registry knows needs no benchmark. Switch only if that model is
             // here, or if no model is installed yet (onboarding downloads the recommended one);
             // never strand someone who has a working model on one they haven't downloaded.
-            let usable = models::installed(&entry.model) || !models::MODELS.iter().any(|m| models::installed(m.id));
+            let usable = models::installed(&entry.model)
+                || !models::MODELS.iter().any(|m| models::installed(m.id));
             // (applies, the model changed)
             let (apply, changed) = {
                 let mut s = self.settings.lock();
@@ -478,7 +503,11 @@ impl Core {
     /// Measure the active model, and with `all` every other installed one. Saves the report,
     /// emits `benchmark-progress` then `benchmark-done` (or `benchmark-error`), and moves to the
     /// pick unless the user chose a model themselves.
-    pub fn run_benchmark(self: &Shared, scope: Scope, _guard: BenchGuard) -> anyhow::Result<Report> {
+    pub fn run_benchmark(
+        self: &Shared,
+        scope: Scope,
+        _guard: BenchGuard,
+    ) -> anyhow::Result<Report> {
         let result = self.measure(scope);
         match &result {
             Ok(report) => {
@@ -486,7 +515,9 @@ impl Core {
                 self.apply_pick(report);
             }
             Err(e) => {
-                let _ = self.app.emit("benchmark-error", json!({ "message": e.to_string() }));
+                let _ = self
+                    .app
+                    .emit("benchmark-error", json!({ "message": e.to_string() }));
             }
         }
         result
@@ -512,7 +543,10 @@ impl Core {
             let id = &ids[next];
             next += 1;
             let progress = |clip: usize, clips: usize| {
-                let _ = self.app.emit("benchmark-progress", json!({ "model": id, "clip": clip, "clips": clips }));
+                let _ = self.app.emit(
+                    "benchmark-progress",
+                    json!({ "model": id, "clip": clip, "clips": clips }),
+                );
             };
             let run = if *id == active {
                 // The live engine, one clip per lock, so a dictation waits at most one clip.
@@ -565,7 +599,9 @@ impl Core {
             .map(|r| r.results)
             .unwrap_or_default()
             .into_iter()
-            .filter(|old| models::spec(&old.model).is_some() && !fresh.iter().any(|f| f.model == old.model))
+            .filter(|old| {
+                models::spec(&old.model).is_some() && !fresh.iter().any(|f| f.model == old.model)
+            })
             .collect();
         results.extend(fresh);
         results.sort_by_key(|r| models::MODELS.iter().position(|m| m.id == r.model));
@@ -577,8 +613,13 @@ impl Core {
     /// Move to the benchmark's pick if it is installed, passes both bars, and the user
     /// hasn't chosen. A pick that misses a bar is only shown, never switched to.
     fn apply_pick(self: &Shared, report: &Report) {
-        let Some(pick) = report.pick.as_deref() else { return };
-        let passes = report.results.iter().any(|r| r.model == pick && benchmark::passes(r));
+        let Some(pick) = report.pick.as_deref() else {
+            return;
+        };
+        let passes = report
+            .results
+            .iter()
+            .any(|r| r.model == pick && benchmark::passes(r));
         if !passes || !models::installed(pick) {
             return;
         }
@@ -613,7 +654,19 @@ impl Core {
             if ev.is_key_down
                 && matches!(
                     ev.key,
-                    Some(Delete | ForwardDelete | LeftArrow | RightArrow | UpArrow | DownArrow | Escape | Home | End | PageUp | PageDown)
+                    Some(
+                        Delete
+                            | ForwardDelete
+                            | LeftArrow
+                            | RightArrow
+                            | UpArrow
+                            | DownArrow
+                            | Escape
+                            | Home
+                            | End
+                            | PageUp
+                            | PageDown
+                    )
                 )
             {
                 self.typed_over.store(true, Ordering::Relaxed);
@@ -701,11 +754,17 @@ impl Core {
             Status::Ready => {}
             // Errors clear on their own after a few seconds; a retry right away shouldn't
             // be ignored while a model is loaded and the key listener works.
-            Status::Error if self.active_model().is_some() && self.listener_ok.load(Ordering::Relaxed) => {
+            Status::Error
+                if self.active_model().is_some() && self.listener_ok.load(Ordering::Relaxed) =>
+            {
                 // Claim the error from its recovery timer; if the timer got there first it is
                 // resetting the key machine right now, so let this press go.
                 let g = self.recover_gen.load(Ordering::Relaxed);
-                if self.recover_gen.compare_exchange(g, g + 1, Ordering::AcqRel, Ordering::Relaxed).is_err() {
+                if self
+                    .recover_gen
+                    .compare_exchange(g, g + 1, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_err()
+                {
                     self.machine.lock().reset();
                     return;
                 }
@@ -725,7 +784,10 @@ impl Core {
             self.machine.lock().reset();
             self.set_status(
                 Status::Error,
-                Some("Microphone: not allowed yet. Open Silas and click Allow for the microphone.".into()),
+                Some(
+                    "Microphone: not allowed yet. Open Silas and click Allow for the microphone."
+                        .into(),
+                ),
             );
             self.recover_soon();
             return;
@@ -750,7 +812,9 @@ impl Core {
                 let me = self.clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(MAX_RECORDING);
-                    if me.recording_gen.load(Ordering::Relaxed) == gen && me.recording.lock().is_some() {
+                    if me.recording_gen.load(Ordering::Relaxed) == gen
+                        && me.recording.lock().is_some()
+                    {
                         me.machine.lock().reset();
                         me.finish_recording();
                     }
@@ -824,8 +888,16 @@ impl Core {
             let mut lost_focus = restored == Restore::Failed;
             let mut typing_error: Option<String> = None;
             // Guard the typing only when Silas knows where the text belongs.
-            let guarded = matches!(restored, Restore::InPlace | Restore::Restored | Restore::Elsewhere);
-            let still_here = |after_focus_key: bool| !guarded || target.as_ref().is_none_or(|t| t.still_here(after_focus_key));
+            let guarded = matches!(
+                restored,
+                Restore::InPlace | Restore::Restored | Restore::Elsewhere
+            );
+            let still_here = |after_focus_key: bool| {
+                !guarded
+                    || target
+                        .as_ref()
+                        .is_none_or(|t| t.still_here(after_focus_key))
+            };
             if !lost_focus {
                 me.set_status(Status::Typing, None);
                 me.typed_over.store(false, Ordering::Relaxed);
@@ -845,8 +917,17 @@ impl Core {
                 }
             }
             let typed_over = me.typed_over.load(Ordering::Relaxed);
-            if !lost_focus && typing_error.is_none() && s.learn_from_edits && !typed_over && crate::focus::us_layout() {
-                *me.watch.lock() = Some(EditWatch::new(&text, Instant::now(), crate::focus::focused()));
+            if !lost_focus
+                && typing_error.is_none()
+                && s.learn_from_edits
+                && !typed_over
+                && crate::focus::us_layout()
+            {
+                *me.watch.lock() = Some(EditWatch::new(
+                    &text,
+                    Instant::now(),
+                    crate::focus::focused(),
+                ));
             }
             let item = HistoryItem {
                 id: Utc::now().timestamp_millis().to_string(),
@@ -872,7 +953,10 @@ impl Core {
             *me.last_activity.lock() = Instant::now();
             let _ = me.app.emit("transcript", &item);
             if let Some(e) = typing_error {
-                me.set_status(Status::Error, Some(format!("{e}. Your full text is in History.")));
+                me.set_status(
+                    Status::Error,
+                    Some(format!("{e}. Your full text is in History.")),
+                );
                 me.recover_soon();
             } else if lost_focus {
                 me.set_status(
@@ -892,7 +976,10 @@ impl Core {
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(4));
             if me.status().0 == Status::Error
-                && me.recover_gen.compare_exchange(gen, gen + 1, Ordering::AcqRel, Ordering::Relaxed).is_ok()
+                && me
+                    .recover_gen
+                    .compare_exchange(gen, gen + 1, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
             {
                 me.machine.lock().reset();
                 if me.active_model().is_some() {
@@ -1000,7 +1087,10 @@ fn place_overlay(app: &AppHandle, w: tauri::WebviewWindow, enabled: bool) {
     let app = app.clone();
     let _ = w.clone().run_on_main_thread(move || {
         // Only the status lock, held for a copy: no thread holds it while waiting on this one.
-        let show = enabled && app.try_state::<Shared>().is_some_and(|c| overlay_status(c.status().0));
+        let show = enabled
+            && app
+                .try_state::<Shared>()
+                .is_some_and(|c| overlay_status(c.status().0));
         #[cfg(target_os = "macos")]
         order_overlay(&w, show);
         #[cfg(not(target_os = "macos"))]
@@ -1018,7 +1108,9 @@ fn order_overlay(w: &tauri::WebviewWindow, show: bool) {
     // FullScreenAuxiliary.
     const BEHAVIOR: usize = 1 | 1 << 4 | 1 << 6 | 1 << 8;
     let Ok(ns) = w.ns_window() else { return };
-    let Some(win) = (unsafe { (ns as *mut AnyObject).as_ref() }) else { return };
+    let Some(win) = (unsafe { (ns as *mut AnyObject).as_ref() }) else {
+        return;
+    };
     unsafe {
         if !show {
             let _: () = msg_send![win, orderOut: std::ptr::null::<AnyObject>()];
@@ -1037,6 +1129,18 @@ fn order_overlay(w: &tauri::WebviewWindow, show: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_mac_key_message_explains_a_stale_grant() {
+        let m = key_access_message_for("macos");
+        // home.ts finds the banner by this phrase.
+        assert!(m.contains("can't hear your key"));
+        assert!(m.contains("Privacy & Security, Accessibility"));
+        assert!(m.contains(
+            "If the switch already looks on, turn it off and on, or remove Silas and add it again."
+        ));
+        assert!(!m.contains(['\u{2014}', '\u{2013}', '\u{203a}']), "{m}");
+    }
 
     #[test]
     fn a_load_for_a_model_no_longer_chosen_is_stale() {

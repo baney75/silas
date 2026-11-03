@@ -27,11 +27,45 @@ That line must stay the same from release to release, or every user is asked aga
 
 1. `APPLE_SIGNING_IDENTITY` if set (an explicit override),
 2. the first `Developer ID Application:` identity in the keychain,
-3. the first `Apple Development:` identity.
+3. Silas Local Signing (below), unless `SILAS_LOCAL_SIGNING=0`,
+4. the first `Apple Development:` identity.
 
-Prefer Developer ID Application: its requirement pins the Team ID, which survives certificate
-renewal. Switching from Apple Development to Developer ID changes the requirement once, so
-users are asked once more after that release.
+Developer ID Application is best when it exists: its requirement pins the Team ID, which
+survives certificate renewal, and CI can use it too. Without it, Silas Local Signing keeps the
+grants for every Mac-built release, with no Apple Developer membership needed. Any switch of
+identity changes the requirement once, so users are asked once more after that release.
+
+### Silas Local Signing
+
+`scripts/signing-identity.sh` is the BaneySpaces Local Signing model applied to Silas. It keeps
+a self-signed code-signing certificate named `Silas Local Signing` in its own keychain:
+
+```text
+~/Library/Application Support/Silas/Signing/
+  silas-signing.keychain-db   the keychain
+  keychain-password           its random password (0600)
+  kept/identity.p12           the identity, so a lost keychain comes back with the same leaf
+  kept/identity-password      the .p12 password (0600)
+```
+
+`signing-identity.sh ensure` creates the identity on first use, restores it from `kept/` if the
+keychain is gone, unlocks it, adds it to the keychain search list, and prints its SHA-1 for
+`codesign`. Passwords move through files and `security -i` on stdin, never a command's
+arguments. `signing-identity.sh requirement` prints the requirement it should give:
+
+```text
+identifier "com.baney.silas" and certificate leaf = H"<sha1 of the certificate>"
+```
+
+The certificate never leaves the Mac. Back up `kept/` with the Mac: losing it means a new
+certificate, a new requirement, and one more round of permission prompts.
+
+**First release with Local Signing.** The pin still holds the v0.1.6 Apple Development
+requirement, so the first release signed with Local Signing (or with Developer ID) stops at the
+requirement check. Run it once as `ALLOW_NEW_REQUIREMENT=1 scripts/release-stable.sh ...`. That
+rewrites `scripts/release-requirement.txt` to what `codesign` prints, commits it with the
+release, and every later Local Signing build must match it. Users grant Accessibility once more
+after that release, then never again for Mac-built releases.
 
 The script prints the new build's requirement, refuses an ad-hoc one, and stops if it differs
 from the installed `/Applications/Silas.app` (or `~/Applications/Silas.app`). Set
@@ -47,8 +81,11 @@ until the first Developer ID stable release moves the pin.
 
 ## Nightly channel
 
-`.github/workflows/nightly.yml` signs the Mac build with a real certificate when the repo has
-these secrets, and falls back to ad-hoc with a warning annotation when it doesn't:
+`.github/workflows/nightly.yml` publishes a Mac nightly only when it is signed with a real
+certificate from these three secrets. Without them it still builds the Mac app, to prove it
+compiles, but uploads nothing for macOS: the nightly ships for Linux and Windows, `latest.json`
+has no `darwin-aarch64` entry, and the release notes say so. Publish fails if a darwin asset
+shows up without the secrets.
 
 | Secret | Value |
 | --- | --- |
@@ -56,13 +93,43 @@ these secrets, and falls back to ad-hoc with a warning annotation when it doesn'
 | `APPLE_CERTIFICATE_PASSWORD` | the password set when exporting the `.p12` |
 | `APPLE_SIGNING_IDENTITY` | the identity's full name, e.g. `Developer ID Application: Donovan Baney (TEAMID)` |
 
-CI cannot create a stable identity on its own. The Team ID comes from Donovan's Apple Developer
-Program membership, and only a certificate issued to that team gives a requirement that holds
-from build to build. Until the three secrets exist, Mac nightlies stay ad-hoc and each nightly
-update asks for Accessibility again.
+CI cannot create a stable identity on its own, and it cannot use Silas Local Signing: that
+private key stays on the Mac and never goes into repo secrets. Only a Developer ID Application
+certificate in these secrets gives CI-built nightlies a requirement that holds from build to
+build. Until the three secrets exist, there are no Mac nightlies. An ad-hoc nightly was worse
+than none: each one is a new app to macOS, so Accessibility stays on in Settings for the old
+signature while the new build is not trusted (2026-11-02, 0.1.7-nightly.202611021637).
+
+A Mac on the nightly channel finds no update for its platform until then, so the update check
+there reports an error instead of an update.
 
 Use the same Developer ID certificate as the stable channel, so moving between channels keeps
 the grants too.
+
+## In-app updates
+
+The updater in `src-tauri/src/updates.rs` checks the signature before it replaces anything.
+On macOS it downloads the update, unpacks it to a scratch folder, and compares
+`codesign -d -r-` of the running `Silas.app` with the downloaded one. It installs only when the
+two designated requirements are the same string (`same_designated_requirement`, the same rule
+as BaneyMacUpdater). Two different ad-hoc builds never match, because each requirement is its
+own `cdhash`; the identical build does. An unreadable signature counts as different. A refused
+update shows "This update is signed differently from your install. Installing it would break
+Accessibility. Not installed." and auto-update skips that version until Silas restarts. The
+updater never calls `tccutil`.
+
+## A switch that looks on but isn't
+
+When a build with a different requirement replaces Silas, System Settings can still show Silas
+on under Accessibility, because the entry belongs to the old signature. `AXIsProcessTrusted` says
+no for the new process, and Silas shows "Silas can't hear your key yet". The banner tells the
+user to turn the switch off and on, or remove Silas and add it again. Open Settings goes
+straight to Privacy & Security, Accessibility, and never resets anything. The home screen
+re-reads the permission every second while the banner shows, and the key listener retries every
+two seconds, so the banner clears without a restart. Only "Reset it and ask again" in onboarding
+clears Silas's TCC entry.
+
+Accessibility is the gate for the key listener. Silas does not read Input Monitoring.
 
 ## Asking for permissions
 

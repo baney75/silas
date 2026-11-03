@@ -2,6 +2,8 @@ name: Nightly
 # Rebuilds the rolling `nightly` pre-release for macOS, Windows and Linux.
 # The stable channel is macOS only and is released from Donovan's Mac (scripts/release-stable.sh)
 # with a different signing key, so nothing built here can reach stable users.
+# The Mac build ships only when the APPLE_* signing secrets exist; an ad-hoc one is built but
+# never uploaded, and latest.json then has no darwin entry (docs/signing.md).
 #
 # Re-run with "Re-run all jobs", never "Re-run failed jobs": a failed run deletes its draft.
 # Builds upload into a private draft. Only when every platform succeeded does the last job
@@ -93,7 +95,7 @@ jobs:
             unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD
             export APPLE_SIGNING_IDENTITY=-
             if [ "${{ runner.os }}" = macOS ]; then
-              echo "::warning title=Ad-hoc macOS signature::APPLE_CERTIFICATE or APPLE_SIGNING_IDENTITY is missing, so this nightly is ad-hoc signed: a new identity to macOS, which asks for Accessibility again. See docs/signing.md."
+              echo "::warning title=Mac nightly not published::APPLE_CERTIFICATE or APPLE_SIGNING_IDENTITY is missing, so this Mac build is ad-hoc signed. It is built to prove it compiles, but not uploaded: an ad-hoc build is a new app to macOS and leaves Accessibility on for the old signature while the new one is not trusted. See docs/signing.md."
             fi
           fi
           bunx tauri build ${{ matrix.args }}
@@ -109,7 +111,6 @@ jobs:
             scripts/check-requirement.sh "$(find src-tauri/target -type d -path '*release/bundle/macos/Silas.app' | head -1)"
           else
             scripts/check-requirement.sh --pin
-            echo "::warning title=Requirement not checked::This nightly is ad-hoc signed, so it cannot match the stable requirement in scripts/release-requirement.txt. Stable releases refuse ad-hoc builds. See docs/signing.md."
           fi
       - name: Upload to the draft
         shell: bash
@@ -117,8 +118,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          MAC_SIGNED: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_SIGNING_IDENTITY != '' }}
         run: |
           set -euo pipefail
+          # Fail closed: an ad-hoc Mac build never reaches the draft, so it can't become the
+          # nightly's Mac asset. The publish job leaves darwin out of latest.json to match.
+          if [ "${{ runner.os }}" = macOS ] && [ "$MAC_SIGNED" != true ]; then
+            echo "Ad-hoc Mac build: not uploaded. See docs/signing.md."
+            exit 0
+          fi
           mkdir -p out
           bundle=$(find src-tauri/target -type d -path '*release/bundle' | head -1)
           case "${{ runner.os }}" in
@@ -152,6 +160,8 @@ jobs:
       - name: Write latest.json and swap the draft in as nightly
         env:
           GH_TOKEN: ${{ github.token }}
+          # Same test as the build job: without these the Mac leg uploads nothing.
+          MAC_SIGNED: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_SIGNING_IDENTITY != '' }}
         run: |
           set -euo pipefail
           id=${{ needs.prepare.outputs.draft }}
@@ -173,17 +183,28 @@ jobs:
               *-setup.exe) add windows-x86_64 "$name"; add windows-x86_64-nsis "$name" ;;
             esac
           done < assets.tsv
-          for k in darwin-aarch64 linux-x86_64 linux-x86_64-deb linux-x86_64-rpm windows-x86_64; do
+          required="linux-x86_64 linux-x86_64-deb linux-x86_64-rpm windows-x86_64"
+          notes="Nightly build. Untested on Windows and Linux."
+          if [ "$MAC_SIGNED" = true ]; then
+            required="darwin-aarch64 $required"
+          else
+            # An ad-hoc Mac asset must never be offered, even if one slipped into the draft.
+            if jq -e 'has("darwin-aarch64")' <<< "$platforms" > /dev/null; then
+              echo "darwin-aarch64 is in the draft but the Mac signing secrets are missing" >&2; exit 1
+            fi
+            notes="$notes No macOS build: the Mac signing secrets are missing (docs/signing.md)."
+          fi
+          for k in $required; do
             jq -e --arg k "$k" 'has($k)' <<< "$platforms" > /dev/null || { echo "missing $k" >&2; exit 1; }
           done
-          jq -n --arg v "${{ needs.prepare.outputs.version }}" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson p "$platforms" \
-            '{version: $v, notes: "Nightly build. Untested on Windows and Linux.", pub_date: $d, platforms: $p}' > latest.json
+          jq -n --arg v "${{ needs.prepare.outputs.version }}" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg n "$notes" --argjson p "$platforms" \
+            '{version: $v, notes: $n, pub_date: $d, platforms: $p}' > latest.json
           curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" --data-binary @latest.json \
             "https://uploads.github.com/repos/$REPO/releases/$id/assets?name=latest.json" > /dev/null
           gh release delete nightly -R "$REPO" --cleanup-tag --yes 2>/dev/null || true
           gh api -X PATCH "repos/$REPO/releases/$id" -f tag_name=nightly -f target_commitish="$GITHUB_SHA" \
             -F draft=false -F prerelease=true -f make_latest=false -f name="Silas Nightly ${{ needs.prepare.outputs.version }}" \
-            -f body="Built from $GITHUB_SHA. Nightly builds are untested on Windows and Linux." > /dev/null
+            -f body="Built from $GITHUB_SHA. $notes" > /dev/null
 
   cleanup:
     needs: [prepare, build, publish]

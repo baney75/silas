@@ -1,4 +1,4 @@
-import { hotkeyLabel, installUpdate, statusText, store, subscribe } from "./store";
+import { hotkeyLabel, installUpdate, refreshState, statusText, store, subscribe } from "./store";
 import { clear, h, icon, keycap, num, timeAgo } from "./ui";
 import type { Navigate } from "./main";
 import { api } from "./api";
@@ -99,7 +99,7 @@ export function mountHome(root: HTMLElement, go: Navigate): () => void {
                 null,
                 h("strong", null, "Silas can't hear your key yet."),
                 s.platform === "macos"
-                  ? " Turn on Silas under Privacy & Security, Accessibility. Silas picks it up in a couple of seconds, no restart needed."
+                  ? " Turn on Silas under Privacy & Security, Accessibility. If the switch already looks on, an older Silas may hold it: turn it off and on, or remove Silas and add it again. Silas picks it up in a couple of seconds, no restart needed."
                   : ` ${s.detail ?? ""}`,
               ),
               s.platform === "macos"
@@ -179,11 +179,19 @@ export function mountHome(root: HTMLElement, go: Navigate): () => void {
   drawHero();
   drawStats();
   drawRecent();
+  // While the key banner shows, re-read permissions every second so it clears as soon as
+  // macOS trusts this build, without a restart or a click back into Silas.
+  const poll = window.setInterval(() => {
+    if (keyAccessMissing(store.state)) void refreshState();
+  }, 1000);
   const unsubs = [
     subscribe(["state", "settings"], drawHero),
     subscribe(["stats"], drawStats),
     subscribe(["history", "state"], drawRecent),
     subscribe(["update"], drawUpdate),
   ];
-  return () => unsubs.forEach((u) => u());
+  return () => {
+    window.clearInterval(poll);
+    unsubs.forEach((u) => u());
+  };
 }

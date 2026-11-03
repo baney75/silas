@@ -39,6 +39,14 @@ FAKE_REQ="$other" ALLOW_NEW_REQUIREMENT=1 expect pass "an allowed release rewrit
 [ "$(cat "$tmp/repo/scripts/release-requirement.txt")" = "$other" ] && echo "ok: the pin holds the new requirement" \
   || { echo "FAIL: the pin was not rewritten"; failures=$((failures + 1)); }
 
+# The first release signed with Silas Local Signing (scripts/signing-identity.sh) moves the pin once.
+local_req='identifier "com.baney.silas" and certificate leaf = H"d1cfbd7446f84f6c625b9db83c5bf96da33b157e"'
+set_pin "$pin"
+FAKE_REQ="$local_req" expect fail "a Local Signing release cannot move the pin without ALLOW_NEW_REQUIREMENT" --update "$tmp/Silas.app"
+FAKE_REQ="$local_req" ALLOW_NEW_REQUIREMENT=1 expect pass "an allowed Local Signing release writes the pin" --update "$tmp/Silas.app"
+expect pass "a Local Signing pin passes the pin check" --pin
+FAKE_REQ="$local_req" expect pass "the next Local Signing build matches" "$tmp/Silas.app"
+
 set_pin '# bootstrap: no stable release signed with a real identity yet'
 expect pass "a bootstrap placeholder passes the pin check" --pin
 FAKE_REQ="$pin" expect fail "a bootstrap placeholder needs ALLOW_NEW_REQUIREMENT for the first pin" --update "$tmp/Silas.app"
