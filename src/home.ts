@@ -79,6 +79,25 @@ export function mountHome(root: HTMLElement, go: Navigate): () => void {
         s.status === "error" && s.detail ? h("span", { class: "live-detail" }, s.detail) : null,
       ),
     );
+    drawBanner();
+  }
+
+  // The key banner polls state every second. Rebuilding it each time would delete the
+  // focused Open Settings button, so it only redraws when what it says changes.
+  let shownBanner: string | null = null;
+
+  function bannerKey(s: typeof store.state): string {
+    if (s.status === "needs_model") return "model";
+    if (keyAccessMissing(s)) return `key:${s.platform}:${s.platform === "macos" ? "" : (s.detail ?? "")}`;
+    if (s.platform === "macos" && s.permissions.microphone !== "granted") return `mic:${s.permissions.microphone}`;
+    return "";
+  }
+
+  function drawBanner() {
+    const s = store.state;
+    const key = bannerKey(s);
+    if (key === shownBanner) return;
+    shownBanner = key;
     clear(
       banner,
       s.status === "needs_model"

@@ -3,9 +3,9 @@
 //! stable  (macOS only): the latest full release, built and signed on Donovan's Mac.
 //! nightly (all):        the rolling `nightly` pre-release that CI rebuilds every night.
 
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -159,6 +159,10 @@ async fn tokio_sleep(d: Duration) {
 /// What the user sees when an update would change how macOS identifies Silas.
 pub const SIGNED_DIFFERENTLY: &str = "This update is signed differently from your install. Installing it would break Accessibility. Not installed.";
 
+/// What the user sees when the update's signature names the right identity but doesn't verify.
+pub const BAD_SIGNATURE: &str =
+    "This update's signature doesn't check out, so it may be damaged. Not installed.";
+
 /// The last version the guard refused, so auto-update doesn't download it again every check.
 static REFUSED: Mutex<Option<String>> = Mutex::new(None);
 
@@ -173,21 +177,48 @@ pub fn same_designated_requirement(installed: &str, candidate: &str) -> bool {
 /// macOS keeps Accessibility only while the designated requirement stays the same. A build
 /// that changes it leaves the switch on in Settings while the new process is not trusted,
 /// which is the stale grant this guard exists to prevent. An unreadable signature is a change.
+/// `codesign -d` only prints the requirement, and a damaged signature can still print the right
+/// one, so a match must also verify: the candidate's signature is valid and it satisfies the
+/// installed build's requirement.
 fn guard_requirement(
     installed: &Path,
     candidate: &Path,
     read: impl Fn(&Path) -> Option<String>,
+    verify: impl Fn(&Path, &str) -> bool,
 ) -> anyhow::Result<()> {
     let old = read(installed).unwrap_or_default();
     let new = read(candidate).unwrap_or_default();
-    if same_designated_requirement(&old, &new) {
-        return Ok(());
+    if !same_designated_requirement(&old, &new) {
+        log::warn!(
+            "update refused: designated requirement differs (installed {}: {old:?}, update: {new:?})",
+            installed.display()
+        );
+        anyhow::bail!(SIGNED_DIFFERENTLY)
     }
-    log::warn!(
-        "update refused: designated requirement differs (installed {}: {old:?}, update: {new:?})",
-        installed.display()
-    );
-    anyhow::bail!(SIGNED_DIFFERENTLY)
+    if !verify(candidate, old.trim()) {
+        log::warn!("update refused: signature doesn't verify against {old:?}");
+        anyhow::bail!(BAD_SIGNATURE)
+    }
+    Ok(())
+}
+
+/// `codesign` arguments that check the whole bundle's signature, nested code included, and
+/// test it against `requirement` (`-R=` takes the requirement as text, not a file).
+fn verify_args(requirement: &str) -> Vec<String> {
+    vec![
+        "--verify".into(),
+        "--deep".into(),
+        "--strict".into(),
+        format!("-R={requirement}"),
+    ]
+}
+
+fn verify_signature(app: &Path, requirement: &str) -> bool {
+    Command::new("codesign")
+        .args(verify_args(requirement))
+        .arg(app)
+        .output()
+        .is_ok_and(|out| out.status.success())
 }
 
 /// The requirement as `codesign -d -r-` prints it after "designated => ", the same line
@@ -234,32 +265,49 @@ fn check_candidate(archive: &[u8]) -> anyhow::Result<()> {
     let dir = std::env::temp_dir().join(format!("silas-update-{}-{nanos}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
-    let result =
-        unpack(archive, &dir).and_then(|app| guard_requirement(&installed, &app, read_requirement));
+    let result = unpack(archive, &dir)
+        .and_then(|app| guard_requirement(&installed, &app, read_requirement, verify_signature));
     let _ = std::fs::remove_dir_all(&dir);
     result
 }
 
+/// The updater installs every entry at its path minus the first component, whatever that
+/// component is named. So the bundle checked here is the bundle installed only when every
+/// entry sits under one plain `.app` root: a decoy `Silas.app` beside a `payload/` would pass
+/// the check while the payload overwrote it on install.
 fn unpack(archive: &[u8], dir: &Path) -> anyhow::Result<PathBuf> {
-    let mut tar = Command::new("tar")
-        .arg("-xzf")
-        .arg("-")
-        .arg("-C")
-        .arg(dir)
-        .stdin(Stdio::piped())
-        .spawn()?;
-    let written = match tar.stdin.take() {
-        // Dropping stdin at the end of this arm closes it, so tar sees the end of the archive.
-        Some(mut stdin) => stdin.write_all(archive),
-        None => Ok(()),
-    };
-    let status = tar.wait()?;
-    written?;
-    anyhow::ensure!(status.success(), "couldn't unpack the update");
-    std::fs::read_dir(dir)?
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .find(|p| p.extension().is_some_and(|e| e == "app"))
+    let mut root: Option<OsString> = None;
+    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(archive));
+    for entry in tar.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.into_owned();
+        let mut parts = path.components();
+        let first = match parts.next() {
+            Some(Component::Normal(name))
+                if Path::new(name).extension().is_some_and(|e| e == "app") =>
+            {
+                name
+            }
+            _ => anyhow::bail!(
+                "the update holds something outside its app bundle: {}",
+                path.display()
+            ),
+        };
+        anyhow::ensure!(
+            parts.all(|c| matches!(c, Component::Normal(_))),
+            "the update holds an unsafe path: {}",
+            path.display()
+        );
+        let r = root.get_or_insert_with(|| first.to_owned());
+        anyhow::ensure!(
+            r.as_os_str() == first,
+            "the update holds more than one app bundle: {} and {}",
+            Path::new(r).display(),
+            Path::new(first).display()
+        );
+        anyhow::ensure!(entry.unpack_in(dir)?, "couldn't unpack {}", path.display());
+    }
+    root.map(|r| dir.join(r))
         .ok_or_else(|| anyhow::anyhow!("the update holds no app bundle"))
 }
 
@@ -291,7 +339,134 @@ mod tests {
             Path::new("/Applications/Silas.app"),
             Path::new("/tmp/new/Silas.app"),
             reader(installed, candidate),
+            |_, _| true,
         )
+    }
+
+    #[test]
+    fn a_matching_requirement_with_a_broken_signature_is_refused() {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let e = guard_requirement(
+            Path::new("/Applications/Silas.app"),
+            Path::new("/tmp/new/Silas.app"),
+            reader(Some(STABLE), Some(STABLE)),
+            |p, req| {
+                asked.borrow_mut().push((p.to_path_buf(), req.to_string()));
+                false
+            },
+        )
+        .unwrap_err();
+        assert_eq!(e.to_string(), BAD_SIGNATURE);
+        // The candidate is tested against the installed build's requirement.
+        assert_eq!(
+            asked.into_inner(),
+            vec![(PathBuf::from("/tmp/new/Silas.app"), STABLE.to_string())]
+        );
+    }
+
+    #[test]
+    fn a_changed_requirement_is_refused_before_verifying() {
+        let e = guard_requirement(
+            Path::new("/Applications/Silas.app"),
+            Path::new("/tmp/new/Silas.app"),
+            reader(Some(STABLE), Some(ADHOC_NEW)),
+            |_, _| panic!("verify ran on a mismatched requirement"),
+        )
+        .unwrap_err();
+        assert_eq!(e.to_string(), SIGNED_DIFFERENTLY);
+    }
+
+    #[test]
+    fn verification_is_strict_deep_and_tests_the_requirement() {
+        assert_eq!(
+            verify_args(STABLE),
+            vec![
+                "--verify".to_string(),
+                "--deep".into(),
+                "--strict".into(),
+                format!("-R={STABLE}"),
+            ]
+        );
+    }
+
+    /// A `.tar.gz` with names written as given, so tests can build layouts `tar::Builder`
+    /// would normalize away. A name ending in `/` is a folder.
+    fn targz(entries: &[&str]) -> Vec<u8> {
+        let mut b = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::fast(),
+        ));
+        for name in entries {
+            let mut h = tar::Header::new_old();
+            h.as_old_mut().name[..name.len()].copy_from_slice(name.as_bytes());
+            let dir = name.ends_with('/');
+            let body: &[u8] = if dir { b"" } else { name.as_bytes() };
+            h.set_entry_type(if dir {
+                tar::EntryType::Directory
+            } else {
+                tar::EntryType::Regular
+            });
+            h.set_mode(0o755);
+            h.set_size(body.len() as u64);
+            h.set_cksum();
+            b.append(&h, body).unwrap();
+        }
+        b.into_inner().unwrap().finish().unwrap()
+    }
+
+    fn unpack_layout(entries: &[&str]) -> anyhow::Result<PathBuf> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("silas-unpack-test-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let result = unpack(&targz(entries), &dir).map(|app| {
+            assert!(app.join("Contents/MacOS/silas").is_file());
+            app.strip_prefix(&dir).unwrap().to_path_buf()
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        result
+    }
+
+    #[test]
+    fn a_single_app_bundle_unpacks() {
+        let got = unpack_layout(&[
+            "Silas.app/",
+            "Silas.app/Contents/",
+            "Silas.app/Contents/MacOS/silas",
+            "Silas.app/Contents/Info.plist",
+        ]);
+        assert_eq!(got.unwrap(), PathBuf::from("Silas.app"));
+    }
+
+    #[test]
+    fn a_decoy_bundle_beside_a_payload_is_refused() {
+        // The updater strips the first component of every entry, so `payload/Contents/...`
+        // would overwrite the checked `Silas.app/Contents/...` on install.
+        assert!(unpack_layout(&[
+            "Silas.app/Contents/MacOS/silas",
+            "payload/Contents/MacOS/silas",
+        ])
+        .is_err());
+        assert!(unpack_layout(&[
+            "Silas.app/Contents/MacOS/silas",
+            "Other.app/Contents/MacOS/silas",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn roots_that_install_elsewhere_are_refused() {
+        for bad in [
+            "./Silas.app/Contents/MacOS/silas",
+            "/Silas.app/Contents/MacOS/silas",
+            "Silas.app/../Contents/MacOS/silas",
+            "payload/Contents/MacOS/silas",
+        ] {
+            assert!(unpack_layout(&[bad]).is_err(), "{bad} unpacked");
+        }
+        assert!(unpack_layout(&[]).is_err());
     }
 
     #[test]
@@ -362,5 +537,6 @@ mod tests {
     #[test]
     fn the_refusal_reads_plainly() {
         assert!(!SIGNED_DIFFERENTLY.contains(['\u{2014}', '\u{2013}']));
+        assert!(!BAD_SIGNATURE.contains(['\u{2014}', '\u{2013}']));
     }
 }
