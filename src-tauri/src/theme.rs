@@ -144,18 +144,56 @@ fn choice(v: &Value, key: &str, allowed: &[&str]) -> Result<String, String> {
     }
 }
 
-/// A font stack goes straight into CSS, so allow only names and commas, with quoted names.
+/// A font stack: names separated by commas. Each is plain (letters, digits, spaces, hyphens,
+/// underscores) or in matching quotes with no quote, backslash, `<`, control character or `/*`
+/// inside. Same rule as `check_font` in cli/src/theme.rs; the stack goes straight into CSS.
+fn check_font(s: &str) -> Result<(), &'static str> {
+    if s.trim().is_empty() {
+        return Err("is empty");
+    }
+    let mut rest = s;
+    loop {
+        rest = rest.trim_start();
+        let after = if let Some(q) = rest.chars().next().filter(|c| matches!(c, '"' | '\'')) {
+            let body = &rest[1..];
+            let end = body.find(q).ok_or("has a quote that is not closed")?;
+            let inner = &body[..end];
+            if inner.trim().is_empty() {
+                return Err("has an empty quoted name");
+            }
+            if inner.contains("/*")
+                || inner.chars().any(|c| c.is_control() || matches!(c, '\\' | '"' | '\'' | '<'))
+            {
+                return Err("has a quoted name with a character that is not allowed");
+            }
+            &body[end + 1..]
+        } else {
+            let end = rest.find(',').unwrap_or(rest.len());
+            let name = rest[..end].trim_end();
+            if name.is_empty() {
+                return Err("has a name missing");
+            }
+            if !name.chars().all(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_')) {
+                return Err("has a name with a character that is not allowed");
+            }
+            &rest[end..]
+        };
+        let after = after.trim_start();
+        match after.strip_prefix(',') {
+            Some(next) => rest = next,
+            None if after.is_empty() => return Ok(()),
+            None => return Err("has something after a quoted name that is not a comma"),
+        }
+    }
+}
+
 fn font(v: &Value, key: &str) -> Result<String, String> {
     let s = v.get(key).and_then(Value::as_str).ok_or_else(|| format!("{key} is missing"))?;
-    let bad = s.is_empty()
-        || s.len() > 300
-        || s.chars().any(|c| c.is_control() || ";{}()<>\\@!".contains(c))
-        || s.contains("/*");
-    if bad {
-        Err(format!("{key} is not a font list"))
-    } else {
-        Ok(s.to_string())
+    if s.len() > 300 {
+        return Err(format!("{key} is longer than 300 bytes"));
     }
+    check_font(s).map_err(|why| format!("{key} {why}"))?;
+    Ok(s.to_string())
 }
 
 fn easing(v: &Value) -> Result<String, String> {
@@ -616,6 +654,29 @@ mod tests {
             v["surfaces"]["voice"]["type"]["ui"] = bad.into();
             assert!(parse_value(&v).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn font_rule_matches_the_cli() {
+        for ok in [
+            "Georgia, serif",
+            "system-ui, \"Segoe UI\", sans-serif",
+            "'Times New Roman', serif",
+            "\"a;b\", serif",
+            "Arial",
+        ] {
+            assert!(check_font(ok).is_ok(), "{ok:?}");
+        }
+        for bad in [
+            "", " ", "a, ,b", "a,", ",a", "\"\"", "\" \"", "a;b", "url(x)", "a(b)", "a{b}", "a/b",
+            "Arial, \"x/*y\"", "Arial /* c */", "\"a\\b\"", "\"a<b\"", "\"a'b\"", "'a\"b'", "\"a\nb\"",
+            "a\tb", "a\u{7}", "\"a\" b", "\"open", "a\"b", "a<b", "a@b", "a!b",
+        ] {
+            assert!(check_font(bad).is_err(), "{bad:?}");
+        }
+        let mut v = good();
+        v["surfaces"]["voice"]["type"]["mono"] = " ".into();
+        assert!(parse_value(&v).unwrap_err().starts_with("mono "));
     }
 
     #[test]
