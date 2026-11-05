@@ -597,10 +597,17 @@ async function previewTheme(): Promise<Theme | null> {
     if (!res.ok) return null;
     const text = await res.text();
     watchThemeFile(file, text);
-    return JSON.parse(text) as Theme;
+    return fromFile(text);
   } catch {
     return null;
   }
+}
+
+/** What the core would send: the voice surface of the file plus its name and mode (no checks here). */
+function fromFile(text: string): Theme {
+  const f = JSON.parse(text);
+  const v = f.surfaces.voice;
+  return { name: f.name, mode: f.mode, light: v.light, dark: v.dark, shape: v.shape, type: v.type, motion: v.motion };
 }
 
 let watching = false;
@@ -614,7 +621,7 @@ function watchThemeFile(file: string, first: string) {
       const text = res.ok ? await res.text() : "";
       if (text === last) return;
       last = text;
-      emit("theme_changed", text ? (JSON.parse(text) as Theme) : null);
+      emit("theme_changed", text ? fromFile(text) : null);
     } catch {
       /* keep the last theme */
     }

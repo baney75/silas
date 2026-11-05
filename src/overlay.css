@@ -8,6 +8,7 @@
   --text: #ede6d8;
   --muted: #a39c8e;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
+  --learned-arrow: var(--gold);
   --blur: 18px;
   --rec-glow-0: rgba(224, 100, 76, 0.55);
   --rec-glow-1: rgba(224, 100, 76, 0.5);
@@ -226,7 +227,7 @@ body {
 }
 
 .learned-text .arrow {
-  color: var(--gold);
+  color: var(--learned-arrow);
 }
 
 .learned-text .to {
