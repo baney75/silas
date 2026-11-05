@@ -297,27 +297,31 @@ pub fn parse(text: &str) -> Result<Theme, String> {
     })
 }
 
-/// Read one file. Missing is quiet; a file that is there but wrong is logged.
-pub fn load(path: &Path) -> Option<Theme> {
-    let meta = match std::fs::metadata(path) {
-        Ok(m) => m,
-        Err(_) => return None,
-    };
-    if !meta.is_file() || meta.len() > MAX_BYTES {
-        log::warn!("theme file ignored: {} is not a file under {MAX_BYTES} bytes", path.display());
-        return None;
+/// Read at most `MAX_BYTES` from `r`. It reads one byte more to tell "exactly full" from "too big",
+/// and refuses before the bytes are decoded.
+fn read_capped<R: std::io::Read>(r: R) -> Result<String, String> {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    r.take(MAX_BYTES + 1).read_to_end(&mut buf).map_err(|e| format!("unreadable: {e}"))?;
+    if buf.len() as u64 > MAX_BYTES {
+        return Err(format!("over {MAX_BYTES} bytes"));
     }
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(e) => {
-            log::warn!("theme file unreadable: {e}");
-            return None;
-        }
+    String::from_utf8(buf).map_err(|_| "not UTF-8".to_string())
+}
+
+/// Read one file. Missing is quiet; a file that is there but wrong is logged. The file is opened
+/// once and checked through that handle, so it cannot be swapped between the check and the read.
+pub fn load(path: &Path) -> Option<Theme> {
+    let file = std::fs::File::open(path).ok()?;
+    let text = match file.metadata() {
+        Ok(m) if m.is_file() && m.len() <= MAX_BYTES => read_capped(file),
+        Ok(_) => Err(format!("not a file under {MAX_BYTES} bytes")),
+        Err(e) => Err(format!("unreadable: {e}")),
     };
-    match parse(&text) {
+    match text.and_then(|t| parse(&t)) {
         Ok(t) => Some(t),
         Err(e) => {
-            log::warn!("theme file ignored: {e}");
+            log::warn!("theme file ignored: {} {e}", path.display());
             None
         }
     }
@@ -447,6 +451,44 @@ mod tests {
         assert_eq!(t.light.accent, "#3f6b6a");
         assert_eq!(t.shape.radius_large, 16.0);
         assert!(!t.motion.reduced);
+    }
+
+    /// Hands out 0xff forever and counts what was taken.
+    struct Endless(std::rc::Rc<std::cell::Cell<u64>>);
+    impl std::io::Read for Endless {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            buf.fill(0xff);
+            self.0.set(self.0.get() + buf.len() as u64);
+            Ok(buf.len())
+        }
+    }
+
+    #[test]
+    fn oversized_content_is_refused_before_decoding() {
+        let n = std::rc::Rc::new(std::cell::Cell::new(0));
+        let e = read_capped(Endless(n.clone())).unwrap_err();
+        assert!(e.starts_with("over "), "size comes first, not a UTF-8 error: {e}");
+        assert!(n.get() <= MAX_BYTES + 8192, "read {} bytes", n.get());
+        // Exactly full is allowed; one more is not.
+        assert_eq!(read_capped(vec![b' '; MAX_BYTES as usize].as_slice()).unwrap().len() as u64, MAX_BYTES);
+        assert!(read_capped(vec![b' '; MAX_BYTES as usize + 1].as_slice()).is_err());
+        assert_eq!(read_capped(&[0xffu8][..]).unwrap_err(), "not UTF-8");
+    }
+
+    #[test]
+    fn oversized_file_is_none() {
+        let dir = std::env::temp_dir().join(format!("silas-big-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("theme.json");
+        let good = good().to_string();
+        let mut padded = good.clone().into_bytes();
+        padded.resize(MAX_BYTES as usize + 1, b' ');
+        std::fs::write(&f, &padded).unwrap();
+        assert!(load(&f).is_none());
+        padded.truncate(MAX_BYTES as usize);
+        std::fs::write(&f, &padded).unwrap();
+        assert!(load(&f).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
