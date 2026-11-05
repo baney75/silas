@@ -11,6 +11,9 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 
+/// Contrast the main text pairs need, as in the CLI (`TEXT_MIN`).
+const MIN_CONTRAST: f64 = 4.5;
+
 /// Biggest theme file read. A real one is about 3 KB.
 const MAX_BYTES: u64 = 256 * 1024;
 
@@ -177,6 +180,44 @@ fn easing(v: &Value) -> Result<String, String> {
     }
 }
 
+fn lin(c: u8) -> f64 {
+    let c = f64::from(c) / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// WCAG contrast ratio of two `#rrggbb` colors that `color` already passed.
+pub fn contrast(a: &str, b: &str) -> f64 {
+    let lum = |h: &str| {
+        let ch = |i: usize| lin(u8::from_str_radix(&h[i..i + 2], 16).unwrap_or(0));
+        0.2126 * ch(1) + 0.7152 * ch(3) + 0.0722 * ch(5)
+    };
+    let (x, y) = (lum(a), lum(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+/// The pairs `polycarp theme` guarantees at 4.5 (see `pairs` in cli/src/theme.rs) that decide
+/// whether the app can be read at all. A hand-edited or corrupt file can break them.
+fn readable(mode: &str, c: &Colors) -> Result<(), String> {
+    let pairs = [
+        ("foreground", &c.foreground, "background", &c.background),
+        ("foreground", &c.foreground, "surface", &c.surface),
+        ("muted", &c.muted, "background", &c.background),
+        ("muted", &c.muted, "surface", &c.surface),
+        ("on_accent", &c.on_accent, "accent", &c.accent),
+    ];
+    for (fa, a, fb, b) in pairs {
+        let r = contrast(a, b);
+        if r < MIN_CONTRAST {
+            return Err(format!("{mode}.{fa} on {mode}.{fb} is {r:.2}, needs {MIN_CONTRAST}"));
+        }
+    }
+    Ok(())
+}
+
 fn section<'a>(v: &'a Value, key: &str) -> Result<&'a Value, String> {
     v.get(key).filter(|x| x.is_object()).ok_or_else(|| format!("{key} is missing"))
 }
@@ -213,6 +254,10 @@ pub fn parse(text: &str) -> Result<Theme, String> {
     let shape = section(voice, "shape")?;
     let ty = section(voice, "type")?;
     let mo = section(voice, "motion")?;
+    let light = colors(voice, "light")?;
+    let dark = colors(voice, "dark")?;
+    readable("light", &light)?;
+    readable("dark", &dark)?;
     Ok(Theme {
         name: root
             .get("name")
@@ -221,8 +266,8 @@ pub fn parse(text: &str) -> Result<Theme, String> {
             .unwrap_or("")
             .to_string(),
         mode,
-        light: colors(voice, "light")?,
-        dark: colors(voice, "dark")?,
+        light,
+        dark,
         shape: Shape {
             blur: num(shape, "blur", 0.0, 80.0)?,
             border_width: num(shape, "border_width", 0.0, 8.0)?,
@@ -441,10 +486,44 @@ mod tests {
     }
 
     #[test]
+    fn unreadable_pairs_are_refused_in_both_modes() {
+        let pairs = [
+            ("foreground", "background"),
+            ("foreground", "surface"),
+            ("muted", "background"),
+            ("muted", "surface"),
+            ("on_accent", "accent"),
+        ];
+        for mode in ["light", "dark"] {
+            for (fg, bg) in pairs {
+                let mut v = good();
+                let c = &mut v["surfaces"]["voice"][mode];
+                c[fg] = c[bg].clone(); // contrast 1
+                // surface is close to background, so an earlier pair may be the one named.
+                let e = parse_value(&v).unwrap_err();
+                assert!(e.starts_with(&format!("{mode}.")) && e.contains("needs 4.5"), "{fg} {bg}: {e}");
+            }
+        }
+        assert!((contrast("#000000", "#ffffff") - 21.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn corrupt_contrast_loads_as_none() {
+        let dir = std::env::temp_dir().join(format!("silas-contrast-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("theme.json");
+        let mut v = good();
+        v["surfaces"]["voice"]["dark"]["foreground"] = v["surfaces"]["voice"]["dark"]["background"].clone();
+        std::fs::write(&f, v.to_string()).unwrap();
+        assert!(load(&f).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn uppercase_colors_are_lowercased() {
         let mut v = good();
-        v["surfaces"]["voice"]["light"]["accent"] = "#ABCDEF".into();
-        assert_eq!(parse_value(&v).unwrap().light.accent, "#abcdef");
+        v["surfaces"]["voice"]["light"]["accent"] = "#3F6B6A".into();
+        assert_eq!(parse_value(&v).unwrap().light.accent, "#3f6b6a");
     }
 
     #[test]
