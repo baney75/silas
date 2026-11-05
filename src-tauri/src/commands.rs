@@ -7,7 +7,6 @@ use tauri::{AppHandle, State};
 
 use crate::core::{Scope, Shared, Status};
 use crate::dictionary::{Dictionary, LearnResult};
-use crate::keys::Trigger;
 use crate::models::{self, ModelEntry};
 use crate::store::{self, HistoryItem, Settings, Stats};
 use crate::{audio, benchmark, permissions, updates};
@@ -64,26 +63,8 @@ pub fn get_settings(core: State<Shared>) -> Settings {
 
 #[tauri::command]
 pub fn set_settings(core: State<Shared>, app: AppHandle, settings: Settings) -> R<Settings> {
-    let mut settings = settings;
-    let trigger = Trigger::parse(&settings.hotkey)
-        .ok_or_else(|| format!("{} is not a key Silas can use", settings.hotkey))?;
-    if !cfg!(target_os = "macos") {
-        settings.update_channel = "nightly".into();
-    }
-    // The model and who chose it belong to the core: a benchmark can switch models while the
-    // UI holds an older copy of the settings, and saving that copy must not undo the switch.
-    // The UI changes models with select_model.
-    let old = {
-        let mut cur = core.settings.lock();
-        settings.model = cur.model.clone();
-        settings.model_source = cur.model_source.clone();
-        std::mem::replace(&mut *cur, settings.clone())
-    };
-    {
-        let mut m = core.machine.lock();
-        m.trigger = trigger;
-        m.tap_to_toggle = settings.tap_to_toggle;
-    }
+    // The model, its source and the hotkey are handled by the core (see `Core::apply_settings`).
+    let (settings, old) = core.inner().apply_settings(settings)?;
     if old.launch_at_login != settings.launch_at_login {
         use tauri_plugin_autostart::ManagerExt;
         let al = app.autolaunch();
@@ -92,10 +73,6 @@ pub fn set_settings(core: State<Shared>, app: AppHandle, settings: Settings) -> 
         } else {
             al.disable()
         };
-    }
-    core.save_settings();
-    if old.hotkey != settings.hotkey && core.status().0 == Status::Ready {
-        core.set_status(Status::Ready, None); // refresh the tray label
     }
     Ok(settings)
 }
