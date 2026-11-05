@@ -13,7 +13,6 @@ const dark = window.matchMedia("(prefers-color-scheme: dark)");
 
 let theme: Theme | null = null;
 const applier = createApplier(root.style);
-const mixOk = typeof CSS !== "undefined" && CSS.supports("color", "color-mix(in srgb, red 50%, blue)");
 let reduced = false;
 
 /** True when the theme asks for no motion. The overlay's JS reads this next to the system setting. */
@@ -38,7 +37,7 @@ export function applyTheme(next: Theme | null): void {
   clearAll();
   if (!next) return;
   const isDark = activeIsDark(next);
-  applier.apply(next, isDark, mixOk);
+  applier.apply(next, isDark);
   root.style.setProperty("color-scheme", isDark ? "dark" : "light");
   reduced = next.motion.reduced;
   if (reduced) root.dataset.reducedMotion = "true";

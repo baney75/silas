@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { createApplier, radiusAt, themeVars } from "../src/theme-vars";
+import { blend, createApplier, radiusAt, themeVars, withAlpha } from "../src/theme-vars";
 import type { Theme } from "../src/api";
 
 // Every variable the CSS may read from the theme. A rename or a dropped one fails here.
@@ -11,7 +11,7 @@ const EXPECTED = [
   "--bg", "--bg-side", "--surface", "--surface-2", "--line", "--line-strong", "--text", "--text-2", "--text-3",
   "--gold", "--gold-ink", "--gold-soft", "--gold-line", "--blue", "--blue-soft", "--green", "--green-soft",
   "--red", "--red-soft", "--primary-bg", "--primary-fg", "--primary-hover", "--focus", "--key-face", "--key-edge",
-  "--key-hi", "--r-sm", "--r", "--r-lg", "--r-pill", "--serif", "--sans", "--ease", "--thumb", "--thumb-shadow",
+  "--key-hi", "--key-hi-lg", "--r-sm", "--r", "--r-lg", "--r-pill", "--serif", "--sans", "--ease", "--thumb", "--thumb-shadow",
   "--seg-shadow", "--toast-bg", "--toast-fg", "--toast-border", "--toast-border-w", "--toast-ok", "--toast-learned",
   "--toast-error", "--gold-hi", "--learned-arrow", "--rec", "--glass", "--muted", "--rec-glow-0", "--rec-glow-1",
   "--rec-glow-clear", "--ink-track", "--pill-hi", "--blur", "--shadow", "--shadow-lg", "--pill-shadow",
@@ -82,16 +82,39 @@ describe("themeVars", () => {
     }
   });
 
-  test("without color-mix no value is invalid: mixes become the plain colour", () => {
+  test("no value uses color-mix or transparent, and every colour is #rrggbb or #rrggbbaa", () => {
     for (const t of Object.values(themes)) {
-      const c = t.light;
-      const got = themeVars(t, false, false);
-      expect(Object.keys(got).sort()).toEqual([...EXPECTED].sort());
-      for (const [k, v] of Object.entries(got)) expect(v, k).not.toContain("color-mix");
-      expect(got["--gold-soft"]).toBe(c.accent);
-      expect(got["--line-strong"]).toBe(c.border);
-      expect(got["--glass"]).toBe(c.surface);
-      expect(themeVars(t, false, true)["--gold-soft"]).toContain("color-mix");
+      for (const isDark of [false, true]) {
+        const got = themeVars(t, isDark);
+        for (const [k, v] of Object.entries(got)) {
+          expect(v, k).not.toMatch(/color-mix|transparent/);
+        }
+        for (const k of ["--gold-soft", "--glass", "--rec-glow-0", "--rec-glow-clear", "--thumb-shadow"]) {
+          expect(got[k], k).toMatch(/#[0-9a-f]{8}/);
+        }
+        expect(got["--line-strong"]).toMatch(/^#[0-9a-f]{6}$/);
+      }
+    }
+  });
+
+  test("blend and withAlpha do the sRGB arithmetic", () => {
+    expect(blend("#000000", 60, "#ffffff")).toBe("#666666");
+    expect(blend("#ff0000", 100, "#0000ff")).toBe("#ff0000");
+    expect(blend("#ff0000", 0, "#0000ff")).toBe("#0000ff");
+    expect(withAlpha("#e0644c", 55)).toBe("#e0644c8c");
+    expect(withAlpha("#e0644c", 0)).toBe("#e0644c00");
+    expect(withAlpha("#e0644c", 100)).toBe("#e0644cff");
+  });
+
+  test("the gold ink differs from the gold tint, and the glow fades in its own colour", () => {
+    for (const t of Object.values(themes)) {
+      for (const isDark of [false, true]) {
+        const got = themeVars(t, isDark);
+        const c = isDark ? t.dark : t.light;
+        expect(got["--gold-ink"]).not.toBe(got["--gold-soft"]);
+        expect(got["--gold-ink"]).toMatch(/^#[0-9a-f]{6}$/);
+        expect(got["--rec-glow-clear"]).toBe(c.urgent + "00");
+      }
     }
   });
 });

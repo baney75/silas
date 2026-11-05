@@ -20,13 +20,23 @@ export function radiusAt(size: number, small: number, medium: number, large: num
 
 const RADII = [1, 2, 4, 5, 7, 8, 9, 11, 12, 20, 22];
 
+const hex2 = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
+const chan = (h: string, i: number) => parseInt(h.slice(1 + 2 * i, 3 + 2 * i), 16);
+
+/** `#rrggbb` with an opacity of 0 to 100 percent, as `#rrggbbaa`. The core guarantees `#rrggbb`. */
+export const withAlpha = (c: string, pct: number): string => c.slice(0, 7) + hex2((pct * 255) / 100);
+
+/** `pct` percent of `a` over the rest of `b`, by sRGB channel: what `color-mix(in srgb, a pct%, b)` gives. */
+export const blend = (a: string, pct: number, b: string): string =>
+  "#" + [0, 1, 2].map((i) => hex2((chan(a, i) * pct + chan(b, i) * (100 - pct)) / 100)).join("");
+
 /**
- * Every variable for one mode. `mixOk` says whether the webview has `color-mix`. Without it a
- * mixed colour becomes its plain first colour, never an invalid value.
+ * Every variable for one mode. Mixes are computed here from the core's `#rrggbb` values, so no
+ * value depends on what the webview's CSS can parse.
  */
-export function themeVars(t: Theme, isDark: boolean, mixOk = true): Record<string, string> {
-  const mix = (a: string, pct: number, b: string) => (mixOk ? `color-mix(in srgb, ${a} ${pct}%, ${b})` : a);
-  const alpha = (c: string, pct: number) => mix(c, pct, "transparent");
+export function themeVars(t: Theme, isDark: boolean): Record<string, string> {
+  const mix = blend;
+  const alpha = withAlpha;
   const c: ThemeColors = isDark ? t.dark : t.light;
   const d: ThemeColors = t.dark; // the toast and the stopped-key shadows are always the dark palette
   const s = t.shape;
@@ -57,7 +67,8 @@ export function themeVars(t: Theme, isDark: boolean, mixOk = true): Record<strin
     "--focus": c.accent,
     "--key-face": c.surface,
     "--key-edge": c.border,
-    "--key-hi": isDark ? "rgba(255, 255, 255, 0.06)" : "rgba(255, 255, 255, 0.5)",
+    "--key-hi": isDark ? alpha(c.foreground, 6) : "#ffffff80",
+    "--key-hi-lg": isDark ? alpha(c.foreground, 50) : "#ffffff80", // the large keycap's top edge, from the theme in dark
     "--r-sm": px(s.radius_small),
     "--r": px(s.radius),
     "--r-lg": px(s.radius_large),
@@ -66,8 +77,8 @@ export function themeVars(t: Theme, isDark: boolean, mixOk = true): Record<strin
     "--sans": t.type.ui,
     "--ease": t.motion.easing,
     "--thumb": c.surface,
-    "--thumb-shadow": `0 1px 2px ${mix(c.foreground, 25, "transparent")}`,
-    "--seg-shadow": `0 1px 2px ${mix(c.foreground, 15, "transparent")}`,
+    "--thumb-shadow": `0 1px 2px ${alpha(c.foreground, 25)}`,
+    "--seg-shadow": `0 1px 2px ${alpha(c.foreground, 15)}`,
     // Toast: always the dark palette, as today.
     "--toast-bg": d.surface,
     "--toast-fg": d.foreground,
@@ -86,7 +97,7 @@ export function themeVars(t: Theme, isDark: boolean, mixOk = true): Record<strin
     "--rec-glow-1": alpha(c.urgent, 50),
     "--rec-glow-clear": alpha(c.urgent, 0),
     "--ink-track": alpha(c.accent, 16),
-    "--pill-hi": isDark ? "rgba(255, 255, 255, 0.06)" : "rgba(255, 255, 255, 0.5)",
+    "--pill-hi": isDark ? alpha(c.foreground, 6) : "#ffffff80",
     "--blur": px(s.blur),
   };
   // Shadows: `shape.shadow` is an opacity. Dark surfaces need more of it to show.
@@ -116,11 +127,11 @@ export interface StyleLike {
 export function createApplier(style: StyleLike) {
   let applied = new Set<string>();
   return {
-    apply(t: Theme | null, isDark: boolean, mixOk = true): void {
+    apply(t: Theme | null, isDark: boolean): void {
       for (const k of applied) style.removeProperty(k);
       applied = new Set();
       if (!t) return;
-      for (const [k, val] of Object.entries(themeVars(t, isDark, mixOk))) {
+      for (const [k, val] of Object.entries(themeVars(t, isDark))) {
         style.setProperty(k, val);
         applied.add(k);
       }
