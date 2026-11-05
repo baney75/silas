@@ -118,7 +118,7 @@ export function declarations(css) {
   return found;
 }
 
-/** A value with its strings and `var(...)` calls removed, so only literals are left. */
+/** A value with its strings and `var(...)` calls removed (a fallback stays), so only literals are left. */
 const noStrings = (value) => value.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, " ");
 
 function literals(value) {
@@ -132,7 +132,10 @@ function literals(value) {
       if (v[j] === "(") d++;
       else if (v[j] === ")" && --d === 0) break;
     }
-    v = v.slice(0, i) + " " + v.slice(j + 1);
+    // Keep a fallback (`var(--x, red)`): it is a literal the theme cannot reach.
+    const inner = v.slice(i + 4, j);
+    const comma = inner.indexOf(",");
+    v = v.slice(0, i) + " " + (comma < 0 ? "" : inner.slice(comma + 1)) + " " + v.slice(j + 1);
   }
 }
 
