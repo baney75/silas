@@ -179,6 +179,13 @@ Windows `%APPDATA%\Polycarp`. Rust (`src-tauri/src/theme.rs`) checks the file an
 Any colour that is not `#rrggbb`, any number out of range, and any font list with CSS punctuation
 makes the whole file invalid: it logs one line and sends `null`.
 
+A Mac app opened from Finder or the Dock does not see variables exported in a shell profile. So
+`XDG_CONFIG_HOME` may be set for `polycarp` in a terminal and missing for Silas, and then Silas reads
+the default `~/.config/polycarp` while the command wrote somewhere else. Silas reads the default path
+unless the variable reaches it (set it for the app with `launchctl setenv`, or leave it unset for both).
+`polycarp theme current` prints `folder:`, the folder the command writes; Silas reads
+`<folder>/current/theme.json`.
+
 ```ts
 interface Theme {               // snake_case, like the file
   name: string;
