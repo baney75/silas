@@ -199,6 +199,9 @@ interface Theme {               // snake_case, like the file
 interface Colors { accent; background; border; done; foreground; muted; on_accent; selection; strong; sunken; surface; urgent; working: string } // "#rrggbb"
 ```
 
+Not used yet: `motion.scale_from`, and any `motion.easing` beyond the single `--ease` variable
+(every transition shares it). They are checked and sent, but nothing reads them.
+
 A background thread stats the file once a second and emits `theme_changed` when its modified time
 or size changes, or when it appears or disappears. The UI (`src/theme.ts`) sets CSS variables on
 `<html>`; `null` removes every one it set. The main window and the overlay both use it.
