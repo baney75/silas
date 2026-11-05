@@ -1,23 +1,16 @@
-pub mod audio;
-pub mod benchmark;
 pub mod commands;
-pub mod core;
-pub mod dictionary;
-pub mod focus;
-pub mod keys;
-pub mod models;
-pub mod permissions;
-pub mod store;
+pub mod host;
 pub mod theme;
 pub mod tray;
-pub mod typer;
 pub mod updates;
 
-use std::time::Duration;
+// The engine lives in core/voice (polycarp-voice). Re-exported so `crate::core::Shared`,
+// `silas_lib::models` and the other old paths keep working.
+pub use polycarp_voice::{audio, benchmark, core, dictionary, focus, keys, models, permissions, store, typer};
 
 use tauri::{AppHandle, Manager};
 
-use crate::core::{Core, Shared};
+use crate::core::Core;
 
 pub fn show_main(app: &AppHandle) {
     #[cfg(target_os = "macos")]
@@ -27,42 +20,6 @@ pub fn show_main(app: &AppHandle) {
         let _ = w.unminimize();
         let _ = w.set_focus();
     }
-}
-
-/// Read every key on its own thread and hand events to the core.
-fn start_listener(core: Shared) {
-    std::thread::spawn(move || {
-        let mut warned = false;
-        loop {
-            match handy_keys::KeyboardListener::new() {
-                Ok(listener) => {
-                    log::info!("keyboard listener running");
-                    warned = false;
-                    core.set_listener(true);
-                    loop {
-                        match listener.recv_timeout(Duration::from_millis(500)) {
-                            Ok(ev) => core.on_key(&ev),
-                            Err(handy_keys::Error::Timeout) => core.tick(),
-                            Err(e) => {
-                                log::warn!("keyboard listener stopped: {e}");
-                                break;
-                            }
-                        }
-                    }
-                    core.set_listener(false);
-                }
-                Err(e) => {
-                    if !warned {
-                        log::warn!("keyboard listener unavailable (permission?): {e}");
-                        warned = true;
-                    }
-                    core.set_listener(false);
-                    // Retry until the user grants access; no restart needed.
-                    std::thread::sleep(Duration::from_secs(2));
-                }
-            }
-        }
-    });
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -84,7 +41,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let handle = app.handle().clone();
-            let core = Core::new(handle.clone());
+            let core = Core::new(std::sync::Arc::new(host::TauriHost::new(handle.clone())));
             app.manage(core.clone());
 
             // First run: honor the launch-at-login default.
@@ -99,7 +56,7 @@ pub fn run() {
             tray::build(&handle)?;
             core.load_model();
             core.start_device_pick();
-            start_listener(core.clone());
+            polycarp_voice::start_listener(core.clone());
             updates::schedule(handle.clone());
             theme::watch(handle.clone());
 

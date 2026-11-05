@@ -214,7 +214,7 @@ cached as `registry.json`) and looks up the device key.
 - A hit while `modelSource` is `"default"` sets `model` and `modelSource = "registry"`, with no benchmark.
   It switches only if that model is installed, or if no model is installed yet.
 - A miss with no `benchmark.json`: once a model is loaded, the core runs the bundled LibriSpeech set
-  (`src-tauri/bench/`) clip by clip, waiting while a dictation is happening. An automatic run
+  (`core/voice/bench/`) clip by clip, waiting while a dictation is happening. An automatic run
   measures the active model and then every other installed model (nothing is downloaded). It saves the
   `Report` and, unless `modelSource` is `"user"`, switches to the pick only if it is installed and
   passes both bars (`modelSource = "benchmark"`); a pick that misses a bar is shown, never switched to.
