@@ -240,7 +240,7 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .pill,
   .face {
-    transition: opacity 120ms linear;
+    transition: opacity var(--motion-fast) linear;
     transform: none !important;
   }
   .rec-dot {
