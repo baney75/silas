@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { CACHE_KEY, readCached, startTheme, writeCached, type KeyValue } from "../src/theme-boot";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import * as boot from "../src/theme-boot";
+import { startTheme } from "../src/theme-boot";
 import type { Theme } from "../src/api";
 
 const t = (name: string) => ({ name, light: {}, dark: {}, shape: {}, type: {}, motion: {} }) as unknown as Theme;
@@ -64,37 +67,17 @@ describe("startTheme", () => {
   });
 });
 
-function memory(): KeyValue & { data: Map<string, string> } {
-  const data = new Map<string, string>();
-  return { data, getItem: (k) => data.get(k) ?? null, setItem: (k, v) => void data.set(k, v), removeItem: (k) => void data.delete(k) };
-}
-
-describe("cache for the first paint", () => {
-  test("round trip, and null clears it", () => {
-    const m = memory();
-    expect(readCached(m)).toBeNull();
-    writeCached(m, t("a"));
-    expect(readCached(m)?.name).toBe("a");
-    writeCached(m, null);
-    expect(m.data.has(CACHE_KEY)).toBe(false);
-    expect(readCached(m)).toBeNull();
+describe("first paint", () => {
+  test("no cached theme is read or kept, so nothing stale paints when the file is gone", () => {
+    expect(Object.keys(boot).sort()).toEqual(["startTheme"]);
+    const src = readFileSync(resolve(import.meta.dir, "../src/theme.ts"), "utf8");
+    expect(src).not.toMatch(/localStorage|readCached|writeCached/);
   });
 
-  test("junk in the cache is ignored", () => {
-    const m = memory();
-    for (const junk of ["", "{", "null", "[]", "5", '{"light":{}}']) {
-      m.data.set(CACHE_KEY, junk);
-      expect(readCached(m)).toBeNull();
-    }
-  });
-
-  test("a storage that throws does not break startup", () => {
-    const bad: KeyValue = {
-      getItem: () => { throw new Error("off"); },
-      setItem: () => { throw new Error("full"); },
-      removeItem: () => { throw new Error("off"); },
-    };
-    expect(readCached(bad)).toBeNull();
-    expect(() => writeCached(bad, t("a"))).not.toThrow();
+  test("applyTheme is not called before the core has answered", () => {
+    const src = readFileSync(resolve(import.meta.dir, "../src/theme.ts"), "utf8");
+    // Every call sits inside a function body (indented), none at module level.
+    expect(src).not.toMatch(/^applyTheme\(/m);
+    expect(src).not.toMatch(/^try \{/m);
   });
 });

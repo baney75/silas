@@ -4,7 +4,7 @@
 
 import { api, on, type Theme } from "./api";
 import { createApplier } from "./theme-vars";
-import { readCached, startTheme, writeCached } from "./theme-boot";
+import { startTheme } from "./theme-boot";
 
 export { radiusAt, themeVars } from "./theme-vars";
 
@@ -43,12 +43,9 @@ export function applyTheme(next: Theme | null): void {
   if (reduced) root.dataset.reducedMotion = "true";
 }
 
-// Paint with the last theme the core sent, now, before the core answers. The core's answer replaces it.
-try {
-  applyTheme(readCached(localStorage));
-} catch {
-  applyTheme(null);
-}
+// Nothing is painted until the core answers. With no theme file the first frame is the built-in
+// look, with no flash. With a theme in force the window may show the built-in look for a moment
+// first. (A cached copy would paint a stale theme after the file is gone.)
 
 /** Load the theme, then follow the core's `theme_changed` and the system light/dark setting. */
 export async function initTheme(): Promise<void> {
@@ -64,7 +61,6 @@ export async function initTheme(): Promise<void> {
       } catch {
         applyTheme(null);
       }
-      writeCached(localStorage, t);
     },
   });
 }

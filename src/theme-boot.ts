@@ -28,36 +28,3 @@ export async function startTheme(io: BootIO): Promise<void> {
   }
   if (!eventSeen) io.apply(first);
 }
-
-/** The part of localStorage the cache uses. */
-export interface KeyValue {
-  getItem(k: string): string | null;
-  setItem(k: string, v: string): void;
-  removeItem(k: string): void;
-}
-
-export const CACHE_KEY = "silas.theme";
-
-/**
- * The last theme the core sent, kept so the next start can paint with it before the core answers.
- * A dark theme on a light system then does not flash. The core's answer replaces it.
- */
-export function readCached(store: KeyValue): Theme | null {
-  try {
-    const raw = store.getItem(CACHE_KEY);
-    if (!raw) return null;
-    const t = JSON.parse(raw);
-    return t && typeof t === "object" && t.light && t.dark && t.shape && t.type && t.motion ? (t as Theme) : null;
-  } catch {
-    return null;
-  }
-}
-
-export function writeCached(store: KeyValue, t: Theme | null): void {
-  try {
-    if (t) store.setItem(CACHE_KEY, JSON.stringify(t));
-    else store.removeItem(CACHE_KEY);
-  } catch {
-    /* storage may be full or off: the cache is optional */
-  }
-}
