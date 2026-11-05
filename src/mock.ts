@@ -22,6 +22,7 @@ import type {
   Settings,
   Stats,
   Status,
+  Theme,
 } from "./api";
 
 type Listener = (payload: unknown) => void;
@@ -398,7 +399,7 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
   const out = (v: unknown) => clone(v) as T;
   switch (cmd) {
     case "get_theme":
-      return null as T;
+      return (await previewTheme()) as T;
     case "get_state":
       return out(state);
     case "get_settings":
@@ -582,4 +583,40 @@ export function startOverlayDemo() {
     void loop();
   };
   void loop();
+}
+
+// Preview only: `?themeFile=/__theme/still-water-dark.json` loads a theme file that vite serves from
+// the folder named by SILAS_THEME_DIR (see vite.config.ts). `import.meta.env.DEV` is false in a
+// production build, so this whole block is removed from it.
+async function previewTheme(): Promise<Theme | null> {
+  if (!import.meta.env.DEV) return null;
+  const file = params.get("themeFile");
+  if (!file) return null;
+  try {
+    const res = await fetch(file, { cache: "no-store" });
+    if (!res.ok) return null;
+    const text = await res.text();
+    watchThemeFile(file, text);
+    return JSON.parse(text) as Theme;
+  } catch {
+    return null;
+  }
+}
+
+let watching = false;
+function watchThemeFile(file: string, first: string) {
+  if (watching) return;
+  watching = true;
+  let last = first;
+  window.setInterval(async () => {
+    try {
+      const res = await fetch(file, { cache: "no-store" });
+      const text = res.ok ? await res.text() : "";
+      if (text === last) return;
+      last = text;
+      emit("theme_changed", text ? (JSON.parse(text) as Theme) : null);
+    } catch {
+      /* keep the last theme */
+    }
+  }, 1000);
 }
