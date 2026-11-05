@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { checkCss, declarations } from "../scripts/check-theme.mjs";
+import { checkCss, checkSource, declarations } from "../scripts/check-theme.mjs";
 
 const script = resolve(import.meta.dir, "../scripts/check-theme.mjs");
 const bad = (css: string) => checkCss("t.css", css);
@@ -77,5 +77,12 @@ describe("check:theme as a program", () => {
   });
   test("passes on the real sources", () => {
     expect(execFileSync("node", [script]).toString()).toContain("check:theme ok");
+  });
+});
+
+describe("check:theme paths", () => {
+  test("an allowlisted file is found by a Windows path", () => {
+    expect(checkSource("src\\theme-vars.ts", 'const a = "rgba(0, 0, 0, 1)";')).toEqual([]);
+    expect(checkSource("src\\other.ts", 'const a = "#fff";').length).toBe(1);
   });
 });

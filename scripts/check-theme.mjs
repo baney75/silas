@@ -168,7 +168,8 @@ export function checkCss(where, css) {
 }
 
 /** Problems in a source file's text; `rel` is its path from voice/. */
-export function checkSource(rel, text) {
+export function checkSource(relPath, text) {
+  const rel = relPath.replaceAll("\\", "/"); // Windows paths use backslashes; ALLOW keys use /
   if (rel.endsWith(".css")) return checkCss(rel, text);
   if (ALLOW[rel]) return [];
   const problems = [];
