@@ -42,6 +42,10 @@ pub trait Host: Send + Sync + 'static {
     fn is_nightly(&self) -> bool {
         false
     }
+    /// What messages call the app ("Silas" in the Tauri app, "Polycarp" in the native one).
+    fn product_name(&self) -> String {
+        "Silas".into()
+    }
 }
 
 /// A host that ignores everything. For tests and headless use.
@@ -145,19 +149,19 @@ impl Drop for BenchGuard {
 
 const MAX_RECORDING: Duration = Duration::from_secs(300);
 
-pub fn key_access_message() -> String {
-    key_access_message_for(std::env::consts::OS)
+pub fn key_access_message(product: &str) -> String {
+    key_access_message_for(std::env::consts::OS, product)
 }
 
 /// The macOS text also covers a stale grant: after a build with a different signature, the
 /// Accessibility switch can still look on for the old one while this build is not trusted.
 /// Turning that switch off and on keeps the old signature, so the text never suggests it:
 /// Fix Permission clears the entry, and removing and re-adding Silas by hand does the same.
-fn key_access_message_for(os: &str) -> String {
+fn key_access_message_for(os: &str, p: &str) -> String {
     match os {
-        "macos" => "Silas can't hear your key yet. Click Fix Permission on the Silas home screen. If that doesn't work, open System Settings, Privacy & Security, Accessibility, select Silas, click the minus button to remove it, click plus and add Silas from Applications, then turn on its switch.".into(),
-        "linux" => "Silas can't read the keyboard. Reinstall the package, or add the udev rule from the README, then log out and back in.".into(),
-        _ => "Silas couldn't start its keyboard listener. Restart Silas.".into(),
+        "macos" => format!("{p} can't hear your key yet. Click Fix Permission on the {p} home screen. If that doesn't work, open System Settings, Privacy & Security, Accessibility, select {p}, click the minus button to remove it, click plus and add {p} from Applications, then turn on its switch."),
+        "linux" => format!("{p} can't read the keyboard. Reinstall the package, or add the udev rule from the README, then log out and back in."),
+        _ => format!("{p} couldn't start its keyboard listener. Restart {p}."),
     }
 }
 
@@ -231,7 +235,7 @@ impl Core {
                 return;
             }
             let missing_key =
-                cur.0 == Status::Error && cur.1.as_deref() == Some(key_access_message().as_str());
+                cur.0 == Status::Error && cur.1.as_deref() == Some(key_access_message(&self.host.product_name()).as_str());
             (ok && missing_key) || (!ok && cur.0 == Status::Ready)
         };
         if ok {
@@ -265,7 +269,7 @@ impl Core {
         let (s, detail) = {
             let mut cur = self.status.lock();
             let next = if s == Status::Ready && !self.listener_ok.load(Ordering::Relaxed) {
-                (Status::Error, Some(key_access_message()))
+                (Status::Error, Some(key_access_message(&self.host.product_name())))
             } else {
                 (s, detail)
             };
@@ -660,7 +664,7 @@ impl Core {
     pub fn apply_settings(self: &Shared, settings: Settings) -> Result<(Settings, Settings), String> {
         let mut settings = settings;
         let trigger = Trigger::parse(&settings.hotkey)
-            .ok_or_else(|| format!("{} is not a key Silas can use", settings.hotkey))?;
+            .ok_or_else(|| format!("{} is not a key {} can use", settings.hotkey, self.host.product_name()))?;
         if !cfg!(target_os = "macos") {
             settings.update_channel = "nightly".into();
         }
@@ -701,6 +705,8 @@ impl Core {
     /// Every key event from the global listener lands here.
     pub fn on_key(self: &Shared, ev: &handy_keys::KeyEvent) {
         if !self.is_enabled() {
+            // Paused: the hotkey does nothing, but picking a new one still works while a listener runs.
+            self.capture_key(ev);
             return;
         }
         if self.typing.load(Ordering::Relaxed) {
@@ -729,6 +735,19 @@ impl Core {
             }
             return;
         }
+        if self.capture_key(ev) {
+            return;
+        }
+        let now = Instant::now();
+        let out = self.machine.lock().on_event(ev, now);
+        if out == Out::Nothing && !self.machine.lock().is_active() {
+            self.feed_watch(ev, now);
+        }
+        self.act(out);
+    }
+
+    /// A pending "pick the hotkey" request takes this key event. True when it did.
+    fn capture_key(&self, ev: &handy_keys::KeyEvent) -> bool {
         // Take the sender in its own statement: an `if let` would keep the lock held.
         let capture = self.capture.lock().take();
         if let Some(tx) = capture {
@@ -744,14 +763,9 @@ impl Core {
                     }
                 }
             }
-            return;
+            return true;
         }
-        let now = Instant::now();
-        let out = self.machine.lock().on_event(ev, now);
-        if out == Out::Nothing && !self.machine.lock().is_active() {
-            self.feed_watch(ev, now);
-        }
-        self.act(out);
+        false
     }
 
     pub fn act(self: &Shared, out: Out) {
@@ -840,10 +854,10 @@ impl Core {
             self.machine.lock().reset();
             self.set_status(
                 Status::Error,
-                Some(
-                    "Microphone: not allowed yet. Open Silas and click Allow for the microphone."
-                        .into(),
-                ),
+                Some(format!(
+                    "Microphone: not allowed yet. Open {} and click Allow for the microphone.",
+                    self.host.product_name()
+                )),
             );
             self.recover_soon();
             return;
@@ -1005,7 +1019,11 @@ impl Core {
             }
             store::save("dictionary.json", &*me.dict.lock());
             *me.last_activity.lock() = Instant::now();
-            me.host.emit("transcript", json!(&item));
+            // `typed` is true only when the text really went out as keystrokes: the app moves Silas to the Trash
+            // after the first one, never after a dictation that only reached History.
+            let mut payload = json!(&item);
+            payload["typed"] = json!(!lost_focus && typing_error.is_none());
+            me.host.emit("transcript", payload);
             if let Some(e) = typing_error {
                 me.set_status(
                     Status::Error,
@@ -1015,7 +1033,7 @@ impl Core {
             } else if lost_focus {
                 me.set_status(
                     Status::Error,
-                    Some("Another window took the keyboard, so Silas stopped typing. Your full text is in History.".into()),
+                    Some(format!("Another window took the keyboard, so {} stopped typing. Your full text is in History.", me.host.product_name())),
                 );
                 me.recover_soon();
             } else {
@@ -1134,7 +1152,7 @@ mod tests {
 
     #[test]
     fn the_mac_key_message_explains_a_stale_grant() {
-        let m = key_access_message_for("macos");
+        let m = key_access_message_for("macos", "Silas");
         // home.ts finds the banner by this phrase.
         assert!(m.contains("can't hear your key"));
         assert!(m.contains("Privacy & Security, Accessibility"));
@@ -1146,6 +1164,26 @@ mod tests {
             assert!(!lower.contains(banned), "{m}");
         }
         assert!(!m.contains(['\u{2014}', '\u{2013}', '\u{203a}']), "{m}");
+    }
+
+    #[test]
+    fn a_paused_engine_still_takes_the_key_being_picked() {
+        use handy_keys::{Key, KeyEvent, Modifiers};
+        let dir = std::env::temp_dir().join(format!("pc-capture-{}", std::process::id()));
+        store::set_data_dir(Some(dir.clone()));
+        let core = Core::new(Arc::new(NullHost));
+        core.set_enabled(false);
+        let (tx, rx) = std::sync::mpsc::channel();
+        *core.capture.lock() = Some(tx);
+        core.on_key(&KeyEvent {
+            modifiers: Modifiers::empty(),
+            key: Some(Key::F13),
+            is_key_down: true,
+            changed_modifier: None,
+        });
+        assert_eq!(rx.try_recv().as_deref(), Ok("F13"));
+        store::set_data_dir(None);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
