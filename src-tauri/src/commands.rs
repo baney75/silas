@@ -386,3 +386,9 @@ pub async fn check_update(app: AppHandle) -> R<Option<updates::UpdateInfo>> {
 pub async fn install_update(app: AppHandle) -> R<()> {
     updates::install(&app).await.map_err(err)
 }
+
+/// The Polycarp theme for Silas, or null when there is none or it is not valid.
+#[tauri::command]
+pub fn get_theme() -> Option<crate::theme::Theme> {
+    crate::theme::current()
+}
