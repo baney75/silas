@@ -19,6 +19,16 @@ use std::time::Duration;
 use crate::core::Shared;
 
 /// Read every key on its own thread and hand events to the core.
+/// Load the chosen model, pick a model for this device if none is set, and start reading the
+/// keyboard. Safe to call twice: the listener starts once per process.
+pub fn start_service(core: &Shared) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    core.load_model();
+    core.start_device_pick();
+    ONCE.call_once(|| start_listener(core.clone()));
+}
+
+/// Read every key on its own thread and hand events to the core. Prefer [`start_service`].
 pub fn start_listener(core: Shared) {
     std::thread::spawn(move || {
         let mut warned = false;

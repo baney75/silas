@@ -99,6 +99,9 @@ pub struct Core {
     dictations: AtomicU64,
     /// The model a background load is working on, so one model is never loaded twice at once.
     loading: Mutex<Option<String>>,
+    /// False while the interface has paused dictation: keys are ignored, nothing records.
+    /// The model stays loaded.
+    enabled: AtomicBool,
 }
 
 pub type Shared = Arc<Core>;
@@ -207,6 +210,7 @@ impl Core {
             bench_running: AtomicBool::new(false),
             dictations: AtomicU64::new(0),
             loading: Mutex::new(None),
+            enabled: AtomicBool::new(true),
             settings: Mutex::new(settings),
         })
     }
@@ -649,10 +653,56 @@ impl Core {
         store::save("settings.json", &*self.settings.lock());
     }
 
+    /// Replace the settings with `settings` as the interface sent them. The model and who
+    /// chose it stay the core's: a benchmark can switch models while the UI holds an older
+    /// copy, and saving that copy must not undo the switch. Updates the hotkey, saves, and
+    /// refreshes the status label. Returns the stored settings and the ones they replaced.
+    pub fn apply_settings(self: &Shared, settings: Settings) -> Result<(Settings, Settings), String> {
+        let mut settings = settings;
+        let trigger = Trigger::parse(&settings.hotkey)
+            .ok_or_else(|| format!("{} is not a key Silas can use", settings.hotkey))?;
+        if !cfg!(target_os = "macos") {
+            settings.update_channel = "nightly".into();
+        }
+        let old = {
+            let mut cur = self.settings.lock();
+            settings.model = cur.model.clone();
+            settings.model_source = cur.model_source.clone();
+            std::mem::replace(&mut *cur, settings.clone())
+        };
+        {
+            let mut m = self.machine.lock();
+            m.trigger = trigger;
+            m.tap_to_toggle = settings.tap_to_toggle;
+        }
+        self.save_settings();
+        if old.hotkey != settings.hotkey && self.status().0 == Status::Ready {
+            self.set_status(Status::Ready, None); // refresh the label
+        }
+        Ok((settings, old))
+    }
+
+    /// Pause (`false`) or resume (`true`) dictation. Pausing drops a recording in progress and
+    /// ignores the hotkey; it never unloads the model.
+    pub fn set_enabled(self: &Shared, on: bool) {
+        self.enabled.store(on, Ordering::Release);
+        if !on {
+            self.machine.lock().reset();
+            self.cancel_recording();
+        }
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Acquire)
+    }
+
     // ------------------------------------------------------------ keys
 
     /// Every key event from the global listener lands here.
     pub fn on_key(self: &Shared, ev: &handy_keys::KeyEvent) {
+        if !self.is_enabled() {
+            return;
+        }
         if self.typing.load(Ordering::Relaxed) {
             // Silas's own text arrives as key events too, so only keys it never sends
             // (deleting, moving the cursor) mean the user edited mid-typing.
