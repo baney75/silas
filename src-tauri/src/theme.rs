@@ -522,10 +522,20 @@ mod tests {
         parse(&v.to_string())
     }
 
+    /// A path that is absolute on this system: `/x` has no drive on Windows.
+    fn abs(rest: &str) -> String {
+        if cfg!(windows) {
+            format!("C:\\{rest}")
+        } else {
+            format!("/{rest}")
+        }
+    }
+
     #[test]
     fn path_prefers_polycarp_config_dir() {
-        let m = HashMap::from([("POLYCARP_CONFIG_DIR", "/tmp/pc"), ("XDG_CONFIG_HOME", "/x")]);
-        assert_eq!(config_dir(&env_of(&m), Some("/h".into()), false), Some("/tmp/pc".into()));
+        let (mine, xdg) = (abs("tmp-pc"), abs("x"));
+        let m = HashMap::from([("POLYCARP_CONFIG_DIR", mine.as_str()), ("XDG_CONFIG_HOME", xdg.as_str())]);
+        assert_eq!(config_dir(&env_of(&m), Some("/h".into()), false), Some(mine.as_str().into()));
     }
 
     #[test]
@@ -536,12 +546,16 @@ mod tests {
 
     #[test]
     fn path_uses_xdg_only_when_absolute() {
-        let m = HashMap::from([("XDG_CONFIG_HOME", "/x")]);
-        assert_eq!(config_dir(&env_of(&m), Some("/h".into()), false), Some("/x/polycarp".into()));
+        let xdg = abs("x");
+        let m = HashMap::from([("XDG_CONFIG_HOME", xdg.as_str())]);
+        assert_eq!(
+            config_dir(&env_of(&m), Some("/h".into()), false),
+            Some(PathBuf::from(&xdg).join("polycarp"))
+        );
         let m = HashMap::from([("XDG_CONFIG_HOME", "rel")]);
         assert_eq!(
             config_dir(&env_of(&m), Some("/h".into()), false),
-            Some("/h/.config/polycarp".into())
+            Some(PathBuf::from("/h").join(".config").join("polycarp"))
         );
     }
 
