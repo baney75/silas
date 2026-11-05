@@ -386,18 +386,36 @@ pub fn changed(last: &Stamp, now: &Stamp) -> bool {
     last != now
 }
 
+/// One look at the file. Stat, read, stat again. `None` means nothing to report yet: either it is
+/// the same as `last`, or it changed while being read, so `last` stays and the next tick tries
+/// again. A change seen only half-way never sticks.
+pub fn poll(
+    last: &Stamp,
+    mut stat: impl FnMut() -> Stamp,
+    read: impl FnOnce() -> Option<Theme>,
+) -> Option<(Stamp, Option<Theme>)> {
+    let before = stat();
+    if !changed(last, &before) {
+        return None;
+    }
+    let theme = read();
+    let after = stat();
+    if changed(&before, &after) {
+        return None;
+    }
+    Some((after, theme))
+}
+
 /// Check the file once a second and tell every window when it changes. One stat a second.
-/// Holds no lock while it emits.
+/// Runs on its own thread, so a stalled disk never reaches the window. Holds no lock while it emits.
 pub fn watch(app: AppHandle) {
     std::thread::spawn(move || {
         let mut last: Stamp = theme_path().as_deref().and_then(stamp);
         loop {
             std::thread::sleep(Duration::from_secs(1));
             let Some(path) = theme_path() else { continue };
-            let now = stamp(&path);
-            if changed(&last, &now) {
+            if let Some((now, payload)) = poll(&last, || stamp(&path), || load(&path)) {
                 last = now;
-                let payload = load(&path);
                 let _ = app.emit("theme_changed", payload);
             }
         }
@@ -697,6 +715,27 @@ mod tests {
         assert!(changed(&a, &None), "disappeared");
         assert!(changed(&a, &Some((t1, 10))), "newer time");
         assert!(changed(&a, &Some((t0, 11))), "same time, new size");
+    }
+
+    #[test]
+    fn a_change_seen_half_way_is_retried() {
+        let t = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+        let (s1, s2) = (Some((t, 10)), Some((t + Duration::from_secs(1), 12)));
+        let theme = parse_value(&good()).ok();
+        // Changed while it was read: report nothing and keep `last`.
+        let mut seq = vec![s2.clone(), s1.clone()].into_iter();
+        assert!(poll(&None, || seq.next().unwrap(), || theme.clone()).is_none());
+        // The retry finds it still, so it is reported.
+        let mut seq = vec![s2.clone(), s2.clone()].into_iter();
+        let (stamp, payload) = poll(&None, || seq.next().unwrap(), || theme.clone()).unwrap();
+        assert_eq!(stamp, s2);
+        assert!(payload.is_some());
+        // Same as last: no read at all.
+        assert!(poll(&s2, || s2.clone(), || panic!("must not read")).is_none());
+        // Deleted: reported as None.
+        let (stamp, payload) = poll(&s2, || None, || None).unwrap();
+        assert_eq!(stamp, None);
+        assert!(payload.is_none());
     }
 
     #[test]
