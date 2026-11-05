@@ -534,4 +534,54 @@ mod tests {
         assert!(changed(&stamp(&dir.join("x")), &one));
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// Run the real `polycarp theme` command in a throwaway config folder.
+    fn polycarp(dir: &Path, args: &[&str]) -> String {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/Cargo.toml");
+        let mut cmd = match std::env::var_os("POLYCARP_BIN") {
+            Some(bin) => std::process::Command::new(bin),
+            None => {
+                let mut c = std::process::Command::new(
+                    std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()),
+                );
+                c.args(["run", "-q", "--manifest-path"]).arg(manifest).arg("--");
+                c
+            }
+        };
+        let out = cmd
+            .args(args)
+            .env("POLYCARP_CONFIG_DIR", dir)
+            .env_remove("XDG_CONFIG_HOME")
+            .output()
+            .expect("run polycarp");
+        assert!(out.status.success(), "polycarp {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    #[test]
+    fn every_built_in_theme_from_the_real_command_loads() {
+        let dir = std::env::temp_dir().join(format!("silas-real-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let list: Value = serde_json::from_str(&polycarp(&dir, &["theme", "list", "--json"])).unwrap();
+        let names: Vec<String> = list["data"]["themes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|t| t["source"] == "built-in")
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
+        assert!(names.len() >= 6, "expected the built-in themes, got {names:?}");
+        for name in &names {
+            for mode in ["auto", "light", "dark"] {
+                polycarp(&dir, &["theme", "set", name, "--mode", mode]);
+                let file = dir.join("current").join("theme.json");
+                let text = std::fs::read_to_string(&file).unwrap();
+                let t = parse(&text).unwrap_or_else(|e| panic!("{name} {mode}: {e}"));
+                assert_eq!(t.mode, mode, "{name}");
+                assert!(load(&file).is_some(), "{name} {mode}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
