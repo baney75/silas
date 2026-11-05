@@ -16,10 +16,14 @@ export interface BootIO {
  */
 export async function startTheme(io: BootIO): Promise<void> {
   let eventSeen = false;
-  await io.listen((t) => {
-    eventSeen = true;
-    io.apply(t);
-  });
+  try {
+    await io.listen((t) => {
+      eventSeen = true;
+      io.apply(t);
+    });
+  } catch {
+    // No live updates, but the snapshot below still applies and the app starts.
+  }
   let first: Theme | null = null;
   try {
     first = await io.snapshot();

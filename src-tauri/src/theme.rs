@@ -406,16 +406,24 @@ fn open_regular(path: &Path) -> Result<std::fs::File, String> {
 /// regular file (a FIFO, a folder) is refused before it is opened. The file is then opened without
 /// blocking and checked through that handle, so it cannot be swapped between the check and the read.
 pub fn load(path: &Path) -> Option<Theme> {
+    load_checked(path).unwrap_or(None)
+}
+
+/// Like `load`, but a failed read (permissions, a disk error) is `Err` so the watcher tries again,
+/// where `Ok(None)` means there is no usable theme: no file, or one that is refused.
+pub fn load_checked(path: &Path) -> Result<Option<Theme>, String> {
     let text = match std::fs::metadata(path) {
-        Err(_) => return None,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("unreadable: {e}")),
         Ok(m) if !m.is_file() => Err("not a regular file".to_string()),
         Ok(_) => open_regular(path).and_then(read_capped),
     };
     match text.and_then(|t| parse(&t)) {
-        Ok(t) => Some(t),
+        Ok(t) => Ok(Some(t)),
+        Err(e) if e.starts_with("unreadable") && path.exists() => Err(e),
         Err(e) => {
             log::warn!("theme file ignored: {} {e}", path.display());
-            None
+            Ok(None)
         }
     }
 }
@@ -442,18 +450,18 @@ pub fn changed(last: &Stamp, now: &Stamp) -> bool {
 }
 
 /// One look at the file. Stat, read, stat again. `None` means nothing to report yet: either it is
-/// the same as `last`, or it changed while being read, so `last` stays and the next tick tries
-/// again. A change seen only half-way never sticks.
+/// the same as `last`, or it changed while being read, or the read failed, so `last` stays and the
+/// next tick tries again. A change seen only half-way never sticks.
 pub fn poll(
     last: &Stamp,
     mut stat: impl FnMut() -> Stamp,
-    read: impl FnOnce() -> Option<Theme>,
+    read: impl FnOnce() -> Result<Option<Theme>, String>,
 ) -> Option<(Stamp, Option<Theme>)> {
     let before = stat();
     if !changed(last, &before) {
         return None;
     }
-    let theme = read();
+    let Ok(theme) = read() else { return None }; // a failed read: keep `last`, try again next tick
     let after = stat();
     if changed(&before, &after) {
         return None;
@@ -469,7 +477,7 @@ pub fn watch(app: AppHandle) {
         loop {
             std::thread::sleep(Duration::from_secs(1));
             let Some(path) = theme_path() else { continue };
-            if let Some((now, payload)) = poll(&last, || stamp(&path), || load(&path)) {
+            if let Some((now, payload)) = poll(&last, || stamp(&path), || load_checked(&path)) {
                 last = now;
                 let _ = app.emit("theme_changed", payload);
             }
@@ -841,7 +849,7 @@ mod tests {
     fn a_change_seen_half_way_is_retried() {
         let t = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
         let (s1, s2) = (Some((t, 10)), Some((t + Duration::from_secs(1), 12)));
-        let theme = parse_value(&good()).ok();
+        let theme = Ok(parse_value(&good()).ok());
         // Changed while it was read: report nothing and keep `last`.
         let mut seq = vec![s2.clone(), s1.clone()].into_iter();
         assert!(poll(&None, || seq.next().unwrap(), || theme.clone()).is_none());
@@ -853,9 +861,43 @@ mod tests {
         // Same as last: no read at all.
         assert!(poll(&s2, || s2.clone(), || panic!("must not read")).is_none());
         // Deleted: reported as None.
-        let (stamp, payload) = poll(&s2, || None, || None).unwrap();
+        let (stamp, payload) = poll(&s2, || None, || Ok(None)).unwrap();
         assert_eq!(stamp, None);
         assert!(payload.is_none());
+    }
+
+    #[test]
+    fn a_failed_read_is_retried_not_recorded() {
+        let t = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+        let s1 = Some((t, 10));
+        // The stamp changed but the read failed: nothing reported, `last` stays.
+        assert!(poll(&None, || s1.clone(), || Err("unreadable: denied".into())).is_none());
+        // The next tick reads fine and reports it.
+        let (stamp, payload) = poll(&None, || s1.clone(), || Ok(parse_value(&good()).ok())).unwrap();
+        assert_eq!(stamp, s1);
+        assert!(payload.is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_file_is_an_error_and_a_bad_one_is_not() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("silas-perm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("theme.json");
+        assert!(matches!(load_checked(&f), Ok(None)), "missing is quiet");
+        std::fs::write(&f, "{").unwrap();
+        assert!(matches!(load_checked(&f), Ok(None)), "bad content is no theme");
+        std::fs::write(&f, good().to_string()).unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let root = std::fs::File::open(&f).is_ok(); // running as root can read it anyway
+        if !root {
+            assert!(load_checked(&f).is_err(), "a failed read must retry");
+        }
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(matches!(load_checked(&f), Ok(Some(_))));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

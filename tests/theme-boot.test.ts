@@ -67,6 +67,18 @@ describe("startTheme", () => {
   });
 });
 
+describe("startTheme when listening fails", () => {
+  test("a rejected listen does not break boot: the snapshot still applies", async () => {
+    const applied: (string | null)[] = [];
+    await startTheme({
+      listen: () => Promise.reject(new Error("no events")),
+      snapshot: async () => t("snap"),
+      apply: (x) => applied.push(x?.name ?? null),
+    });
+    expect(applied).toEqual(["snap"]);
+  });
+});
+
 describe("first paint", () => {
   test("no cached theme is read or kept, so nothing stale paints when the file is gone", () => {
     expect(Object.keys(boot).sort()).toEqual(["startTheme"]);
