@@ -196,7 +196,44 @@ export interface StatusEvent {
   detail: string | null;
 }
 
+export interface ThemeColors {
+  accent: string;
+  background: string;
+  border: string;
+  done: string;
+  foreground: string;
+  muted: string;
+  on_accent: string;
+  selection: string;
+  strong: string;
+  sunken: string;
+  surface: string;
+  urgent: string;
+  working: string;
+}
+
+/** The Polycarp theme for Silas, already checked by the core. See docs/ipc.md. */
+export interface Theme {
+  name: string;
+  mode: "auto" | "light" | "dark";
+  light: ThemeColors;
+  dark: ThemeColors;
+  shape: {
+    blur: number;
+    border_width: number;
+    radius_small: number;
+    radius: number;
+    radius_large: number;
+    shadow: number;
+    density: "compact" | "regular" | "spacious";
+    indicator: "dot" | "bar" | "number-block";
+  };
+  type: { display: string; ui: string; mono: string; size: number; weight: number; line_height: number };
+  motion: { fast: number; normal: number; slow: number; easing: string; scale_from: number; reduced: boolean };
+}
+
 export interface EventMap {
+  theme_changed: Theme | null;
   status: StatusEvent;
   level: number;
   transcript: HistoryItem;
@@ -225,6 +262,7 @@ export function on<K extends keyof EventMap>(event: K, cb: (payload: EventMap[K]
 
 export const api = {
   getState: () => call<AppState>("get_state"),
+  getTheme: () => call<Theme | null>("get_theme"),
   getSettings: () => call<Settings>("get_settings"),
   setSettings: (settings: Settings) => call<Settings>("set_settings", { settings }),
 

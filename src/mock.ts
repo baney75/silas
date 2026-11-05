@@ -397,6 +397,8 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
   await delay(60);
   const out = (v: unknown) => clone(v) as T;
   switch (cmd) {
+    case "get_theme":
+      return null as T;
     case "get_state":
       return out(state);
     case "get_settings":

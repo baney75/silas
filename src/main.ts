@@ -6,6 +6,7 @@ import { mountHome } from "./home";
 import { mountModels } from "./models";
 import { mountOnboarding, needsAccess } from "./onboarding";
 import { mountSettings } from "./settings";
+import { initTheme } from "./theme";
 import {
   HISTORY_LIMIT,
   notify,
@@ -211,4 +212,5 @@ function shell() {
   go(store.state.status === "needs_model" ? "model" : current);
 }
 
+void initTheme();
 void boot();
