@@ -377,14 +377,39 @@ fn read_capped<R: std::io::Read>(r: R) -> Result<String, String> {
     String::from_utf8(buf).map_err(|_| "not UTF-8".to_string())
 }
 
-/// Read one file. Missing is quiet; a file that is there but wrong is logged. The file is opened
-/// once and checked through that handle, so it cannot be swapped between the check and the read.
-pub fn load(path: &Path) -> Option<Theme> {
-    let file = std::fs::File::open(path).ok()?;
-    let text = match file.metadata() {
-        Ok(m) if m.is_file() && m.len() <= MAX_BYTES => read_capped(file),
+/// `O_NONBLOCK` by platform, so no libc crate is needed: opening a FIFO that has no writer then
+/// returns at once instead of waiting for one.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const O_NONBLOCK: i32 = 0o4000;
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+const O_NONBLOCK: i32 = 0x4; // macOS and the BSDs
+
+/// Open `path` for reading and return it only if the handle is a regular file. It never blocks:
+/// a FIFO, even one swapped in after a check by path, is refused rather than waited on.
+fn open_regular(path: &Path) -> Result<std::fs::File, String> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(O_NONBLOCK);
+    }
+    let file = opts.open(path).map_err(|e| format!("unreadable: {e}"))?;
+    match file.metadata() {
+        Ok(m) if m.is_file() && m.len() <= MAX_BYTES => Ok(file),
         Ok(_) => Err(format!("not a file under {MAX_BYTES} bytes")),
         Err(e) => Err(format!("unreadable: {e}")),
+    }
+}
+
+/// Read one file. Missing is quiet; a file that is there but wrong is logged. A path that is not a
+/// regular file (a FIFO, a folder) is refused before it is opened. The file is then opened without
+/// blocking and checked through that handle, so it cannot be swapped between the check and the read.
+pub fn load(path: &Path) -> Option<Theme> {
+    let text = match std::fs::metadata(path) {
+        Err(_) => return None,
+        Ok(m) if !m.is_file() => Err("not a regular file".to_string()),
+        Ok(_) => open_regular(path).and_then(read_capped),
     };
     match text.and_then(|t| parse(&t)) {
         Ok(t) => Some(t),
@@ -574,6 +599,38 @@ mod tests {
         padded.truncate(MAX_BYTES as usize);
         std::fs::write(&f, &padded).unwrap();
         assert!(load(&f).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    fn mkfifo(path: &Path) {
+        let ok = std::process::Command::new("mkfifo").arg(path).status().expect("mkfifo").success();
+        assert!(ok, "mkfifo");
+    }
+
+    /// Run `f` on a thread and fail, not hang, if it has not returned in 5 seconds.
+    #[cfg(unix)]
+    fn within_5s<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(Duration::from_secs(5)).expect("blocked on a FIFO")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_at_the_theme_path_is_refused_without_blocking() {
+        let dir = std::env::temp_dir().join(format!("silas-fifo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("theme.json");
+        mkfifo(&f);
+        // The whole load, and the open alone (as if the FIFO appeared after the check by path).
+        let p = f.clone();
+        assert!(within_5s(move || load(&p)).is_none());
+        let p = f.clone();
+        assert!(within_5s(move || open_regular(&p)).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
