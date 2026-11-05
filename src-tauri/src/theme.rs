@@ -237,20 +237,50 @@ pub fn contrast(a: &str, b: &str) -> f64 {
     (x.max(y) + 0.05) / (x.min(y) + 0.05)
 }
 
-/// The pairs `polycarp theme` guarantees at 4.5 (see `pairs` in cli/src/theme.rs) that decide
-/// whether the app can be read at all. A hand-edited or corrupt file can break them.
+/// Contrast the large marks need on `sunken`, as in the CLI (`MARK_MIN`).
+const MARK_MIN: f64 = 3.0;
+
+/// Every pair `contrast_on` checks in cli/src/theme.rs (`pairs`), in the same order. A hand-edited
+/// or corrupt file can break them, and the UI would be unreadable.
 fn readable(mode: &str, c: &Colors) -> Result<(), String> {
-    let pairs = [
-        ("foreground", &c.foreground, "background", &c.background),
-        ("foreground", &c.foreground, "surface", &c.surface),
-        ("muted", &c.muted, "background", &c.background),
-        ("muted", &c.muted, "surface", &c.surface),
-        ("on_accent", &c.on_accent, "accent", &c.accent),
-    ];
-    for (fa, a, fb, b) in pairs {
-        let r = contrast(a, b);
-        if r < MIN_CONTRAST {
-            return Err(format!("{mode}.{fa} on {mode}.{fb} is {r:.2}, needs {MIN_CONTRAST}"));
+    let get = |k: &str| -> &str {
+        match k {
+            "foreground" => &c.foreground,
+            "strong" => &c.strong,
+            "muted" => &c.muted,
+            "background" => &c.background,
+            "surface" => &c.surface,
+            "sunken" => &c.sunken,
+            "selection" => &c.selection,
+            "urgent" => &c.urgent,
+            "working" => &c.working,
+            "done" => &c.done,
+            "accent" => &c.accent,
+            _ => &c.on_accent,
+        }
+    };
+    let mut pairs: Vec<(&str, &str, f64)> = Vec::new();
+    for fg in ["foreground", "strong", "muted"] {
+        for bg in ["background", "surface", "sunken"] {
+            pairs.push((fg, bg, MIN_CONTRAST));
+        }
+    }
+    for fg in ["foreground", "strong"] {
+        pairs.push((fg, "selection", MIN_CONTRAST));
+    }
+    for fg in ["urgent", "working", "done", "accent"] {
+        for bg in ["background", "surface"] {
+            pairs.push((fg, bg, MIN_CONTRAST));
+        }
+    }
+    pairs.push(("on_accent", "accent", MIN_CONTRAST));
+    for fg in ["urgent", "working", "done", "accent"] {
+        pairs.push((fg, "sunken", MARK_MIN));
+    }
+    for (fa, fb, min) in pairs {
+        let r = contrast(get(fa), get(fb));
+        if r < min {
+            return Err(format!("{mode}.{fa} on {mode}.{fb} is {r:.2}, needs {min:?}"));
         }
     }
     Ok(())
@@ -603,6 +633,39 @@ mod tests {
             }
         }
         assert!((contrast("#000000", "#ffffff") - 21.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn every_cli_pair_is_checked() {
+        // The reviewer's case: five pairs pass (white on black), the rest are black on black.
+        for mode in ["light", "dark"] {
+            let mut v = good();
+            let c = &mut v["surfaces"]["voice"][mode];
+            for k in ["foreground", "muted", "sunken", "accent"] {
+                c[k] = "#000000".into();
+            }
+            for k in ["background", "surface", "on_accent"] {
+                c[k] = "#ffffff".into();
+            }
+            let e = parse_value(&v).unwrap_err();
+            assert!(e.starts_with(&format!("{mode}.")), "{e}");
+        }
+        // Each pair alone, in both modes: set fg equal to bg.
+        let all = [
+            ("strong", "sunken"), ("muted", "sunken"), ("strong", "background"), ("foreground", "sunken"),
+            ("foreground", "selection"), ("strong", "selection"), ("urgent", "background"),
+            ("working", "surface"), ("done", "background"), ("accent", "surface"), ("urgent", "sunken"),
+            ("working", "sunken"), ("done", "sunken"), ("accent", "sunken"),
+        ];
+        for mode in ["light", "dark"] {
+            for (fg, bg) in all {
+                let mut v = good();
+                let c = &mut v["surfaces"]["voice"][mode];
+                c[fg] = c[bg].clone();
+                let e = parse_value(&v).unwrap_err();
+                assert!(e.starts_with(&format!("{mode}.{fg} on ")), "{fg} {bg}: {e}");
+            }
+        }
     }
 
     #[test]
