@@ -28,3 +28,4 @@ bun run build && (cd src-tauri && cargo test --lib && cargo clippy --lib -- -D w
   never write `if let Some(x) = self.m.lock().take()`: the guard lives through the body.
 - `[profile.release.build-override]` must stay: thin LTO otherwise breaks proc-macros.
 - Benchmark engines with `cargo run --release --features bench --bin silas-bench -- parakeet <dir> <wav>...`.
+- Colours, radii, fonts and durations come from the theme (`src/theme.ts`). Write `var(--x)` in rule bodies; defaults live in the `:root` blocks. `bun run check:theme` fails on a hex or `rgb()` in a rule body; the only exceptions are the files in `ALLOW` in `scripts/check-theme.mjs`, each with a reason.
