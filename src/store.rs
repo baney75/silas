@@ -181,7 +181,7 @@ pub fn default_fallback() -> Option<&'static str> {
 }
 
 pub fn default_hotkey() -> &'static str {
-    // The microphone key on an Apple silicon Mac: F5 on the top row, or Globe if it is set to
+    // The microphone key on an Apple silicon Mac: the top row's key with the microphone on it (keycode 0xB0, not the F5 function), or Globe if it is set to
     // start dictation. Intel Macs mostly lack it, so they keep Right ⌘. Elsewhere the right
     // Windows/Super key opens the Start menu or launcher on release, so Right Ctrl is the safer
     // hold key.
@@ -197,7 +197,7 @@ pub fn default_hotkey() -> &'static str {
 pub fn hotkey_label(hotkey: &str) -> String {
     let mac = cfg!(target_os = "macos");
     match hotkey {
-        "Dictation" => "the microphone key (F5)".into(),
+        "Dictation" => "the microphone key".into(),
         "CmdRight" if mac => "Right ⌘".into(),
         "CmdRight" => "Right Super".into(),
         "CmdLeft" if mac => "Left ⌘".into(),
@@ -279,7 +279,7 @@ mod migrate_tests {
     #[test]
     fn the_microphone_key_parses_and_has_a_label() {
         assert!(crate::keys::Trigger::parse("Dictation").is_some());
-        assert_eq!(hotkey_label("Dictation"), "the microphone key (F5)");
+        assert_eq!(hotkey_label("Dictation"), "the microphone key");
     }
 
     #[test]
