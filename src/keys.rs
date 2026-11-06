@@ -6,7 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use handy_keys::{Key, KeyEvent, Modifiers};
+use handy_keys::{Hotkey, Key, KeyEvent, Modifiers};
 
 /// Holding shorter than this is a tap.
 pub const TAP: Duration = Duration::from_millis(280);
@@ -50,6 +50,20 @@ pub fn describe(ev: &KeyEvent) -> Option<String> {
     ev.key
         .filter(|k| !matches!(k, Key::MouseLeft | Key::MouseRight))
         .map(|k| k.to_string())
+}
+
+/// The combinations to swallow so the system does not act on the same press. Only the microphone
+/// key: pressed for Polycarp, it must not also start Apple's dictation. Every other trigger keeps
+/// reaching apps, so Right ⌘ + C still copies. Hardware presses carry fn in their flags; a Globe
+/// key or a remapped keyboard may not, so both are listed.
+pub fn blocked_hotkeys(trigger: &Trigger) -> Vec<Hotkey> {
+    match trigger {
+        Trigger::Key(Key::Dictation) => [Modifiers::FN, Modifiers::empty()]
+            .into_iter()
+            .filter_map(|m| Hotkey::new(m, Key::Dictation).ok())
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -343,6 +357,39 @@ mod tests {
             key: Some(k),
             is_key_down: true,
             changed_modifier: None,
+        }
+    }
+
+    #[test]
+    fn the_microphone_key_holds_and_taps_like_any_other_key() {
+        let t0 = Instant::now();
+        let mut m = Machine::new(Trigger::parse("Dictation").unwrap(), true);
+        // Hardware presses carry fn in their flags.
+        let mut press = key(Key::Dictation, Modifiers::FN);
+        press.is_key_down = true;
+        let mut release = press;
+        release.is_key_down = false;
+        assert_eq!(m.on_event(&press, t0), Out::Start);
+        assert_eq!(m.on_event(&press, t0 + Duration::from_millis(50)), Out::Nothing, "key repeat");
+        assert_eq!(m.on_event(&release, t0 + Duration::from_secs(2)), Out::Finish);
+        // A tap starts hands-free, and the next press finishes it.
+        assert_eq!(m.on_event(&press, t0 + Duration::from_secs(3)), Out::Start);
+        m.on_event(&release, t0 + Duration::from_millis(3100));
+        assert!(m.is_active());
+        assert_eq!(m.on_event(&press, t0 + Duration::from_secs(9)), Out::Finish);
+        // Holding that press sends repeats (seen on a real Mac, 2026-11-06); they start nothing.
+        assert_eq!(m.on_event(&press, t0 + Duration::from_millis(9100)), Out::Nothing);
+        m.on_event(&release, t0 + Duration::from_millis(9200));
+        assert!(!m.is_active());
+    }
+
+    #[test]
+    fn only_the_microphone_key_is_ever_swallowed() {
+        let blocked = blocked_hotkeys(&Trigger::parse("Dictation").unwrap());
+        assert!(blocked.iter().any(|h| h.modifiers == Modifiers::FN && h.key == Some(Key::Dictation)));
+        assert!(blocked.iter().any(|h| h.modifiers.is_empty() && h.key == Some(Key::Dictation)));
+        for other in ["CmdRight", "OptRight", "Fn", "F13"] {
+            assert!(blocked_hotkeys(&Trigger::parse(other).unwrap()).is_empty(), "{other}");
         }
     }
 

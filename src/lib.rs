@@ -32,8 +32,15 @@ pub fn start_service(core: &Shared) {
 pub fn start_listener(core: Shared) {
     std::thread::spawn(move || {
         let mut warned = false;
+        core.sync_blocked();
         loop {
-            match handy_keys::KeyboardListener::new() {
+            // Only the Mac swallows keys. On Linux a blocking listener grabs every keyboard
+            // exclusively, and no trigger there needs it.
+            #[cfg(target_os = "macos")]
+            let listener = handy_keys::KeyboardListener::new_with_blocking(core.blocked.clone());
+            #[cfg(not(target_os = "macos"))]
+            let listener = handy_keys::KeyboardListener::new();
+            match listener {
                 Ok(listener) => {
                     log::info!("keyboard listener running");
                     warned = false;

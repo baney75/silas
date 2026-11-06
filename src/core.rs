@@ -82,6 +82,8 @@ pub struct Core {
     /// Where the keyboard was when the hotkey went down; the text goes back there.
     target: Mutex<Option<crate::focus::Target>>,
     pub machine: Mutex<Machine>,
+    /// What the key listener swallows, shared with its event tap. See `sync_blocked`.
+    pub blocked: handy_keys::BlockingHotkeys,
     watch: Mutex<Option<EditWatch>>,
     /// True while Silas is typing, so its own keystrokes are not read as the user's.
     pub typing: AtomicBool,
@@ -180,6 +182,7 @@ impl Core {
                 &store::read_raw("settings.json"),
                 installed,
             );
+            store::migrate_hotkey(&mut settings, &store::read_raw("settings.json"));
         }
         // A fresh nightly install stays on nightly instead of jumping to stable.
         if !store::exists("settings.json")
@@ -202,6 +205,7 @@ impl Core {
             recording: Mutex::new(None),
             target: Mutex::new(None),
             machine: Mutex::new(machine),
+            blocked: Default::default(),
             watch: Mutex::new(None),
             typing: AtomicBool::new(false),
             listener_ok: AtomicBool::new(false),
@@ -679,6 +683,7 @@ impl Core {
             m.trigger = trigger;
             m.tap_to_toggle = settings.tap_to_toggle;
         }
+        self.sync_blocked();
         self.save_settings();
         if old.hotkey != settings.hotkey && self.status().0 == Status::Ready {
             self.set_status(Status::Ready, None); // refresh the label
@@ -693,6 +698,21 @@ impl Core {
         if !on {
             self.machine.lock().reset();
             self.cancel_recording();
+        }
+        self.sync_blocked();
+    }
+
+    /// Swallow the dictation key only while it is doing Polycarp's work. Paused, the key goes
+    /// back to the system.
+    pub fn sync_blocked(&self) {
+        let want = if self.is_enabled() {
+            crate::keys::blocked_hotkeys(&self.machine.lock().trigger)
+        } else {
+            Vec::new()
+        };
+        if let Ok(mut set) = self.blocked.lock() {
+            set.clear();
+            set.extend(want);
         }
     }
 
@@ -1164,6 +1184,35 @@ mod tests {
             assert!(!lower.contains(banned), "{m}");
         }
         assert!(!m.contains(['\u{2014}', '\u{2013}', '\u{203a}']), "{m}");
+    }
+
+    #[test]
+    fn the_microphone_key_is_swallowed_only_while_it_is_ours() {
+        use handy_keys::{Key, Modifiers};
+        let dir = std::env::temp_dir().join(format!("pc-blocked-{}", std::process::id()));
+        store::set_data_dir(Some(dir.clone()));
+        let core = Core::new(Arc::new(NullHost));
+        let holds = |core: &Shared| {
+            core.blocked
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|h| h.key == Some(Key::Dictation) && h.modifiers == Modifiers::FN)
+        };
+        let mut s = core.settings.lock().clone();
+        s.hotkey = "Dictation".into();
+        core.apply_settings(s.clone()).unwrap();
+        assert!(holds(&core), "chosen: Polycarp takes the press");
+        core.set_enabled(false);
+        assert!(!holds(&core), "paused: the key goes back to the system");
+        core.set_enabled(true);
+        assert!(holds(&core), "resumed");
+        s.hotkey = "CmdRight".into();
+        core.apply_settings(s).unwrap();
+        assert!(!holds(&core), "another key: nothing is swallowed");
+        assert!(core.blocked.lock().unwrap().is_empty());
+        store::set_data_dir(None);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
