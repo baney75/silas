@@ -51,7 +51,7 @@ const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
 
 const hotkeyLabels: Record<string, string> = {
-  Dictation: "the microphone key (F5)",
+  Dictation: "the microphone key",
   CmdRight: "Right ⌘",
   CmdLeft: "Left ⌘",
   CtrlRight: "Right Ctrl",
