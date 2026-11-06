@@ -60,7 +60,7 @@ for your key.
 
 | Do this | And Silas |
 | --- | --- |
-| Hold **Right ⌘** (Mac) or **Right Ctrl** (Windows, Linux), speak, release | types what you said |
+| Hold the **microphone key** (F5, Apple silicon Macs), **Right ⌘** (Intel Macs) or **Right Ctrl** (Windows, Linux), speak, release | types what you said |
 | Tap the key once | listens hands-free until you tap it again |
 | Press **Esc** while it listens | cancels |
 | Press the key with another key (Right ⌘ + C) | does nothing; your shortcut still works |

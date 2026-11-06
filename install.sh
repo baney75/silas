@@ -179,7 +179,7 @@ mac_install() {
   [ -z "${SILAS_NO_OPEN:-}" ] || { say "Installed to $dest."; return; }
   say "Installed to $dest. Opening Silas…"
   open "$dest/Silas.app" || { sleep 2; open "$dest/Silas.app"; }
-  say "Allow Microphone and Accessibility when Silas asks. Then hold Right ⌘ and speak."
+  say "Allow Microphone and Accessibility when Silas asks. Then hold the microphone key (F5) and speak."
 }
 
 linux_desktop_entry() {
