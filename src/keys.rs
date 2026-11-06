@@ -55,15 +55,26 @@ pub fn describe(ev: &KeyEvent) -> Option<String> {
 /// The combinations to swallow so the system does not act on the same press. Only the microphone
 /// key: pressed for Polycarp, it must not also start Apple's dictation. Every other trigger keeps
 /// reaching apps, so Right ⌘ + C still copies. Hardware presses carry fn in their flags; a Globe
-/// key or a remapped keyboard may not, so both are listed.
+/// key or a remapped keyboard may not. The listener matches modifiers exactly, and a press with
+/// Shift or ⌘ held still starts Silas, so every combination is listed.
 pub fn blocked_hotkeys(trigger: &Trigger) -> Vec<Hotkey> {
-    match trigger {
-        Trigger::Key(Key::Dictation) => [Modifiers::FN, Modifiers::empty()]
-            .into_iter()
-            .filter_map(|m| Hotkey::new(m, Key::Dictation).ok())
-            .collect(),
-        _ => Vec::new(),
+    if *trigger != Trigger::Key(Key::Dictation) {
+        return Vec::new();
     }
+    let groups = [Modifiers::CMD, Modifiers::SHIFT, Modifiers::CTRL, Modifiers::OPT];
+    let mut out = Vec::new();
+    for mask in 0..(1u8 << groups.len()) {
+        let mut held = Modifiers::empty();
+        for (i, group) in groups.iter().enumerate() {
+            if mask & (1 << i) != 0 {
+                held |= *group;
+            }
+        }
+        for mods in [held, held | Modifiers::FN] {
+            out.extend(Hotkey::new(mods, Key::Dictation));
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -89,6 +100,8 @@ enum State {
 
 pub struct Machine {
     pub trigger: Trigger,
+    /// A second key that does the same, until the microphone key is first seen (`Settings::hotkey_fallback`).
+    pub fallback: Option<Trigger>,
     pub tap_to_toggle: bool,
     state: State,
 }
@@ -97,6 +110,7 @@ impl Machine {
     pub fn new(trigger: Trigger, tap_to_toggle: bool) -> Self {
         Self {
             trigger,
+            fallback: None,
             tap_to_toggle,
             state: State::Idle,
         }
@@ -126,7 +140,7 @@ impl Machine {
     }
 
     pub fn on_event(&mut self, ev: &KeyEvent, now: Instant) -> Out {
-        let mine = self.trigger.matches(ev);
+        let mine = self.trigger.matches(ev).or_else(|| self.fallback.and_then(|f| f.matches(ev)));
         let is_mouse = matches!(
             ev.key,
             Some(Key::MouseLeft | Key::MouseRight | Key::MouseMiddle | Key::MouseX1 | Key::MouseX2)
@@ -384,10 +398,24 @@ mod tests {
     }
 
     #[test]
+    fn the_second_key_works_beside_the_microphone_key() {
+        let t0 = Instant::now();
+        let mut m = Machine::new(Trigger::parse("Dictation").unwrap(), true);
+        assert_eq!(m.on_event(&modifier(Modifiers::CMD_RIGHT, true), t0), Out::Nothing);
+        m.fallback = Trigger::parse("CmdRight");
+        assert_eq!(m.on_event(&modifier(Modifiers::CMD_RIGHT, true), t0), Out::Start);
+        assert_eq!(m.on_event(&modifier(Modifiers::CMD_RIGHT, false), t0 + Duration::from_secs(2)), Out::Finish);
+    }
+
+    #[test]
     fn only_the_microphone_key_is_ever_swallowed() {
         let blocked = blocked_hotkeys(&Trigger::parse("Dictation").unwrap());
         assert!(blocked.iter().any(|h| h.modifiers == Modifiers::FN && h.key == Some(Key::Dictation)));
         assert!(blocked.iter().any(|h| h.modifiers.is_empty() && h.key == Some(Key::Dictation)));
+        // A press with Shift held starts Silas too, so Apple's dictation must not start beside it.
+        for held in [Modifiers::SHIFT_LEFT | Modifiers::FN, Modifiers::CMD_RIGHT, Modifiers::OPT_LEFT | Modifiers::CTRL_RIGHT | Modifiers::FN] {
+            assert!(blocked.iter().any(|h| h.modifiers.matches(held)), "{held:?}");
+        }
         for other in ["CmdRight", "OptRight", "Fn", "F13"] {
             assert!(blocked_hotkeys(&Trigger::parse(other).unwrap()).is_empty(), "{other}");
         }

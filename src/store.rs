@@ -74,6 +74,9 @@ pub struct Settings {
     pub hotkey: String,
     /// Which default `hotkey` was last settled against. See `migrate_hotkey`.
     pub hotkey_version: u32,
+    /// A second key that also works until the microphone key has been seen once. No code says whether a keyboard has
+    /// that key (a Mac mini with a third-party keyboard doesn't), so nobody is left unable to dictate.
+    pub hotkey_fallback: Option<String>,
     pub tap_to_toggle: bool,
     pub model: String,
     /// Who chose `model`: default | registry | benchmark | user. A user choice is never overridden.
@@ -112,6 +115,7 @@ impl Default for Settings {
         Self {
             hotkey: default_hotkey().into(),
             hotkey_version: HOTKEY_VERSION,
+            hotkey_fallback: default_fallback().map(String::from),
             tap_to_toggle: true,
             model: "parakeet-v3".into(),
             model_source: "default".into(),
@@ -153,18 +157,27 @@ impl Settings {
 pub const HOTKEY_VERSION: u32 = 2;
 
 /// Settings saved before version 2 hold Right ⌘ whether or not anyone chose it, since it was the
-/// default and the key was never recorded as a choice. On a Mac with the microphone key they move
-/// to it once (Donovan, 2026-11-06). Any other key was picked by hand and stays.
+/// default on a Mac and the key was never recorded as a choice. Where the microphone key is now the
+/// default they move to it once (Donovan, 2026-11-06), with Right ⌘ still working until the new key
+/// is pressed. Any other key was picked by hand and stays, and so does Right Super on Windows and
+/// Linux, where it was never the default.
 pub fn migrate_hotkey(settings: &mut Settings, raw: &str) {
     let has_version = serde_json::from_str::<serde_json::Value>(raw)
         .map(|v| v.get("hotkeyVersion").is_some())
         .unwrap_or(true);
     if !has_version {
-        if settings.hotkey == "CmdRight" {
+        let moves = settings.hotkey == "CmdRight" && default_hotkey() == "Dictation";
+        settings.hotkey_fallback = moves.then(|| "CmdRight".to_string());
+        if moves {
             settings.hotkey = default_hotkey().into();
         }
         settings.hotkey_version = HOTKEY_VERSION;
     }
+}
+
+/// What keeps working beside the default key on a new install.
+pub fn default_fallback() -> Option<&'static str> {
+    (default_hotkey() == "Dictation").then_some("CmdRight")
 }
 
 pub fn default_hotkey() -> &'static str {
@@ -231,26 +244,33 @@ mod migrate_tests {
     use super::*;
 
     #[test]
-    fn a_saved_old_default_moves_to_the_current_default_once() {
+    fn a_saved_old_default_moves_only_where_the_microphone_key_is_the_default() {
         let raw = r#"{"hotkey":"CmdRight","onboarded":true}"#;
         let mut s: Settings = serde_json::from_str(raw).unwrap();
         migrate_hotkey(&mut s, raw);
-        assert_eq!(s.hotkey, default_hotkey());
         assert_eq!(s.hotkey_version, HOTKEY_VERSION);
+        if default_hotkey() == "Dictation" {
+            assert_eq!(s.hotkey, "Dictation");
+            assert_eq!(s.hotkey_fallback.as_deref(), Some("CmdRight"), "nobody loses dictation");
+        } else {
+            assert_eq!(s.hotkey, "CmdRight", "a key picked by hand here, since it was never the default");
+            assert_eq!(s.hotkey_fallback, None);
+        }
     }
 
     #[test]
-    fn a_key_picked_by_hand_stays() {
+    fn a_key_picked_by_hand_stays_with_no_second_key() {
         let raw = r#"{"hotkey":"F13","onboarded":true}"#;
         let mut s: Settings = serde_json::from_str(raw).unwrap();
         migrate_hotkey(&mut s, raw);
         assert_eq!(s.hotkey, "F13");
+        assert_eq!(s.hotkey_fallback, None, "Right ⌘ must not start working for someone who chose F13");
         assert_eq!(s.hotkey_version, HOTKEY_VERSION);
     }
 
     #[test]
     fn right_command_picked_after_the_move_stays() {
-        let raw = r#"{"hotkey":"CmdRight","hotkeyVersion":2}"#;
+        let raw = r#"{"hotkey":"CmdRight","hotkeyVersion":2,"hotkeyFallback":null}"#;
         let mut s: Settings = serde_json::from_str(raw).unwrap();
         migrate_hotkey(&mut s, raw);
         assert_eq!(s.hotkey, "CmdRight");
