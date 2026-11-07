@@ -78,7 +78,10 @@ pub struct Core {
     pub history: Mutex<Vec<HistoryItem>>,
     status: Mutex<(Status, Option<String>)>,
     engine: Mutex<Option<(String, Engine)>>,
+    engine_id: Mutex<Option<String>>,
     recording: Mutex<Option<(Recording, Instant)>>,
+    /// Transcribes a long dictation while it's being spoken.
+    pieces: Mutex<Option<crate::pieces::Pieces>>,
     /// Where the keyboard was when the hotkey went down; the text goes back there.
     target: Mutex<Option<crate::focus::Target>>,
     pub machine: Mutex<Machine>,
@@ -203,7 +206,9 @@ impl Core {
             history: Mutex::new(history),
             status: Mutex::new((Status::Loading, None)),
             engine: Mutex::new(None),
+            engine_id: Mutex::new(None),
             recording: Mutex::new(None),
+            pieces: Mutex::new(None),
             target: Mutex::new(None),
             machine: Mutex::new(machine),
             blocked: Default::default(),
@@ -289,8 +294,16 @@ impl Core {
 
     // ------------------------------------------------------------ model
 
+    /// Never waits on a transcription: the status the app reads on its main thread asks this.
     pub fn active_model(&self) -> Option<String> {
-        self.engine.lock().as_ref().map(|(id, _)| id.clone())
+        self.engine_id.lock().clone()
+    }
+
+    fn set_engine(&self, engine: Option<(String, Engine)>) {
+        // Both change under the engine's lock, so a reader never sees an id ahead of what's loaded for long.
+        let mut slot = self.engine.lock();
+        *self.engine_id.lock() = engine.as_ref().map(|(id, _)| id.clone());
+        *slot = engine;
     }
 
     /// Load the chosen model in the background. Models stay loaded: unloading made the
@@ -303,7 +316,7 @@ impl Core {
                 self.settings.lock().model = m.id.to_string();
                 return self.load_model();
             }
-            *self.engine.lock() = None;
+            self.set_engine(None);
             self.set_status(Status::NeedsModel, None);
             return;
         }
@@ -348,7 +361,7 @@ impl Core {
                         me.load_model();
                         return;
                     }
-                    *me.engine.lock() = Some((id.clone(), engine));
+                    me.set_engine(Some((id.clone(), engine)));
                     log::info!("loaded {id} in {:.1}s", t.elapsed().as_secs_f32());
                     me.set_status(Status::Ready, None);
                 }
@@ -410,7 +423,7 @@ impl Core {
             return;
         }
         self.save_settings();
-        *self.engine.lock() = None;
+        self.set_engine(None);
         self.load_model();
     }
 
@@ -911,6 +924,15 @@ impl Core {
                 // release can never find a recording without its target.
                 *self.target.lock() = capture.join().ok().flatten();
                 self.dictations.fetch_add(1, Ordering::AcqRel);
+                let (raw, rate) = r.tap();
+                let me = self.clone();
+                let language = self.settings.lock().language.clone();
+                *self.pieces.lock() = Some(crate::pieces::Pieces::start(raw, rate, move |audio| {
+                    match me.engine.lock().as_mut() {
+                        Some((_, engine)) => engine.transcribe(audio, &language),
+                        None => anyhow::bail!("No model is loaded"),
+                    }
+                }));
                 *self.recording.lock() = Some((r, Instant::now()));
                 let gen = self.recording_gen.fetch_add(1, Ordering::Relaxed) + 1;
                 self.cue("start");
@@ -939,6 +961,7 @@ impl Core {
         // Release the lock before set_status, which waits on the main thread for the tray.
         let recording = self.recording.lock().take();
         self.target.lock().take();
+        self.pieces.lock().take();
         if let Some((r, _)) = recording {
             drop(r);
             self.set_status(Status::Ready, None);
@@ -953,26 +976,41 @@ impl Core {
         self.cue("stop");
         // Carried by value: a new dictation may start before this one finishes typing.
         let target = self.target.lock().take();
+        let pieces = self.pieces.lock().take();
         let me = self.clone();
         std::thread::spawn(move || {
             let released = Instant::now();
-            let samples = rec.finish();
-            let secs = samples.len() as f32 / 16_000.0;
+            let secs = rec.seconds();
             if secs < 0.35 {
+                drop((pieces, rec));
                 me.set_status(Status::Ready, None);
                 return;
             }
             me.set_status(Status::Transcribing, None);
+            let done = pieces.map(|p| p.finish()).unwrap_or_default();
+            let rest = rec.finish_from(done.raw_samples);
             let language = me.settings.lock().language.clone();
-            let raw = {
+            // The tail of a long dictation can be too short to hold a word, and pieces already hold the rest.
+            let rest = if rest.len() < 5_600 && !done.text.is_empty() {
+                Ok(String::new())
+            } else {
                 let mut engine = me.engine.lock();
                 match engine.as_mut() {
-                    Some((_, e)) => e.transcribe(&samples, &language),
+                    Some((_, e)) => e.transcribe(&rest, &language),
                     None => Err(anyhow::anyhow!("No model is loaded")),
                 }
             };
-            let raw = match raw {
-                Ok(t) => t,
+            let raw = match rest {
+                Ok(t) => {
+                    let mut all = done.text;
+                    crate::pieces::join(&mut all, &t);
+                    all
+                }
+                // What was already transcribed is still worth typing.
+                Err(e) if !done.text.is_empty() => {
+                    log::warn!("transcribing the end of a dictation failed: {e}");
+                    done.text
+                }
                 Err(e) => {
                     me.set_status(Status::Error, Some(format!("Transcription failed: {e}")));
                     me.recover_soon();

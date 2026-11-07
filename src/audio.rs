@@ -140,13 +140,23 @@ impl Recording {
     }
 
     /// Stop and return 16 kHz mono audio.
-    pub fn finish(mut self) -> Vec<f32> {
+    pub fn finish(self) -> Vec<f32> {
+        self.finish_from(0)
+    }
+
+    /// The microphone's buffer and its sample rate, for transcribing while recording (pieces.rs).
+    pub fn tap(&self) -> (Arc<Mutex<Vec<f32>>>, u32) {
+        (self.samples.clone(), self.rate)
+    }
+
+    /// Stop and return 16 kHz mono audio, from `skip` samples into the microphone's buffer.
+    pub fn finish_from(mut self, skip: usize) -> Vec<f32> {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
         let raw = std::mem::take(&mut *self.samples.lock());
-        resample(&raw, self.rate, RATE)
+        resample(&raw[skip.min(raw.len())..], self.rate, RATE)
     }
 }
 
