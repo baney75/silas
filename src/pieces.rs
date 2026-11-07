@@ -8,12 +8,17 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use crate::audio::resample;
+use crate::audio::{resample, RATE};
 
 /// How much unprocessed speech it takes before looking for a pause.
 const MIN_PIECE_SECONDS: f32 = 6.0;
-/// A pause this long is between words people meant to separate. Shorter gaps fall inside sentences.
-const MIN_PAUSE_SECONDS: f32 = 0.25;
+/// A pause this long usually ends a sentence. People hesitate for less than this inside one.
+const SENTENCE_PAUSE_SECONDS: f32 = 0.45;
+/// After this much unprocessed speech a shorter pause will do, or a fast talker would never get a cut.
+const IMPATIENT_AFTER_SECONDS: f32 = 15.0;
+const IMPATIENT_PAUSE_SECONDS: f32 = 0.3;
+/// Quieter than this is the absence of speech on any microphone. Room tone can read lower; it can't count as louder.
+const SILENCE_RMS: f32 = 0.003;
 const FRAME_SECONDS: f32 = 0.02;
 /// How often the worker looks at the microphone's buffer.
 const POLL: Duration = Duration::from_millis(100);
@@ -32,14 +37,22 @@ pub fn find_cut(audio: &[f32], rate: u32) -> Option<usize> {
     let mut sorted = levels.clone();
     sorted.sort_by(f32::total_cmp);
     // Pauses can be a tiny share of the frames, so the floor is taken near the very bottom.
-    let floor = sorted[sorted.len() / 50];
+    let floor = sorted[sorted.len() / 200];
     let speech = sorted[sorted.len() * 9 / 10];
     // Room tone only, or nothing that stands out from it: no way to tell a pause from a word.
-    if speech < 0.003 || speech < floor * 3.0 {
+    if speech < SILENCE_RMS || speech < floor * 3.0 {
         return None;
     }
-    let quiet = (floor * 2.0).max(speech * 0.1);
-    let need = (MIN_PAUSE_SECONDS / FRAME_SECONDS).ceil() as usize;
+    // Near the room's own level, so a soft word or a trailing-off voice never reads as a pause. In a room too loud to
+    // tell, this finds no pause and the dictation goes the ordinary way.
+    let quiet = (floor.max(0.0005) * 3.0).min(speech * 0.1);
+    let seconds = audio.len() as f32 / rate as f32;
+    let pause = if seconds >= IMPATIENT_AFTER_SECONDS {
+        IMPATIENT_PAUSE_SECONDS
+    } else {
+        SENTENCE_PAUSE_SECONDS
+    };
+    let need = (pause / FRAME_SECONDS).ceil() as usize;
     let earliest = (MIN_PIECE_SECONDS / FRAME_SECONDS) as usize;
     let mut best: Option<(usize, usize)> = None;
     let mut run_start = None;
@@ -69,14 +82,22 @@ pub struct Done {
     pub raw_samples: usize,
 }
 
-/// Adds a piece's text to what's already there. The model capitalizes the start of every piece, which is wrong after a
-/// comma: the cut fell inside a sentence.
+/// Whether audio holds nothing to transcribe.
+pub fn is_silence(audio: &[f32]) -> bool {
+    audio.is_empty()
+        || audio
+            .chunks((RATE as f32 * FRAME_SECONDS) as usize)
+            .all(|f| (f.iter().map(|s| s * s).sum::<f32>() / f.len() as f32).sqrt() < SILENCE_RMS)
+}
+
+/// Adds a piece's text to what's already there. The model capitalizes the start of every piece, which is wrong when the
+/// one before stopped without ending its sentence.
 pub fn join(text: &mut String, piece: &str) {
     let piece = piece.trim();
     if piece.is_empty() {
         return;
     }
-    let inside_a_sentence = text.ends_with(',');
+    let inside_a_sentence = !text.is_empty() && !text.ends_with(['.', '?', '!', ':', ';', '"']);
     if !text.is_empty() {
         text.push(' ');
     }
@@ -109,24 +130,30 @@ impl Pieces {
         let thread = std::thread::spawn(move || {
             let mut done = Done::default();
             let need = (MIN_PIECE_SECONDS * rate as f32) as usize;
+            // With no pause found, half a second of new audio before copying the buffer again.
+            let mut next_look = 0;
             while !stopping.load(Ordering::Relaxed) {
-                std::thread::sleep(POLL);
+                // A release wakes this at once, so it never adds to the wait.
+                std::thread::park_timeout(POLL);
+                if stopping.load(Ordering::Relaxed) {
+                    break;
+                }
                 let pending: Vec<f32> = {
                     let buffer = raw.lock();
-                    if buffer.len() < done.raw_samples + need {
+                    if buffer.len() < done.raw_samples + need || buffer.len() < next_look {
                         continue;
                     }
+                    next_look = buffer.len() + rate as usize / 2;
                     buffer[done.raw_samples..].to_vec()
                 };
-                let audio = resample(&pending, rate, crate::audio::RATE);
-                let Some(cut) = find_cut(&audio, crate::audio::RATE) else {
+                let audio = resample(&pending, rate, RATE);
+                let Some(cut) = find_cut(&audio, RATE) else {
                     continue;
                 };
                 match transcribe(&audio[..cut]) {
                     Ok(piece) => {
                         join(&mut done.text, &piece);
-                        done.raw_samples +=
-                            (cut as u64 * rate as u64 / crate::audio::RATE as u64) as usize;
+                        done.raw_samples += (cut as u64 * rate as u64 / RATE as u64) as usize;
                     }
                     // Whatever's left goes through at release, the ordinary way.
                     Err(e) => {
@@ -148,7 +175,10 @@ impl Pieces {
         self.stop.store(true, Ordering::Relaxed);
         self.thread
             .take()
-            .and_then(|t| t.join().ok())
+            .and_then(|t| {
+                t.thread().unpark();
+                t.join().ok()
+            })
             .unwrap_or_default()
     }
 }
@@ -156,6 +186,9 @@ impl Pieces {
 impl Drop for Pieces {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        if let Some(t) = &self.thread {
+            t.thread().unpark();
+        }
     }
 }
 
@@ -190,7 +223,7 @@ mod tests {
 
     #[test]
     fn it_cuts_inside_a_pause_never_inside_speech() {
-        let audio = [speech(7.0), pause(0.4), speech(2.0)].concat();
+        let audio = [speech(7.0), pause(0.6), speech(2.0)].concat();
         let cut = find_cut(&audio, RATE).expect("a pause after 6 s");
         assert!(is_quiet(&audio, cut), "cut at {cut} is in speech");
     }
@@ -199,9 +232,9 @@ mod tests {
     fn of_equal_pauses_it_takes_the_last_so_less_is_left_for_release() {
         let audio = [
             speech(7.0),
-            pause(0.4),
+            pause(0.6),
             speech(3.0),
-            pause(0.4),
+            pause(0.6),
             speech(1.0),
         ]
         .concat();
@@ -233,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn joining_fixes_a_capital_only_after_a_comma() {
+    fn joining_fixes_a_capital_only_inside_a_sentence() {
         let mut text = String::new();
         join(&mut text, "Her knees drawn up to her chin,");
         join(&mut text, "Laughing like a girl.");
@@ -252,8 +285,39 @@ mod tests {
     fn a_pause_before_the_minimum_or_too_short_a_gap_doesnt_count() {
         let early = [speech(3.0), pause(0.5), speech(5.0)].concat();
         assert_eq!(find_cut(&early, RATE), None);
-        let brief = [speech(7.0), pause(0.1), speech(2.0)].concat();
-        assert_eq!(find_cut(&brief, RATE), None);
+        let hesitation = [speech(7.0), pause(0.3), speech(2.0)].concat();
+        assert_eq!(find_cut(&hesitation, RATE), None);
+    }
+
+    #[test]
+    fn after_a_long_stretch_a_shorter_pause_will_do() {
+        let audio = [speech(16.0), pause(0.35), speech(1.0)].concat();
+        assert!(find_cut(&audio, RATE).is_some());
+    }
+
+    #[test]
+    fn a_soft_word_between_loud_ones_is_not_a_pause() {
+        let soft: Vec<f32> = speech(0.6).iter().map(|s| s * 0.08).collect();
+        let audio = [speech(7.0), pause(0.2), soft, pause(0.2), speech(2.0)].concat();
+        assert_eq!(find_cut(&audio, RATE), None);
+    }
+
+    #[test]
+    fn a_word_after_the_last_cut_is_not_silence() {
+        assert!(is_silence(&pause(0.3)));
+        assert!(is_silence(&[]));
+        assert!(!is_silence(&[pause(0.1), speech(0.2)].concat()));
+    }
+
+    #[test]
+    fn finishing_an_idle_worker_wakes_it_at_once() {
+        for _ in 0..5 {
+            let pieces = Pieces::start(Arc::new(Mutex::new(vec![])), RATE, |_| Ok(String::new()));
+            std::thread::sleep(Duration::from_millis(10));
+            let t = std::time::Instant::now();
+            pieces.finish();
+            assert!(t.elapsed() < Duration::from_millis(30), "{:?}", t.elapsed());
+        }
     }
 
     #[test]
@@ -269,7 +333,7 @@ mod tests {
 
     #[test]
     fn a_failed_piece_leaves_the_rest_for_release() {
-        let raw = Arc::new(Mutex::new([speech(7.0), pause(0.4), speech(2.0)].concat()));
+        let raw = Arc::new(Mutex::new([speech(7.0), pause(0.6), speech(2.0)].concat()));
         let pieces = Pieces::start(raw, RATE, |_| anyhow::bail!("no model"));
         std::thread::sleep(Duration::from_millis(400));
         let done = pieces.finish();
@@ -278,7 +342,7 @@ mod tests {
 
     #[test]
     fn pieces_join_in_order_and_report_what_they_covered() {
-        let raw = Arc::new(Mutex::new([speech(7.0), pause(0.4), speech(2.0)].concat()));
+        let raw = Arc::new(Mutex::new([speech(7.0), pause(0.6), speech(2.0)].concat()));
         let total = raw.lock().len();
         let pieces = Pieces::start(raw.clone(), RATE, |audio| {
             Ok(format!("{} samples", audio.len()))

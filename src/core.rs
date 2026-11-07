@@ -980,6 +980,9 @@ impl Core {
         let me = self.clone();
         std::thread::spawn(move || {
             let released = Instant::now();
+            // Before anything that can wait: what's said after the key comes up isn't dictation.
+            let mut rec = rec;
+            rec.stop();
             let secs = rec.seconds();
             if secs < 0.35 {
                 drop((pieces, rec));
@@ -990,8 +993,8 @@ impl Core {
             let done = pieces.map(|p| p.finish()).unwrap_or_default();
             let rest = rec.finish_from(done.raw_samples);
             let language = me.settings.lock().language.clone();
-            // The tail of a long dictation can be too short to hold a word, and pieces already hold the rest.
-            let rest = if rest.len() < 5_600 && !done.text.is_empty() {
+            // After a piece, what's left can be nothing but the end of a pause.
+            let rest = if !done.text.is_empty() && crate::pieces::is_silence(&rest) {
                 Ok(String::new())
             } else {
                 let mut engine = me.engine.lock();
