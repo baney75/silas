@@ -1,0 +1,9 @@
+{
+  "date": "2026-11-07",
+  "problems": [
+    "agents: UI repo missing DESIGN.md",
+    "agents: stale path in AGENTS.md: data/common-en.txt",
+    "readme: README has no ## License heading or license line",
+    "readme: README has no badges row (public repo with CI)"
+  ]
+}
