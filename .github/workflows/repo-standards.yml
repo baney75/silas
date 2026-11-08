@@ -1,0 +1,17 @@
+# Secret scanning and the repo standard. The logic lives in https://github.com/baney75/.github
+# (.github/workflows/repo-standards.yml) so every repository stays in step. Replaces GitGuardian.
+name: Repo standards
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+  schedule:
+    - cron: "41 7 * * 1"  # weekly: also checks whether any key in history is still live
+  workflow_dispatch:
+permissions: {}
+jobs:
+  standards:
+    uses: baney75/.github/.github/workflows/repo-standards.yml@main
+    permissions:
+      contents: read
+      actions: read
