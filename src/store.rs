@@ -13,6 +13,11 @@ pub fn set_data_dir(dir: Option<PathBuf>) {
     *DATA_DIR.write() = dir;
 }
 
+/// The data folder is one global, so tests that set it take turns. Otherwise one test clearing it
+/// could send another's writes into the real settings folder.
+#[cfg(test)]
+pub(crate) static TEST_DIR: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
 pub fn data_dir() -> PathBuf {
     let dir = match DATA_DIR.read().clone() {
         Some(d) => d,

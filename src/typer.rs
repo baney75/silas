@@ -86,6 +86,17 @@ fn chunks(text: &str, size: usize) -> Vec<String> {
     out
 }
 
+/// The key events for one run of text. A tool that types a whole string per call (wtype,
+/// ydotool) gets the whole run: starting a process per character made a sentence take seconds.
+/// It paces itself, and the double-space shortcut `chunks` guards against is macOS's.
+fn events(text: &str, size: usize, whole: bool) -> Vec<String> {
+    if whole {
+        vec![text.to_string()]
+    } else {
+        chunks(text, size)
+    }
+}
+
 /// Types `text`, asking `still_here` before every event whether the keyboard is still on the
 /// target (a check costs well under a tenth of a millisecond). Returns false if it stopped
 /// because focus moved.
@@ -104,7 +115,7 @@ pub fn type_text(
         }
         match piece {
             Piece::Text(t) => {
-                for c in chunks(t, pace.chunk) {
+                for c in events(t, pace.chunk, k.whole_runs()) {
                     if !still_here(after_focus_key) {
                         return Ok(false);
                     }
@@ -163,6 +174,10 @@ impl Keyboard {
         Ok(())
     }
 
+    fn whole_runs(&self) -> bool {
+        false
+    }
+
     fn text(&mut self, t: &str) -> anyhow::Result<()> {
         self.post(
             0,
@@ -217,21 +232,23 @@ impl Keyboard {
         })
     }
 
+    /// A Wayland tool types a whole run per process; enigo goes key event by key event.
+    fn whole_runs(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        return self.wayland_tool.is_some();
+        #[cfg(not(target_os = "linux"))]
+        false
+    }
+
     fn text(&mut self, t: &str) -> anyhow::Result<()> {
         #[cfg(target_os = "linux")]
         if let Some(tool) = self.wayland_tool {
-            let status = match tool {
-                "wtype" => std::process::Command::new("wtype")
-                    .arg("--")
-                    .arg(t)
-                    .status()?,
-                _ => std::process::Command::new("ydotool")
-                    .args(["type", "--key-delay", "1", "--"])
-                    .arg(t)
-                    .status()?,
+            let mut cmd = std::process::Command::new(tool);
+            match tool {
+                "wtype" => cmd.arg("--").arg(t),
+                _ => cmd.args(["type", "--key-delay", "1", "--"]).arg(t),
             };
-            anyhow::ensure!(status.success(), "{tool} failed to type");
-            return Ok(());
+            return run(tool, &mut cmd);
         }
         use enigo::Keyboard as _;
         self.enigo
@@ -252,8 +269,7 @@ impl Keyboard {
                 (_, true) => cmd.args(["key", "42:1", "28:1", "28:0", "42:0"]),
                 (_, false) => cmd.args(["key", "28:1", "28:0"]),
             };
-            cmd.status()?;
-            return Ok(());
+            return run(tool, &mut cmd);
         }
         use enigo::{Direction, Key, Keyboard as _};
         let e = self.enigo.as_mut().unwrap();
@@ -267,6 +283,16 @@ impl Keyboard {
         }
         r
     }
+}
+
+/// Runs a typing tool; a failed exit is an error, so the text goes to History instead of being
+/// reported as typed.
+#[cfg(unix)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn run(tool: &str, cmd: &mut std::process::Command) -> anyhow::Result<()> {
+    let status = cmd.status().map_err(|e| anyhow::anyhow!("{tool} couldn't start: {e}"))?;
+    anyhow::ensure!(status.success(), "{tool} failed to type ({status})");
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -287,6 +313,24 @@ mod tests {
         assert!(matches!(p[1], Piece::Newline));
         assert!(matches!(p[3], Piece::Tab));
         assert_eq!(chunks("héllo", 2), vec!["hé", "ll", "o"]);
+    }
+
+    #[test]
+    fn a_tool_that_types_whole_strings_gets_one_call_per_run() {
+        let text = "Man needs no excuse to strive for excellence.";
+        assert_eq!(events(text, 1, true), vec![text]);
+        // Key by key elsewhere, as before.
+        assert_eq!(events(text, 1, false), chunks(text, 1));
+        assert!(events(text, 1, false).len() > 30);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_tool_that_fails_is_an_error() {
+        assert!(run("true", &mut std::process::Command::new("true")).is_ok());
+        let e = run("false", &mut std::process::Command::new("false")).unwrap_err().to_string();
+        assert!(e.contains("false failed to type"), "{e}");
+        assert!(run("nope", &mut std::process::Command::new("/no/such/tool")).is_err());
     }
 
     #[test]

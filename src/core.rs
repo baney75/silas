@@ -46,6 +46,11 @@ pub trait Host: Send + Sync + 'static {
     fn product_name(&self) -> String {
         "Silas".into()
     }
+    /// Where this app's own permission buttons are, for messages that send the user there
+    /// ("Settings > Silas" in Polycarp). None: the Silas app's home screen and onboarding.
+    fn permission_place(&self) -> Option<String> {
+        None
+    }
 }
 
 /// A host that ignores everything. For tests and headless use.
@@ -79,7 +84,7 @@ pub struct Core {
     status: Mutex<(Status, Option<String>)>,
     engine: Mutex<Option<(String, Engine)>>,
     engine_id: Mutex<Option<String>>,
-    recording: Mutex<Option<(Recording, Instant)>>,
+    recording: Mutex<Option<Live>>,
     /// Transcribes a long dictation while it's being spoken.
     pieces: Mutex<Option<crate::pieces::Pieces>>,
     /// Where the keyboard was when the hotkey went down; the text goes back there.
@@ -95,13 +100,20 @@ pub struct Core {
     pub listener_ok: AtomicBool,
     /// The user pressed keys while Silas was typing, so its copy of the text is off.
     typed_over: AtomicBool,
+    /// The user pressed Escape while Silas was typing: stop, and leave the rest in History.
+    stop_typing: AtomicBool,
+    /// When the last busy cue played (`busy_cue_due`).
+    last_busy: Mutex<Option<Instant>>,
     /// Bumped per recording so the length limit only stops the one it was set for.
     recording_gen: std::sync::atomic::AtomicU64,
     /// Bumped when a press starts from an error, so that error's recovery timer stands down.
     recover_gen: std::sync::atomic::AtomicU64,
-    pub capture: Mutex<Option<std::sync::mpsc::Sender<String>>>,
+    /// A pending hotkey pick: gets the key's name, or why there is none (`CANCELLED`, a refusal).
+    pub capture: Mutex<Option<std::sync::mpsc::Sender<Result<String, String>>>>,
     pub last_activity: Mutex<Instant>,
     downloading: Mutex<Vec<String>>,
+    /// Downloads the user cancelled; `models::download` checks this between reads.
+    cancelled_downloads: Mutex<Vec<String>>,
     /// A benchmark is running; only one at a time.
     bench_running: AtomicBool,
     /// Recordings started so far; a benchmark clip that saw this change overlapped a dictation.
@@ -154,20 +166,205 @@ impl Drop for BenchGuard {
 
 const MAX_RECORDING: Duration = Duration::from_secs(300);
 
-pub fn key_access_message(product: &str) -> String {
-    key_access_message_for(std::env::consts::OS, product)
+/// How long an error from a dictation stays up before the status goes back to Ready.
+const RECOVER_AFTER: Duration = if cfg!(test) {
+    Duration::from_millis(50)
+} else {
+    Duration::from_secs(4)
+};
+
+/// Recording goes on this long after the key comes up, so the last word isn't cut off: people
+/// let go of the key as they finish speaking, not after.
+pub const TAIL: Duration = Duration::from_millis(200);
+
+/// Busy cues and lines come at most this often, so a held key's repeats don't chime on and on.
+const BUSY_EVERY: Duration = Duration::from_secs(1);
+
+/// The text `pc_last_error` and events carry when the user cancelled (a hotkey pick, a download).
+pub const CANCELLED: &str = "cancelled";
+
+pub fn key_access_message(product: &str, place: Option<&str>) -> String {
+    key_access_message_for(std::env::consts::OS, product, place)
 }
 
 /// The macOS text also covers a stale grant: after a build with a different signature, the
 /// Accessibility switch can still look on for the old one while this build is not trusted.
 /// Turning that switch off and on keeps the old signature, so the text never suggests it:
 /// Fix Permission clears the entry, and removing and re-adding Silas by hand does the same.
-fn key_access_message_for(os: &str, p: &str) -> String {
-    match os {
-        "macos" => format!("{p} can't hear your key yet. Click Fix Permission on the {p} home screen. If that doesn't work, open System Settings, Privacy & Security, Accessibility, select {p}, click the minus button to remove it, click plus and add {p} from Applications, then turn on its switch."),
-        "linux" => format!("{p} can't read the keyboard. Reinstall the package, or add the udev rule from the README, then log out and back in."),
+/// `place` is where the host's own permission buttons are; None is the Silas app's home screen.
+fn key_access_message_for(os: &str, p: &str, place: Option<&str>) -> String {
+    let by_hand = format!("open System Settings, Privacy & Security, Accessibility, select {p}, click the minus button to remove it, click plus and add {p} from Applications, then turn on its switch.");
+    match (os, place) {
+        ("macos", None) => format!("{p} can't hear your key yet. Click Fix Permission on the {p} home screen. If that doesn't work, {by_hand}"),
+        ("macos", Some(place)) => format!("{p} can't hear your key yet. Open {place} and click Open Accessibility Settings, then turn on {p}. If {p} is on there already, {by_hand}"),
+        ("linux", _) => format!("{p} can't read the keyboard. Reinstall the package, or add the udev rule from the README, then log out and back in."),
         _ => format!("{p} couldn't start its keyboard listener. Restart {p}."),
     }
+}
+
+/// Why a press didn't record when the microphone isn't allowed. Undetermined and denied need
+/// different buttons: macOS asks only once, and after a no only its own list can say yes.
+pub fn mic_message(p: &str, place: Option<&str>, grant: crate::permissions::Grant) -> String {
+    use crate::permissions::Grant;
+    match (place, grant) {
+        (None, _) => format!("Microphone: not allowed yet. Open {p} and click Allow for the microphone."),
+        (Some(place), Grant::Denied) => format!("Microphone: not allowed. Open {place} and click Open Microphone Settings, then turn on {p}."),
+        (Some(place), _) => format!("Microphone: not allowed yet. Open {place} and click Allow on the Microphone line."),
+    }
+}
+
+/// Said when a password field has the keyboard as a dictation starts. macOS hides every key
+/// from other apps then (secure input), and text typed there would land in a password.
+pub fn secure_start_message(p: &str) -> String {
+    format!("A password field has the keyboard, so {p} isn't listening. Click into another field and try again.")
+}
+
+/// Said when a password field took the keyboard while the dictation was being written. The text
+/// is dropped: it is never typed, kept in History, or learned from.
+pub fn secure_finish_message(p: &str) -> String {
+    format!("A password field has the keyboard, so {p} didn't type what you said and didn't keep it.")
+}
+
+/// Said after a panic in the speech runtime or the key handling ended a dictation.
+pub fn crash_message(p: &str) -> String {
+    format!("Something went wrong inside {p}, so that dictation stopped. Press your key to try again.")
+}
+
+/// A short line in the overlay: `kind` is error, busy or stopped.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Notice {
+    /// Something failed; the status is Error for a few seconds.
+    Error,
+    /// The press came while Polycarp was still busy, so it didn't start anything.
+    Busy,
+    /// The user stopped the typing with Escape.
+    Stopped,
+}
+
+impl Notice {
+    pub fn kind(self) -> &'static str {
+        match self {
+            Notice::Error => "error",
+            Notice::Busy => "busy",
+            Notice::Stopped => "stopped",
+        }
+    }
+}
+
+/// What a press of the dictation key does, given where the engine is.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Press {
+    Start,
+    /// Start, taking over an error that was about to clear on its own.
+    StartFromError,
+    /// No model yet: bring the app forward to choose one.
+    ShowMain,
+    /// Nothing starts; say why in the overlay, with the error cue.
+    Refuse(Notice, String),
+}
+
+/// Errors clear on their own after a few seconds; a retry right away isn't ignored while a model
+/// is loaded and the key listener works. Every other state says why the press did nothing.
+pub fn press(status: Status, detail: Option<&str>, model_loaded: bool, listener_ok: bool) -> Press {
+    let busy = |s: &str| Press::Refuse(Notice::Busy, s.to_string());
+    match status {
+        Status::Ready => Press::Start,
+        Status::Error if model_loaded && listener_ok => Press::StartFromError,
+        Status::NeedsModel => Press::ShowMain,
+        Status::Loading => busy("The speech model is still loading. Try again in a moment."),
+        Status::Recording => busy("Still finishing your last dictation."),
+        Status::Transcribing => busy("Still writing your last dictation."),
+        Status::Typing => busy("Still typing your last dictation. Press Escape to stop it."),
+        Status::Error => Press::Refuse(
+            Notice::Error,
+            detail
+                .filter(|d| !d.is_empty())
+                .unwrap_or("Dictation can't start right now.")
+                .to_string(),
+        ),
+    }
+}
+
+/// What a key the user presses while Polycarp is typing means.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WhileTyping {
+    /// Escape: stop typing; the rest of the text is in History.
+    Stop,
+    /// A key Polycarp never sends (delete, arrows): the user changed the text, so Polycarp's copy
+    /// of it is off and edits aren't learned from.
+    Edit,
+    /// Polycarp's own keystrokes, a key release, or anything else.
+    Other,
+}
+
+pub fn key_while_typing(ev: &handy_keys::KeyEvent) -> WhileTyping {
+    use handy_keys::Key::*;
+    if !ev.is_key_down {
+        return WhileTyping::Other;
+    }
+    match ev.key {
+        Some(Escape) => WhileTyping::Stop,
+        Some(
+            Delete | ForwardDelete | LeftArrow | RightArrow | UpArrow | DownArrow | Home | End | PageUp
+            | PageDown,
+        ) => WhileTyping::Edit,
+        _ => WhileTyping::Other,
+    }
+}
+
+/// Where a finished dictation's text goes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Delivery {
+    /// Type it, then keep it in History.
+    Type,
+    /// Focus went somewhere Polycarp couldn't bring back; typing would hit the wrong window.
+    HistoryOnly,
+    /// A password field has the keyboard: drop the text.
+    Drop,
+}
+
+pub fn delivery(secure_input: bool, restored: crate::focus::Restore) -> Delivery {
+    if secure_input {
+        Delivery::Drop
+    } else if restored == crate::focus::Restore::Failed {
+        Delivery::HistoryOnly
+    } else {
+        Delivery::Type
+    }
+}
+
+/// An edit is learned only if the same window still has the keyboard and it isn't a password
+/// field. `then` is None where the system can't say which window that was.
+pub fn may_learn(then: Option<u64>, now: Option<u64>, secure_input: bool) -> bool {
+    !secure_input && (then.is_none() || then == now)
+}
+
+/// How a recording ended, which decides how much more it records.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Ending {
+    /// The key came up (or the second tap, or a button).
+    Key,
+    /// The five-minute limit: nobody is mid-word.
+    Limit,
+}
+
+pub fn tail_for(ending: Ending) -> Duration {
+    match ending {
+        Ending::Key => TAIL,
+        Ending::Limit => Duration::ZERO,
+    }
+}
+
+/// A busy cue may play now if none played in the last `BUSY_EVERY`.
+fn busy_cue_due(last: Option<Instant>, now: Instant) -> bool {
+    last.is_none_or(|t| now.duration_since(t) >= BUSY_EVERY)
+}
+
+/// A dictation that was recording: the microphone, when it opened, and when the key went down.
+struct Live {
+    rec: Recording,
+    started: Instant,
+    pressed: Instant,
 }
 
 impl Core {
@@ -216,11 +413,14 @@ impl Core {
             typing: AtomicBool::new(false),
             listener_ok: AtomicBool::new(false),
             typed_over: AtomicBool::new(false),
+            stop_typing: AtomicBool::new(false),
+            last_busy: Mutex::new(None),
             recording_gen: std::sync::atomic::AtomicU64::new(0),
             recover_gen: std::sync::atomic::AtomicU64::new(0),
             capture: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
             downloading: Mutex::new(vec![]),
+            cancelled_downloads: Mutex::new(vec![]),
             bench_running: AtomicBool::new(false),
             dictations: AtomicU64::new(0),
             loading: Mutex::new(None),
@@ -245,7 +445,7 @@ impl Core {
                 return;
             }
             let missing_key =
-                cur.0 == Status::Error && cur.1.as_deref() == Some(key_access_message(&self.host.product_name()).as_str());
+                cur.0 == Status::Error && cur.1.as_deref() == Some(self.key_message().as_str());
             (ok && missing_key) || (!ok && cur.0 == Status::Ready)
         };
         if ok {
@@ -275,11 +475,50 @@ impl Core {
         );
     }
 
+    /// The message for a key listener that can't start, worded for this host.
+    fn key_message(&self) -> String {
+        key_access_message(&self.host.product_name(), self.host.permission_place().as_deref())
+    }
+
+    /// A short line for the overlay. Sent before the status it goes with, so the overlay shows the
+    /// line instead of hiding for that status.
+    fn notice(&self, n: Notice, message: &str) {
+        self.host.emit("notice", json!({ "kind": n.kind(), "message": message }));
+    }
+
+    /// A dictation failed: say why in the overlay, with the error cue, set the Error status, and
+    /// go back to Ready after a few seconds.
+    fn fail(self: &Shared, message: String) {
+        self.cue("error");
+        self.notice(Notice::Error, &message);
+        self.set_status(Status::Error, Some(message));
+        self.recover_soon();
+    }
+
+    /// Runs `f`; a panic in it becomes an Error with a plain message instead of a dictation
+    /// stuck at "Writing…". `key`: the panic came from key handling, so a half-started
+    /// recording is dropped too. (The thread that types never touches the recording slot: a
+    /// new dictation may own it by then.)
+    fn survive(self: &Shared, key: bool, f: impl FnOnce()) {
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).is_ok() {
+            return;
+        }
+        log::error!("a panic ended a dictation ({})", if key { "key handling" } else { "writing" });
+        self.typing.store(false, Ordering::Relaxed);
+        if key {
+            self.machine.lock().reset();
+            self.recording.lock().take();
+            self.pieces.lock().take();
+            self.target.lock().take();
+        }
+        self.fail(crash_message(&self.host.product_name()));
+    }
+
     pub fn set_status(&self, s: Status, detail: Option<String>) {
         let (s, detail) = {
             let mut cur = self.status.lock();
             let next = if s == Status::Ready && !self.listener_ok.load(Ordering::Relaxed) {
-                (Status::Error, Some(key_access_message(&self.host.product_name())))
+                (Status::Error, Some(self.key_message()))
             } else {
                 (s, detail)
             };
@@ -383,13 +622,24 @@ impl Core {
         }
         let host = self.host.clone();
         let idc = id.to_string();
-        let result = models::download(id, &|downloaded, total, stage| {
-            host.emit(
-                "model-progress",
-                json!({ "id": idc, "downloaded": downloaded, "total": total, "stage": stage }),
-            );
-        });
+        let cancelled = || self.cancelled_downloads.lock().iter().any(|x| x == id);
+        let result = models::download(
+            id,
+            &|downloaded, total, stage| {
+                host.emit(
+                    "model-progress",
+                    json!({ "id": idc, "downloaded": downloaded, "total": total, "stage": stage }),
+                );
+            },
+            &cancelled,
+        );
+        let was_cancelled = cancelled();
         self.downloading.lock().retain(|x| x != id);
+        self.cancelled_downloads.lock().retain(|x| x != id);
+        if was_cancelled {
+            self.host.emit("model-progress", json!({ "id": id, "downloaded": 0, "total": 0, "stage": CANCELLED }));
+            anyhow::bail!(CANCELLED);
+        }
         if let Err(e) = &result {
             self.host.emit("model-progress", json!({ "id": id, "downloaded": 0, "total": 0, "stage": "error", "message": e.to_string() }));
             return result;
@@ -400,6 +650,19 @@ impl Core {
             self.load_model();
         }
         Ok(())
+    }
+
+    /// Stop a download in progress; it ends with `CANCELLED` and leaves nothing behind. False
+    /// when that model isn't downloading.
+    pub fn cancel_download(&self, id: &str) -> bool {
+        if !self.downloading.lock().iter().any(|x| x == id) {
+            return false;
+        }
+        let mut c = self.cancelled_downloads.lock();
+        if !c.iter().any(|x| x == id) {
+            c.push(id.to_string());
+        }
+        true
     }
 
     /// Load this model. With `auto` false the user chose it, and from then on nothing but the
@@ -751,8 +1014,13 @@ impl Core {
 
     // ------------------------------------------------------------ keys
 
-    /// Every key event from the global listener lands here.
+    /// Every key event from the global listener lands here. A panic in it ends the dictation with
+    /// an error instead of taking the listener down.
     pub fn on_key(self: &Shared, ev: &handy_keys::KeyEvent) {
+        self.survive(true, || self.handle_key(ev));
+    }
+
+    fn handle_key(self: &Shared, ev: &handy_keys::KeyEvent) {
         if !self.is_enabled() {
             // Paused: the hotkey does nothing, but picking a new one still works while a listener runs.
             self.capture_key(ev);
@@ -760,27 +1028,19 @@ impl Core {
         }
         if self.typing.load(Ordering::Relaxed) {
             // Silas's own text arrives as key events too, so only keys it never sends
-            // (deleting, moving the cursor) mean the user edited mid-typing.
-            use handy_keys::Key::*;
-            if ev.is_key_down
-                && matches!(
-                    ev.key,
-                    Some(
-                        Delete
-                            | ForwardDelete
-                            | LeftArrow
-                            | RightArrow
-                            | UpArrow
-                            | DownArrow
-                            | Escape
-                            | Home
-                            | End
-                            | PageUp
-                            | PageDown
-                    )
-                )
-            {
-                self.typed_over.store(true, Ordering::Relaxed);
+            // (Escape, deleting, moving the cursor) mean the user did something mid-typing.
+            match key_while_typing(ev) {
+                WhileTyping::Stop => {
+                    self.stop_typing.store(true, Ordering::Relaxed);
+                    self.typed_over.store(true, Ordering::Relaxed);
+                }
+                WhileTyping::Edit => self.typed_over.store(true, Ordering::Relaxed),
+                WhileTyping::Other => {
+                    // The dictation key itself: say why nothing starts.
+                    if self.machine.lock().is_trigger_press(ev) {
+                        self.refuse(Notice::Busy, "Still typing your last dictation. Press Escape to stop it.");
+                    }
+                }
             }
             return;
         }
@@ -798,14 +1058,15 @@ impl Core {
         self.act(out);
     }
 
-    /// A pending "pick the hotkey" request takes this key event. True when it did.
+    /// A pending "pick the hotkey" request takes this key event. True when it did. Escape
+    /// cancels it; a key that types text is refused with a message.
     fn capture_key(&self, ev: &handy_keys::KeyEvent) -> bool {
         // Take the sender in its own statement: an `if let` would keep the lock held.
         let capture = self.capture.lock().take();
         if let Some(tx) = capture {
-            match crate::keys::describe(ev) {
-                Some(name) => {
-                    let _ = tx.send(name);
+            match crate::keys::pick(ev) {
+                Some(picked) => {
+                    let _ = tx.send(picked.into_result());
                 }
                 None => {
                     // Put it back only if no newer capture has started meanwhile.
@@ -820,10 +1081,16 @@ impl Core {
         false
     }
 
+    /// End a hotkey pick the user gave up on (the Cancel button).
+    pub fn cancel_capture(&self) -> bool {
+        let capture = self.capture.lock().take();
+        capture.is_some_and(|tx| tx.send(Err(CANCELLED.to_string())).is_ok())
+    }
+
     pub fn act(self: &Shared, out: Out) {
         match out {
             Out::Start => self.start_recording(),
-            Out::Finish => self.finish_recording(),
+            Out::Finish => self.finish_recording(Ending::Key),
             Out::Cancel => self.cancel_recording(),
             Out::Nothing => {}
         }
@@ -832,6 +1099,11 @@ impl Core {
     fn feed_watch(self: &Shared, ev: &handy_keys::KeyEvent, now: Instant) {
         let mut guard = self.watch.lock();
         let Some(w) = guard.as_mut() else { return };
+        // A password field has the keyboard: nothing typed there is ever learned from.
+        if crate::focus::secure_input() {
+            *guard = None;
+            return;
+        }
         let focus = w.focus;
         if let Watch::Done(edit) = w.on_event(ev, now) {
             *guard = None;
@@ -855,8 +1127,8 @@ impl Core {
     /// somewhere else after a click we can't see.
     fn finish_watch(self: &Shared, focus: Option<u64>, edit: Option<(String, String)>) {
         let Some((typed, fixed)) = edit else { return };
-        if focus.is_some() && crate::focus::focused() != focus {
-            log::info!("focus moved during the edit; not learning from it");
+        if !may_learn(focus, crate::focus::focused(), crate::focus::secure_input()) {
+            log::info!("focus moved during the edit, or a password field has it; not learning from it");
             return;
         }
         self.learn_from_edit(&typed, &fixed, false, None);
@@ -865,6 +1137,7 @@ impl Core {
     // ------------------------------------------------------------ dictation
 
     fn start_recording(self: &Shared) {
+        let pressed = Instant::now();
         // A new dictation ends any edit we were following.
         let watching = self.watch.lock().take();
         if let Some(w) = watching {
@@ -872,13 +1145,11 @@ impl Core {
                 self.finish_watch(w.focus, edit);
             }
         }
-        match self.status().0 {
-            Status::Ready => {}
-            // Errors clear on their own after a few seconds; a retry right away shouldn't
-            // be ignored while a model is loaded and the key listener works.
-            Status::Error
-                if self.active_model().is_some() && self.listener_ok.load(Ordering::Relaxed) =>
-            {
+        let (status, detail) = self.status();
+        let loaded = self.active_model().is_some();
+        match press(status, detail.as_deref(), loaded, self.listener_ok.load(Ordering::Relaxed)) {
+            Press::Start => {}
+            Press::StartFromError => {
                 // Claim the error from its recovery timer; if the timer got there first it is
                 // resetting the key machine right now, so let this press go.
                 let g = self.recover_gen.load(Ordering::Relaxed);
@@ -891,29 +1162,35 @@ impl Core {
                     return;
                 }
             }
-            Status::NeedsModel => {
+            Press::ShowMain => {
                 self.machine.lock().reset();
                 self.host.show_main();
                 return;
             }
-            _ => {
+            Press::Refuse(n, message) => {
                 self.machine.lock().reset();
+                self.refuse(n, &message);
                 return;
             }
+        }
+        let p = self.host.product_name();
+        // macOS hides every key from other apps while a password field has the keyboard, and
+        // anything typed would land in the password: never start then.
+        if crate::focus::secure_input() {
+            self.machine.lock().reset();
+            self.fail(secure_start_message(&p));
+            return;
         }
         // The hotkey never shows the system mic prompt; only onboarding's Allow asks.
         if !crate::permissions::mic_ready_for_recording() {
             self.machine.lock().reset();
-            self.set_status(
-                Status::Error,
-                Some(format!(
-                    "Microphone: not allowed yet. Open {} and click Allow for the microphone.",
-                    self.host.product_name()
-                )),
-            );
-            self.recover_soon();
+            let grant = crate::permissions::check().microphone;
+            self.fail(mic_message(&p, self.host.permission_place().as_deref(), grant));
             return;
         }
+        // The overlay comes up now, before the microphone is open (that can take a moment with
+        // a Bluetooth headset); its dot fills in when the first sound arrives.
+        self.set_status(Status::Recording, None);
         // Note where the keyboard is now, at key-down, without making the mic wait for it.
         let capture = std::thread::spawn(crate::focus::Target::capture);
         let device = self.settings.lock().microphone.clone();
@@ -933,10 +1210,9 @@ impl Core {
                         None => anyhow::bail!("No model is loaded"),
                     }
                 }));
-                *self.recording.lock() = Some((r, Instant::now()));
+                *self.recording.lock() = Some(Live { rec: r, started: Instant::now(), pressed });
                 let gen = self.recording_gen.fetch_add(1, Ordering::Relaxed) + 1;
                 self.cue("start");
-                self.set_status(Status::Recording, None);
                 // Hands-free mode left on by mistake would grow without end; stop at 5 minutes.
                 let me = self.clone();
                 std::thread::spawn(move || {
@@ -945,15 +1221,33 @@ impl Core {
                         && me.recording.lock().is_some()
                     {
                         me.machine.lock().reset();
-                        me.finish_recording();
+                        me.finish_recording(Ending::Limit);
                     }
                 });
             }
             Err(e) => {
+                let _ = capture.join();
                 self.machine.lock().reset();
-                self.set_status(Status::Error, Some(format!("Microphone: {e}")));
-                self.recover_soon();
+                self.fail(format!("Microphone: {e}"));
             }
+        }
+    }
+
+    /// A press that starts nothing: the error cue and a line saying why. At most one a second,
+    /// so a held key's repeats don't chime on.
+    fn refuse(self: &Shared, n: Notice, message: &str) {
+        let due = {
+            let mut last = self.last_busy.lock();
+            let now = Instant::now();
+            let due = busy_cue_due(*last, now);
+            if due {
+                *last = Some(now);
+            }
+            due
+        };
+        if due {
+            self.cue("error");
+            self.notice(n, message);
         }
     }
 
@@ -962,15 +1256,15 @@ impl Core {
         let recording = self.recording.lock().take();
         self.target.lock().take();
         self.pieces.lock().take();
-        if let Some((r, _)) = recording {
-            drop(r);
+        if let Some(live) = recording {
+            drop(live);
             self.set_status(Status::Ready, None);
         }
     }
 
-    fn finish_recording(self: &Shared) {
+    fn finish_recording(self: &Shared, ending: Ending) {
         let recording = self.recording.lock().take();
-        let Some((rec, started)) = recording else {
+        let Some(live) = recording else {
             return;
         };
         self.cue("stop");
@@ -979,154 +1273,186 @@ impl Core {
         let pieces = self.pieces.lock().take();
         let me = self.clone();
         std::thread::spawn(move || {
-            let released = Instant::now();
-            // Before anything that can wait: what's said after the key comes up isn't dictation.
-            let mut rec = rec;
-            rec.stop();
-            let secs = rec.seconds();
-            if secs < 0.35 {
-                drop((pieces, rec));
-                me.set_status(Status::Ready, None);
+            let guard = me.clone();
+            guard.survive(false, move || me.write(live, ending, target, pieces));
+        });
+    }
+
+    /// Transcribes, types and keeps a finished recording. Runs on its own thread.
+    fn write(
+        self: &Shared,
+        live: Live,
+        ending: Ending,
+        target: Option<crate::focus::Target>,
+        pieces: Option<crate::pieces::Pieces>,
+    ) {
+        let me = self;
+        let Live { rec, started, pressed } = live;
+        let released = Instant::now();
+        // A short tail first, so the last word isn't cut off; after that, what's said isn't
+        // dictation.
+        let tail = tail_for(ending);
+        std::thread::sleep(tail);
+        let mut rec = rec;
+        rec.stop();
+        // How long the microphone took to give its first sound after the key went down: words
+        // said in that gap are lost.
+        let mic_gap_ms = rec.first_sample().map(|t| t.saturating_duration_since(pressed).as_millis() as u64);
+        if let Some(ms) = mic_gap_ms {
+            log::info!("key down to first sample: {ms} ms");
+        }
+        let secs = rec.seconds();
+        if secs - tail.as_secs_f32() < 0.35 {
+            drop((pieces, rec));
+            me.set_status(Status::Ready, None);
+            return;
+        }
+        me.set_status(Status::Transcribing, None);
+        let done = pieces.map(|p| p.finish()).unwrap_or_default();
+        let rest = rec.finish_from(done.raw_samples);
+        let language = me.settings.lock().language.clone();
+        // After a piece, what's left can be nothing but the end of a pause.
+        let rest = if !done.text.is_empty() && crate::pieces::is_silence(&rest) {
+            Ok(String::new())
+        } else {
+            let mut engine = me.engine.lock();
+            match engine.as_mut() {
+                Some((_, e)) => e.transcribe(&rest, &language),
+                None => Err(anyhow::anyhow!("No model is loaded")),
+            }
+        };
+        let raw = match rest {
+            Ok(t) => {
+                let mut all = done.text;
+                crate::pieces::join(&mut all, &t);
+                all
+            }
+            // What was already transcribed is still worth typing.
+            Err(e) if !done.text.is_empty() => {
+                log::warn!("transcribing the end of a dictation failed: {e}");
+                done.text
+            }
+            Err(e) => {
+                me.fail(format!("Transcription failed: {e}"));
                 return;
             }
-            me.set_status(Status::Transcribing, None);
-            let done = pieces.map(|p| p.finish()).unwrap_or_default();
-            let rest = rec.finish_from(done.raw_samples);
-            let language = me.settings.lock().language.clone();
-            // After a piece, what's left can be nothing but the end of a pause.
-            let rest = if !done.text.is_empty() && crate::pieces::is_silence(&rest) {
-                Ok(String::new())
-            } else {
-                let mut engine = me.engine.lock();
-                match engine.as_mut() {
-                    Some((_, e)) => e.transcribe(&rest, &language),
-                    None => Err(anyhow::anyhow!("No model is loaded")),
-                }
-            };
-            let raw = match rest {
-                Ok(t) => {
-                    let mut all = done.text;
-                    crate::pieces::join(&mut all, &t);
-                    all
-                }
-                // What was already transcribed is still worth typing.
-                Err(e) if !done.text.is_empty() => {
-                    log::warn!("transcribing the end of a dictation failed: {e}");
-                    done.text
-                }
-                Err(e) => {
-                    me.set_status(Status::Error, Some(format!("Transcription failed: {e}")));
-                    me.recover_soon();
-                    return;
-                }
-            };
-            let s = me.settings.lock().clone();
-            let mut text = me.dict.lock().apply(&raw, s.remove_fillers);
-            if text.trim().is_empty() {
-                me.set_status(Status::Ready, None);
+        };
+        let s = me.settings.lock().clone();
+        let mut text = me.dict.lock().apply(&raw, s.remove_fillers);
+        if text.trim().is_empty() {
+            me.set_status(Status::Ready, None);
+            return;
+        }
+        if s.trailing_space && !text.ends_with(char::is_whitespace) {
+            text.push(' ');
+        }
+        use crate::focus::Restore;
+        let restored = target.as_ref().map_or(Restore::Elsewhere, |t| t.restore());
+        let latency = released.elapsed().as_millis() as u64;
+        let p = me.host.product_name();
+        // Typing into the window that stole focus is the bug; keep the text in History. A
+        // password field gets nothing, and the text isn't kept anywhere.
+        let mut lost_focus = match delivery(crate::focus::secure_input(), restored) {
+            Delivery::Drop => {
+                me.fail(secure_finish_message(&p));
                 return;
             }
-            if s.trailing_space && !text.ends_with(char::is_whitespace) {
-                text.push(' ');
-            }
-            use crate::focus::Restore;
-            let restored = target.as_ref().map_or(Restore::Elsewhere, |t| t.restore());
-            let latency = released.elapsed().as_millis() as u64;
-            // Typing into the window that stole focus is the bug; keep the text in History.
-            let mut lost_focus = restored == Restore::Failed;
-            let mut typing_error: Option<String> = None;
-            // Guard the typing only when Silas knows where the text belongs.
-            let guarded = matches!(
-                restored,
-                Restore::InPlace | Restore::Restored | Restore::Elsewhere
-            );
-            let still_here = |after_focus_key: bool| {
-                !guarded
+            Delivery::HistoryOnly => true,
+            Delivery::Type => false,
+        };
+        let mut typing_error: Option<String> = None;
+        let mut stopped = false;
+        // Guard the typing only when Silas knows where the text belongs.
+        let guarded = matches!(
+            restored,
+            Restore::InPlace | Restore::Restored | Restore::Elsewhere
+        );
+        let still_here = |after_focus_key: bool| {
+            !me.stop_typing.load(Ordering::Relaxed)
+                && (!guarded
                     || target
                         .as_ref()
-                        .is_none_or(|t| t.still_here(after_focus_key))
-            };
-            if !lost_focus {
-                me.set_status(Status::Typing, None);
-                me.typed_over.store(false, Ordering::Relaxed);
-                me.typing.store(true, Ordering::Relaxed);
-                let typed = typer::type_text(
-                    &text,
-                    typer::Pace::from_setting(&s.typing_speed),
-                    s.newline_as_shift_enter,
-                    &still_here,
-                );
-                // Let the last synthetic events drain before reading the keyboard again.
-                std::thread::sleep(Duration::from_millis(60));
-                me.typing.store(false, Ordering::Relaxed);
-                match typed {
-                    Ok(finished) => lost_focus = !finished,
-                    Err(e) => typing_error = Some(e.to_string()),
-                }
+                        .is_none_or(|t| t.still_here(after_focus_key)))
+        };
+        if !lost_focus {
+            me.set_status(Status::Typing, None);
+            me.typed_over.store(false, Ordering::Relaxed);
+            me.stop_typing.store(false, Ordering::Relaxed);
+            me.typing.store(true, Ordering::Relaxed);
+            let typed = typer::type_text(
+                &text,
+                typer::Pace::from_setting(&s.typing_speed),
+                s.newline_as_shift_enter,
+                &still_here,
+            );
+            // Let the last synthetic events drain before reading the keyboard again.
+            std::thread::sleep(Duration::from_millis(60));
+            me.typing.store(false, Ordering::Relaxed);
+            stopped = me.stop_typing.swap(false, Ordering::Relaxed);
+            match typed {
+                Ok(finished) => lost_focus = !finished && !stopped,
+                Err(e) => typing_error = Some(e.to_string()),
             }
-            let typed_over = me.typed_over.load(Ordering::Relaxed);
-            if !lost_focus
-                && typing_error.is_none()
-                && s.learn_from_edits
-                && !typed_over
-                && crate::focus::us_layout()
-            {
-                *me.watch.lock() = Some(EditWatch::new(
-                    &text,
-                    Instant::now(),
-                    crate::focus::focused(),
-                ));
-            }
-            let item = HistoryItem {
-                id: Utc::now().timestamp_millis().to_string(),
-                ts: Utc::now().to_rfc3339(),
-                words: text.split_whitespace().count(),
-                text: text.trim_end().to_string(),
-                raw,
-                duration_s: started
-                    .elapsed()
-                    .as_secs_f32()
-                    .min(secs.max(0.0) + 1.0)
-                    .max(secs),
-                latency_ms: latency,
-                corrected: None,
-            };
-            {
-                let mut h = me.history.lock();
-                h.insert(0, item.clone());
-                h.truncate(store::HISTORY_KEEP);
-                store::save("history.json", &*h);
-            }
-            store::save("dictionary.json", &*me.dict.lock());
-            *me.last_activity.lock() = Instant::now();
-            // `typed` is true only when the text really went out as keystrokes: the app moves Silas to the Trash
-            // after the first one, never after a dictation that only reached History.
-            let mut payload = json!(&item);
-            payload["typed"] = json!(!lost_focus && typing_error.is_none());
-            me.host.emit("transcript", payload);
-            if let Some(e) = typing_error {
-                me.set_status(
-                    Status::Error,
-                    Some(format!("{e}. Your full text is in History.")),
-                );
-                me.recover_soon();
-            } else if lost_focus {
-                me.set_status(
-                    Status::Error,
-                    Some(format!("Another window took the keyboard, so {} stopped typing. Your full text is in History.", me.host.product_name())),
-                );
-                me.recover_soon();
-            } else {
-                me.set_status(Status::Ready, None);
-            }
-        });
+        }
+        let typed_over = me.typed_over.load(Ordering::Relaxed);
+        if !lost_focus
+            && !stopped
+            && typing_error.is_none()
+            && s.learn_from_edits
+            && !typed_over
+            && crate::focus::us_layout()
+        {
+            *me.watch.lock() = Some(EditWatch::new(
+                &text,
+                Instant::now(),
+                crate::focus::focused(),
+            ));
+        }
+        let item = HistoryItem {
+            id: Utc::now().timestamp_millis().to_string(),
+            ts: Utc::now().to_rfc3339(),
+            words: text.split_whitespace().count(),
+            text: text.trim_end().to_string(),
+            raw,
+            duration_s: started
+                .elapsed()
+                .as_secs_f32()
+                .min(secs.max(0.0) + 1.0)
+                .max(secs),
+            latency_ms: latency,
+            corrected: None,
+        };
+        {
+            let mut h = me.history.lock();
+            h.insert(0, item.clone());
+            h.truncate(store::HISTORY_KEEP);
+            store::save("history.json", &*h);
+        }
+        store::save("dictionary.json", &*me.dict.lock());
+        *me.last_activity.lock() = Instant::now();
+        // `typed` is true only when the text really went out as keystrokes: the app moves Silas to the Trash
+        // after the first one, never after a dictation that only reached History.
+        let mut payload = json!(&item);
+        payload["typed"] = json!(!lost_focus && !stopped && typing_error.is_none());
+        payload["micGapMs"] = json!(mic_gap_ms);
+        me.host.emit("transcript", payload);
+        if let Some(e) = typing_error {
+            me.fail(format!("{e}. Your full text is in History."));
+        } else if lost_focus {
+            me.fail(format!("Another window took the keyboard, so {p} stopped typing. Your full text is in History."));
+        } else if stopped {
+            me.notice(Notice::Stopped, "Stopped typing. Your full text is in History.");
+            me.set_status(Status::Ready, None);
+        } else {
+            me.set_status(Status::Ready, None);
+        }
     }
 
     fn recover_soon(self: &Shared) {
         let me = self.clone();
         let gen = self.recover_gen.load(Ordering::Relaxed);
         std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_secs(4));
+            std::thread::sleep(RECOVER_AFTER);
             if me.status().0 == Status::Error
                 && me
                     .recover_gen
@@ -1144,12 +1470,17 @@ impl Core {
     }
 
     fn cue(&self, which: &str) {
-        if !self.settings.lock().sounds {
+        // Tests never make a sound.
+        if cfg!(test) || !self.settings.lock().sounds {
             return;
         }
         #[cfg(target_os = "macos")]
         {
-            let sound = if which == "start" { "Tink" } else { "Pop" };
+            let sound = match which {
+                "start" => "Tink",
+                "error" => "Basso",
+                _ => "Pop",
+            };
             let _ = std::process::Command::new("afplay")
                 .args([
                     "-v",
@@ -1232,7 +1563,7 @@ mod tests {
 
     #[test]
     fn the_mac_key_message_explains_a_stale_grant() {
-        let m = key_access_message_for("macos", "Silas");
+        let m = key_access_message_for("macos", "Silas", None);
         // home.ts finds the banner by this phrase.
         assert!(m.contains("can't hear your key"));
         assert!(m.contains("Privacy & Security, Accessibility"));
@@ -1246,9 +1577,7 @@ mod tests {
         assert!(!m.contains(['\u{2014}', '\u{2013}', '\u{203a}']), "{m}");
     }
 
-    /// The store's folder is one global, so tests that set it take turns. Otherwise one test clearing it could send
-    /// another's writes into the real settings folder.
-    static STORE_LOCK: Mutex<()> = Mutex::new(());
+    use crate::store::TEST_DIR as STORE_LOCK;
 
     #[test]
     fn the_microphone_key_is_swallowed_only_while_it_is_ours() {
@@ -1317,9 +1646,240 @@ mod tests {
             is_key_down: true,
             changed_modifier: None,
         });
-        assert_eq!(rx.try_recv().as_deref(), Ok("F13"));
+        assert_eq!(rx.try_recv(), Ok(Ok("F13".to_string())));
         store::set_data_dir(None);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Records what the engine tells the interface.
+    #[derive(Default)]
+    struct Seen(Mutex<Vec<(String, serde_json::Value)>>);
+
+    impl Host for Seen {
+        fn emit(&self, e: &str, p: serde_json::Value) {
+            self.0.lock().push((e.to_string(), p));
+        }
+        fn level(&self, _: f32) {}
+        fn status_changed(&self, _: Status, _: bool) {}
+        fn show_main(&self) {}
+        fn listener_returned(&self) {}
+        fn product_name(&self) -> String {
+            "Polycarp".into()
+        }
+        fn permission_place(&self) -> Option<String> {
+            Some("Settings > Silas".into())
+        }
+    }
+
+    impl Seen {
+        fn notices(&self) -> Vec<(String, String)> {
+            self.0
+                .lock()
+                .iter()
+                .filter(|(e, _)| e == "notice")
+                .map(|(_, p)| (p["kind"].as_str().unwrap().to_string(), p["message"].as_str().unwrap().to_string()))
+                .collect()
+        }
+    }
+
+    /// A core over a temporary data folder, with `Seen` as its host. Nothing here opens the
+    /// microphone: every dictation below starts from a state that refuses before it.
+    fn seen_core(name: &str) -> (Shared, Arc<Seen>, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("pc-{name}-{}", std::process::id()));
+        store::set_data_dir(Some(dir.clone()));
+        let seen = Arc::new(Seen::default());
+        let core = Core::new(seen.clone());
+        (core, seen, dir)
+    }
+
+    fn done(dir: std::path::PathBuf) {
+        // Let a recovery timer (`RECOVER_AFTER`, short in tests) finish inside this folder.
+        std::thread::sleep(Duration::from_millis(250));
+        store::set_data_dir(None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn key_down(k: handy_keys::Key) -> handy_keys::KeyEvent {
+        handy_keys::KeyEvent { modifiers: handy_keys::Modifiers::empty(), key: Some(k), is_key_down: true, changed_modifier: None }
+    }
+
+    #[test]
+    fn polycarps_messages_send_you_to_its_settings_not_a_home_screen() {
+        let k = key_access_message_for("macos", "Polycarp", Some("Settings > Silas"));
+        assert!(k.contains("can't hear your key"), "home.ts and set_listener find it by this: {k}");
+        assert!(k.contains("Settings > Silas") && k.contains("Open Accessibility Settings"), "{k}");
+        assert!(!k.contains("home screen") && !k.contains("Fix Permission"), "Polycarp has neither: {k}");
+        use crate::permissions::Grant;
+        let unasked = mic_message("Polycarp", Some("Settings > Silas"), Grant::Unknown);
+        assert!(unasked.contains("Settings > Silas") && unasked.contains("Allow"), "{unasked}");
+        let denied = mic_message("Polycarp", Some("Settings > Silas"), Grant::Denied);
+        assert!(denied.contains("Open Microphone Settings"), "macOS asks only once: {denied}");
+        // The Silas app keeps its own words.
+        assert!(mic_message("Silas", None, Grant::Denied).contains("Open Silas and click Allow"));
+        for m in [k, unasked, denied, secure_start_message("Polycarp"), secure_finish_message("Polycarp"), crash_message("Polycarp")] {
+            assert!(!m.contains(['\u{2014}', '\u{2013}']), "{m}");
+        }
+    }
+
+    #[test]
+    fn a_press_while_busy_says_why_instead_of_doing_nothing() {
+        for (st, says) in [
+            (Status::Loading, "still loading"),
+            (Status::Recording, "finishing"),
+            (Status::Transcribing, "writing"),
+            (Status::Typing, "Escape"),
+        ] {
+            match press(st, None, true, true) {
+                Press::Refuse(Notice::Busy, m) => assert!(m.contains(says), "{st:?}: {m}"),
+                other => panic!("{st:?}: {other:?}"),
+            }
+        }
+        assert_eq!(press(Status::Ready, None, true, true), Press::Start);
+        assert_eq!(press(Status::Error, Some("x"), true, true), Press::StartFromError);
+        assert_eq!(press(Status::NeedsModel, None, false, true), Press::ShowMain);
+        // An error that can't be retried yet says what it is again.
+        assert_eq!(press(Status::Error, Some("No model"), false, true), Press::Refuse(Notice::Error, "No model".into()));
+
+        // Through the engine: a busy press leaves one line for the overlay and changes nothing.
+        let _store = STORE_LOCK.lock();
+        let (core, seen, dir) = seen_core("busy");
+        core.set_status(Status::Transcribing, None);
+        core.start_recording();
+        assert_eq!(seen.notices(), vec![("busy".to_string(), "Still writing your last dictation.".to_string())]);
+        assert_eq!(core.status().0, Status::Transcribing);
+        assert!(!core.machine.lock().is_active(), "the key machine starts over");
+        // A held key's repeats don't chime again within the second.
+        core.start_recording();
+        assert_eq!(seen.notices().len(), 1);
+        done(dir);
+    }
+
+    #[test]
+    fn busy_cues_come_at_most_once_a_second() {
+        let t = Instant::now();
+        assert!(busy_cue_due(None, t));
+        assert!(!busy_cue_due(Some(t), t + Duration::from_millis(400)));
+        assert!(busy_cue_due(Some(t), t + BUSY_EVERY));
+    }
+
+    #[test]
+    fn a_failed_dictation_shows_why_then_clears() {
+        let _store = STORE_LOCK.lock();
+        let (core, seen, dir) = seen_core("fail");
+        core.fail("Microphone: unplugged".into());
+        let events: Vec<String> = seen.0.lock().iter().map(|(e, _)| e.clone()).collect();
+        // The line first, so the overlay shows it instead of hiding for the Error status.
+        assert_eq!(events, vec!["notice", "status"]);
+        assert_eq!(seen.notices(), vec![("error".to_string(), "Microphone: unplugged".to_string())]);
+        assert_eq!(core.status(), (Status::Error, Some("Microphone: unplugged".into())));
+        std::thread::sleep(RECOVER_AFTER * 4);
+        assert_ne!(core.status().0, Status::Error, "the error clears on its own");
+        done(dir);
+    }
+
+    #[test]
+    fn escape_while_typing_stops_the_typing() {
+        use handy_keys::Key;
+        assert_eq!(key_while_typing(&key_down(Key::Escape)), WhileTyping::Stop);
+        assert_eq!(key_while_typing(&key_down(Key::Delete)), WhileTyping::Edit);
+        assert_eq!(key_while_typing(&key_down(Key::LeftArrow)), WhileTyping::Edit);
+        assert_eq!(key_while_typing(&key_down(Key::A)), WhileTyping::Other, "Polycarp's own text");
+        let mut up = key_down(Key::Escape);
+        up.is_key_down = false;
+        assert_eq!(key_while_typing(&up), WhileTyping::Other);
+
+        let _store = STORE_LOCK.lock();
+        let (core, seen, dir) = seen_core("escape");
+        let mut s = core.settings.lock().clone();
+        s.hotkey = "F13".into();
+        core.apply_settings(s).unwrap();
+        core.typing.store(true, Ordering::Relaxed);
+        core.on_key(&key_down(Key::A));
+        assert!(!core.stop_typing.load(Ordering::Relaxed), "typing goes on");
+        core.on_key(&key_down(Key::Escape));
+        assert!(core.stop_typing.load(Ordering::Relaxed), "type_text's still_here reads this and stops");
+        assert!(core.typed_over.load(Ordering::Relaxed), "and nothing is learned from that text");
+        // The dictation key while typing says why it does nothing.
+        core.on_key(&key_down(Key::F13));
+        assert_eq!(seen.notices().len(), 1);
+        assert!(seen.notices()[0].1.contains("Escape"));
+        done(dir);
+    }
+
+    #[test]
+    fn a_panic_mid_dictation_ends_in_an_error_not_at_writing() {
+        let _store = STORE_LOCK.lock();
+        let (core, seen, dir) = seen_core("panic");
+        core.set_status(Status::Typing, None);
+        core.typing.store(true, Ordering::Relaxed);
+        core.survive(false, || panic!("the speech runtime crashed"));
+        assert_eq!(core.status(), (Status::Error, Some(crash_message("Polycarp"))));
+        assert!(!core.typing.load(Ordering::Relaxed), "the next keys are the user's again");
+        assert_eq!(seen.notices()[0].0, "error");
+        std::thread::sleep(RECOVER_AFTER * 4);
+        assert_ne!(core.status().0, Status::Error, "and it recovers");
+        // From the key handler too: the key machine starts over.
+        core.machine.lock().toggle_from_ui();
+        core.survive(true, || panic!("in on_key"));
+        assert!(!core.machine.lock().is_active());
+        assert_eq!(core.status().0, Status::Error);
+        done(dir);
+    }
+
+    #[test]
+    fn escape_cancels_a_hotkey_pick_and_typing_keys_are_refused() {
+        let _store = STORE_LOCK.lock();
+        let (core, _seen, dir) = seen_core("pick");
+        let pick = |k: handy_keys::Key| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            *core.capture.lock() = Some(tx);
+            core.on_key(&key_down(k));
+            rx.try_recv().unwrap()
+        };
+        assert_eq!(pick(handy_keys::Key::Escape), Err(CANCELLED.to_string()));
+        assert!(pick(handy_keys::Key::A).unwrap_err().contains("The A key types text"));
+        assert_eq!(pick(handy_keys::Key::F13), Ok("F13".to_string()));
+        // The Cancel button.
+        let (tx, rx) = std::sync::mpsc::channel();
+        *core.capture.lock() = Some(tx);
+        assert!(core.cancel_capture());
+        assert_eq!(rx.try_recv().unwrap(), Err(CANCELLED.to_string()));
+        assert!(!core.cancel_capture(), "nothing left to cancel");
+        done(dir);
+    }
+
+    #[test]
+    fn a_password_field_gets_nothing_and_nothing_is_kept_or_learned() {
+        use crate::focus::Restore;
+        for r in [Restore::InPlace, Restore::Restored, Restore::Elsewhere, Restore::Failed] {
+            assert_eq!(delivery(true, r), Delivery::Drop, "{r:?}");
+        }
+        assert_eq!(delivery(false, Restore::Failed), Delivery::HistoryOnly);
+        assert_eq!(delivery(false, Restore::InPlace), Delivery::Type);
+        assert!(secure_start_message("Polycarp").starts_with("A password field has the keyboard"));
+        assert!(!may_learn(Some(1), Some(1), true));
+        assert!(may_learn(Some(1), Some(1), false));
+        assert!(!may_learn(Some(1), Some(2), false), "focus moved");
+        assert!(may_learn(None, None, false), "where the system can't tell, as before");
+    }
+
+    #[test]
+    fn the_last_word_gets_a_tail_and_the_time_limit_does_not() {
+        assert_eq!(tail_for(Ending::Key), TAIL);
+        assert!(TAIL >= Duration::from_millis(150) && TAIL <= Duration::from_millis(300), "{TAIL:?}");
+        assert_eq!(tail_for(Ending::Limit), Duration::ZERO);
+    }
+
+    #[test]
+    fn only_a_running_download_can_be_cancelled() {
+        let _store = STORE_LOCK.lock();
+        let (core, _seen, dir) = seen_core("dlcancel");
+        assert!(!core.cancel_download("parakeet-v3"));
+        core.downloading.lock().push("parakeet-v3".into());
+        assert!(core.cancel_download("parakeet-v3"));
+        assert!(core.cancel_download("parakeet-v3"), "twice is fine");
+        assert_eq!(core.cancelled_downloads.lock().len(), 1);
+        done(dir);
     }
 
     #[test]

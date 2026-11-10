@@ -3,8 +3,9 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
+use std::time::Instant;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use parking_lot::Mutex;
@@ -23,6 +24,8 @@ pub struct Recording {
     samples: Arc<Mutex<Vec<f32>>>,
     rate: u32,
     thread: Option<JoinHandle<()>>,
+    /// When the first sample arrived from the microphone.
+    first: Arc<OnceLock<Instant>>,
 }
 
 impl Recording {
@@ -36,6 +39,8 @@ impl Recording {
         let (tx, rx) = mpsc::channel::<anyhow::Result<u32>>();
         let device = device.map(str::to_string);
         let (stop2, samples2) = (stop.clone(), samples.clone());
+        let first = Arc::new(OnceLock::new());
+        let first2 = first.clone();
 
         // cpal streams are not Send on every platform, so the stream lives on its own thread.
         let thread = std::thread::spawn(move || {
@@ -58,6 +63,7 @@ impl Recording {
                 let mut acc = 0f32;
                 let mut n = 0usize;
                 let mut push = move |mono: &mut dyn Iterator<Item = f32>| {
+                    first2.get_or_init(Instant::now);
                     let mut buf = samples2.lock();
                     for s in mono {
                         buf.push(s);
@@ -132,7 +138,13 @@ impl Recording {
             samples,
             rate,
             thread: Some(thread),
+            first,
         })
+    }
+
+    /// When the microphone delivered its first sample, if it has.
+    pub fn first_sample(&self) -> Option<Instant> {
+        self.first.get().copied()
     }
 
     pub fn seconds(&self) -> f32 {
