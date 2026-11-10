@@ -236,7 +236,8 @@ pub async fn capture_hotkey(core: State<'_, Shared>) -> R<String> {
     tauri::async_runtime::spawn_blocking(move || {
         let got = rx.recv_timeout(Duration::from_secs(10));
         core.capture.lock().take();
-        got.map_err(|_| "No key pressed".to_string())
+        // Escape gives `cancelled`; a key that types text gives a sentence saying why.
+        got.map_err(|_| "No key pressed".to_string())?
     })
     .await
     .map_err(err)?

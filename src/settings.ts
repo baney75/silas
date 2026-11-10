@@ -62,7 +62,8 @@ export function mountSettings(root: HTMLElement): () => void {
             toast(`Hotkey set to ${hotkeyLabel()}`);
           } catch (e) {
             capturing = false;
-            toast(errorText(e), "error");
+            // Escape ends the pick quietly; anything else says why.
+            if (errorText(e) !== "cancelled") toast(errorText(e), "error");
           }
           draw();
         },
