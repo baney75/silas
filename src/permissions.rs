@@ -307,11 +307,18 @@ fn accessibility() -> Grant {
 #[cfg(target_os = "linux")]
 fn accessibility() -> Grant {
     // The hotkey listener reads /dev/input; the udev rule shipped in the packages grants it.
+    // access(2) asks the permission bits and ACLs without opening the device: opening an evdev
+    // node takes 4 to 12 ms, and this runs on the main thread for every `get_state`.
+    use std::os::unix::ffi::OsStrExt;
     let readable = std::fs::read_dir("/dev/input")
         .map(|d| {
             d.filter_map(Result::ok)
-                .filter(|e| e.file_name().to_string_lossy().starts_with("event"))
-                .any(|e| std::fs::File::open(e.path()).is_ok())
+                .filter(|e| e.file_name().as_bytes().starts_with(b"event"))
+                .any(|e| {
+                    std::ffi::CString::new(e.path().as_os_str().as_bytes())
+                        // SAFETY: a NUL-terminated path that lives for the call.
+                        .is_ok_and(|p| unsafe { libc::access(p.as_ptr(), libc::R_OK) } == 0)
+                })
         })
         .unwrap_or(false);
     if readable {
@@ -350,6 +357,24 @@ fn prompt_accessibility() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The check gives the answer an open would, without opening a device (see `accessibility`).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_linux_key_check_matches_an_open_and_opens_nothing() {
+        let opens = std::fs::read_dir("/dev/input")
+            .map(|d| {
+                d.filter_map(Result::ok)
+                    .filter(|e| e.file_name().to_string_lossy().starts_with("event"))
+                    .any(|e| std::fs::File::open(e.path()).is_ok())
+            })
+            .unwrap_or(false);
+        assert_eq!(accessibility() == Grant::Granted, opens);
+        let src = include_str!("permissions.rs");
+        let body = &src[src.find("fn accessibility() -> Grant {\n    // The hotkey listener").unwrap()..];
+        let body = &body[..body.find("\n}\n").unwrap()];
+        assert!(!body.contains("File::open") && !body.contains("OpenOptions"), "the check must not open a device");
+    }
 
     #[derive(Default)]
     struct Fake {
