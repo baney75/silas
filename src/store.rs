@@ -50,6 +50,38 @@ pub fn load<T: DeserializeOwned + Default>(name: &str) -> T {
         .unwrap_or_default()
 }
 
+/// Like `load`, for a struct whose fields each have a default. One field with a bad value (a word
+/// where a switch goes, a `null`) falls back to its default and every other field is kept, so a
+/// hand edit or an older build's file never sends someone back through setup. A copy of the file
+/// as it was is kept beside it, as `load` does.
+pub fn load_fields<T: DeserializeOwned + Serialize + Default>(name: &str) -> T {
+    let path = data_dir().join(name);
+    let Ok(text) = fs::read_to_string(&path) else {
+        return T::default();
+    };
+    let Ok(serde_json::Value::Object(saved)) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return load(name);
+    };
+    let Ok(serde_json::Value::Object(mut kept)) = serde_json::to_value(T::default()) else {
+        return load(name);
+    };
+    let mut dropped = Vec::new();
+    for (key, value) in saved {
+        let mut trial = kept.clone();
+        trial.insert(key.clone(), value);
+        if serde_json::from_value::<T>(serde_json::Value::Object(trial.clone())).is_ok() {
+            kept = trial;
+        } else {
+            dropped.push(key);
+        }
+    }
+    if !dropped.is_empty() {
+        log::warn!("{name}: {} had a bad value; using the default for it and keeping a copy", dropped.join(", "));
+        let _ = fs::copy(&path, path.with_extension("broken.json"));
+    }
+    serde_json::from_value(serde_json::Value::Object(kept)).unwrap_or_default()
+}
+
 /// Write via a temp file and rename, so a crash never leaves half a file.
 pub fn save<T: Serialize>(name: &str, value: &T) {
     let path = data_dir().join(name);
@@ -279,6 +311,28 @@ mod migrate_tests {
         let mut s: Settings = serde_json::from_str(raw).unwrap();
         migrate_hotkey(&mut s, raw);
         assert_eq!(s.hotkey, "CmdRight");
+    }
+
+    #[test]
+    fn one_bad_value_keeps_every_other_setting() {
+        let dir = std::env::temp_dir().join(format!("pc-fields-{}", std::process::id()));
+        let _store = TEST_DIR.lock();
+        set_data_dir(Some(dir.clone()));
+        fs::write(
+            data_dir().join("settings.json"),
+            r#"{"onboarded":true,"hotkey":"F13","sounds":"yes","microphone":7,"language":null,"model":"cohere-int4"}"#,
+        )
+        .unwrap();
+        let s: Settings = load_fields("settings.json");
+        assert!(s.onboarded, "a bad switch must not send anyone back through setup");
+        assert_eq!((s.hotkey.as_str(), s.model.as_str()), ("F13", "cohere-int4"));
+        let d = Settings::default();
+        assert_eq!((s.sounds, &s.microphone, &s.language), (d.sounds, &d.microphone, &d.language));
+        assert!(exists("settings.broken.json"), "the file as it was is kept");
+        fs::write(data_dir().join("settings.json"), "not json").unwrap();
+        assert_eq!(load_fields::<Settings>("settings.json"), d, "a file that isn't JSON starts fresh, as before");
+        set_data_dir(None);
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

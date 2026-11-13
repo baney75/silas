@@ -369,7 +369,7 @@ struct Live {
 
 impl Core {
     pub fn new(host: Arc<dyn Host>) -> Shared {
-        let mut settings: Settings = store::load("settings.json");
+        let mut settings: Settings = store::load_fields("settings.json");
         // Settings from before per-device picks have no modelSource. A model other than the
         // default was chosen by the user then, so no benchmark or registry may move them off it.
         if store::exists("settings.json") {
@@ -390,9 +390,14 @@ impl Core {
         {
             settings.update_channel = "nightly".into();
         }
-        let trigger = Trigger::parse(&settings.hotkey)
-            .or_else(|| Trigger::parse(store::default_hotkey()))
-            .expect("default hotkey parses");
+        // A saved key this build can't use is replaced, not kept: every later settings save sends it
+        // back and would be refused for it.
+        if Trigger::parse(&settings.hotkey).is_none() {
+            log::warn!("settings: {:?} is not a key; using {}", settings.hotkey, store::default_hotkey());
+            settings.hotkey = store::default_hotkey().into();
+            settings.hotkey_fallback = None;
+        }
+        let trigger = Trigger::parse(&settings.hotkey).expect("default hotkey parses");
         let mut machine = Machine::new(trigger, settings.tap_to_toggle);
         machine.fallback = settings.hotkey_fallback.as_deref().and_then(Trigger::parse);
         let mut history: Vec<HistoryItem> = store::load("history.json");
@@ -1628,6 +1633,25 @@ mod tests {
         assert_eq!(saved.hotkey_fallback, None, "it stays gone after a restart");
         store::set_data_dir(None);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A hotkey this build can't parse (a hand edit, a newer build's key) used to stay in the settings: the engine
+    /// fell back to the default, but the interface sends the saved one with every change, so every switch failed
+    /// to save with "Banana is not a key Silas can use".
+    #[test]
+    fn a_saved_key_that_isnt_one_never_blocks_a_settings_change() {
+        let dir = std::env::temp_dir().join(format!("pc-badkey-{}", std::process::id()));
+        let _store = STORE_LOCK.lock();
+        store::set_data_dir(Some(dir.clone()));
+        std::fs::write(store::data_dir().join("settings.json"), r#"{"hotkey":"Banana","onboarded":true,"hotkeyVersion":2}"#).unwrap();
+        let core = Core::new(Arc::new(NullHost));
+        let mut s = core.settings.lock().clone();
+        assert_eq!(s.hotkey, store::default_hotkey());
+        s.sounds = !s.sounds;
+        let saved = core.apply_settings(s.clone());
+        store::set_data_dir(None);
+        let _ = std::fs::remove_dir_all(dir);
+        assert_eq!(saved.map(|(now, _)| now.sounds), Ok(s.sounds));
     }
 
     #[test]
