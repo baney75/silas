@@ -1,5 +1,7 @@
 pub mod commands;
 pub mod host;
+#[cfg(test)]
+mod settings_bench;
 pub mod theme;
 pub mod tray;
 pub mod updates;

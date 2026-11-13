@@ -293,9 +293,13 @@ pub fn fix_accessibility(app: AppHandle) {
     }
 }
 
+/// Async, so it runs off the main thread: on Linux, listing ALSA devices opens each one and the
+/// window would freeze until it finished.
 #[tauri::command]
-pub fn list_microphones() -> Vec<String> {
-    audio::microphones()
+pub async fn list_microphones() -> R<Vec<String>> {
+    tauri::async_runtime::spawn_blocking(audio::microphones)
+        .await
+        .map_err(err)
 }
 
 #[tauri::command]
@@ -370,4 +374,58 @@ pub async fn install_update(app: AppHandle) -> R<()> {
 #[tauri::command]
 pub async fn get_theme() -> Option<crate::theme::Theme> {
     tauri::async_runtime::spawn_blocking(crate::theme::current).await.ok().flatten()
+}
+
+#[cfg(test)]
+mod tests {
+    /// Tauri runs a command that isn't `async` on the main thread, where the window draws and takes
+    /// input, so the window freezes for as long as one takes. These stay there: each reads memory
+    /// or writes one small file, and the settings writes must keep their order. Devices, network,
+    /// processes and big files go in an `async` command. This list only shrinks.
+    const ON_MAIN_THREAD: &[&str] = &[
+        "accept_pending",
+        "add_correction",
+        "add_term",
+        "clear_history",
+        "correct_history",
+        "delete_history",
+        "delete_model",
+        "dismiss_pending",
+        "export_dictionary",
+        "fix_accessibility",
+        "get_dictionary",
+        "get_history",
+        "get_settings",
+        "get_state",
+        "get_stats",
+        "import_dictionary",
+        "open_permission",
+        "remove_correction",
+        "remove_term",
+        "reset_accessibility",
+        "save_dictionary",
+        "select_model",
+        "set_settings",
+        "show_main",
+        "toggle_recording",
+    ];
+
+    #[test]
+    fn only_the_listed_commands_run_on_the_main_thread() {
+        let mut sync = Vec::new();
+        let mut lines = include_str!("commands.rs").lines().map(str::trim);
+        while let Some(line) = lines.next() {
+            if line != "#[tauri::command]" {
+                continue;
+            }
+            let Some(sig) = lines.find(|l| !l.starts_with("#[") && !l.starts_with("//")) else {
+                break;
+            };
+            if let Some(rest) = sig.strip_prefix("pub fn ") {
+                sync.push(rest.split('(').next().unwrap_or(rest));
+            }
+        }
+        sync.sort_unstable();
+        assert_eq!(sync, ON_MAIN_THREAD, "a new command on the main thread: make it async, or list it with a reason");
+    }
 }

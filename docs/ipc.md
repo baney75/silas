@@ -148,7 +148,7 @@ interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string
 | `open_permission` | `{ kind: "microphone" \| "accessibility" \| "input" }` | `null`. Reads first; shows the system prompt at most once per run and never when already granted, otherwise opens the OS settings pane |
 | `reset_accessibility` | | `null`. macOS onboarding: when not trusted, clears Silas's Accessibility entry, asks at most once per run, opens Settings |
 | `fix_accessibility` | | `null`. macOS Fix Permission: when not trusted, clears Silas's Accessibility entry and reopens Silas, which asks once and opens Settings. No-op when trusted or off macOS |
-| `list_microphones` | | `string[]` |
+| `list_microphones` | | `string[]`. Runs off the main thread (Linux opens every ALSA device to list them); the UI reads it at launch and on focus, never when Settings opens |
 | `show_main` | | `null` |
 | `get_benchmark` | | `Report \| null` (saved `benchmark.json`) |
 | `run_benchmark` | `{ all }` | `null` when the run ends. Measures the active model, and with `all` every other installed one. Errors at once if a benchmark is already running or no model is loaded. Results of models not run this time are kept in the report |

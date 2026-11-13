@@ -3498,6 +3498,7 @@ dependencies = [
  "flate2",
  "handy-keys",
  "hound",
+ "libc",
  "log",
  "objc2",
  "objc2-foundation",
