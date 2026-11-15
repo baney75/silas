@@ -289,9 +289,71 @@ fn microphone() -> Grant {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn microphone() -> Grant {
     Grant::Granted
+}
+
+/// Where Windows keeps the microphone switches (Settings > Privacy > Microphone).
+#[cfg(target_os = "windows")]
+const CONSENT: &str =
+    r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone";
+
+/// The microphone grant from Windows' consent store. `read(machine, subkey)` is the `Value`
+/// string under `CONSENT` (plus `\subkey`) in HKLM when `machine`, else HKCU. Any of three
+/// switches set to "Deny" blocks a desktop app: the device-wide one (HKLM), the user's, and
+/// "Let desktop apps access your microphone" (`NonPackaged`). A switch that was never set is
+/// Windows' default, on.
+#[cfg(any(target_os = "windows", test))]
+fn windows_microphone(read: impl Fn(bool, &str) -> Option<String>) -> Grant {
+    let checks = [(true, ""), (false, ""), (false, "NonPackaged")];
+    if checks
+        .iter()
+        .any(|&(machine, sub)| read(machine, sub).is_some_and(|v| v.eq_ignore_ascii_case("deny")))
+    {
+        Grant::Denied
+    } else {
+        Grant::Granted
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn microphone() -> Grant {
+    windows_microphone(consent_value)
+}
+
+/// One `Value` string from the consent store, or None when it isn't there.
+#[cfg(target_os = "windows")]
+fn consent_value(machine: bool, sub: &str) -> Option<String> {
+    use windows_sys::Win32::System::Registry::{
+        RegGetValueW, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ,
+    };
+    let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    let key = wide(&if sub.is_empty() {
+        CONSENT.to_string()
+    } else {
+        format!(r"{CONSENT}\{sub}")
+    });
+    let name = wide("Value");
+    let hive = if machine {
+        HKEY_LOCAL_MACHINE
+    } else {
+        HKEY_CURRENT_USER
+    };
+    let mut buf = [0u16; 32];
+    let mut len = std::mem::size_of_val(&buf) as u32;
+    let rc = unsafe {
+        RegGetValueW(
+            hive,
+            key.as_ptr(),
+            name.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            buf.as_mut_ptr().cast(),
+            &mut len,
+        )
+    };
+    (rc == 0).then(|| String::from_utf16_lossy(&buf[..(len as usize / 2).saturating_sub(1)]))
 }
 
 #[cfg(target_os = "macos")]
@@ -357,6 +419,44 @@ fn prompt_accessibility() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_microphone_is_denied_by_any_of_its_three_switches() {
+        let with = |deny: (bool, &'static str)| {
+            windows_microphone(move |machine, sub| {
+                Some(
+                    if (machine, sub) == deny {
+                        "Deny"
+                    } else {
+                        "Allow"
+                    }
+                    .to_string(),
+                )
+            })
+        };
+        assert_eq!(with((true, "")), Grant::Denied, "the device-wide switch");
+        assert_eq!(with((false, "")), Grant::Denied, "the user's switch");
+        assert_eq!(
+            with((false, "NonPackaged")),
+            Grant::Denied,
+            "desktop apps' switch"
+        );
+        assert_eq!(with((true, "nothing")), Grant::Granted, "every switch on");
+        assert_eq!(
+            windows_microphone(|_, _| None),
+            Grant::Granted,
+            "never set is Windows' default, on"
+        );
+    }
+
+    /// The real registry read on a Windows machine: it answers, and never panics on a missing key.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_consent_store_reads_without_failing() {
+        let _ = consent_value(false, "NonPackaged");
+        assert_eq!(consent_value(false, "NoSuchSubkey"), None);
+        assert!(matches!(microphone(), Grant::Granted | Grant::Denied));
+    }
 
     /// The check gives the answer an open would, without opening a device (see `accessibility`).
     #[cfg(target_os = "linux")]
