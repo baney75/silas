@@ -94,8 +94,23 @@ pub fn config_dir(
     if let Some(d) = get("POLYCARP_CONFIG_DIR") {
         return d.is_absolute().then_some(d);
     }
+    let pin_home = if windows {
+        get("APPDATA").map(|p| p.join("Polycarp"))
+    } else {
+        home.as_ref().map(|h| h.join(".config").join("polycarp"))
+    };
+    // The folder `polycarp theme folder --pin` recorded: Voice started from the Dock sees no
+    // POLYCARP_CONFIG_DIR (first-F2 of the review of #11).
+    let pinned = pin_home
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p.join("config-dir")).ok())
+        .map(|t| PathBuf::from(t.trim()))
+        .filter(|d| d.is_absolute() && d.is_dir());
+    if pinned.is_some() {
+        return pinned;
+    }
     if windows {
-        return get("APPDATA").map(|p| p.join("Polycarp"));
+        return pin_home;
     }
     if let Some(x) = get("XDG_CONFIG_HOME").filter(|p| p.is_absolute()) {
         return Some(x.join("polycarp"));
@@ -557,6 +572,27 @@ mod tests {
             config_dir(&env_of(&m), Some("/h".into()), false),
             Some(PathBuf::from("/h").join(".config").join("polycarp"))
         );
+    }
+
+    /// first-F2 of the review of #11: Voice started from the Dock sees no POLYCARP_CONFIG_DIR, so it
+    /// reads the folder `polycarp theme folder --pin` recorded.
+    #[test]
+    fn a_pinned_folder_is_used_without_the_variable() {
+        let root = std::env::temp_dir().join(format!("voice-pin-{}", std::process::id()));
+        let home = root.join("home");
+        let pin_home = home.join(".config").join("polycarp");
+        std::fs::create_dir_all(&pin_home).unwrap();
+        let moved = root.join("moved");
+        std::fs::write(pin_home.join("config-dir"), format!("{}\n", moved.display())).unwrap();
+        let dir = |m: &HashMap<&str, &str>| config_dir(&env_of(m), Some(home.clone()), false);
+        let none = HashMap::new();
+        assert_eq!(dir(&none), Some(pin_home.clone()), "a pin to a missing folder is ignored");
+        std::fs::create_dir_all(&moved).unwrap();
+        assert_eq!(dir(&none), Some(moved.clone()));
+        let xdg = abs("x");
+        let m = HashMap::from([("XDG_CONFIG_HOME", xdg.as_str())]);
+        assert_eq!(dir(&m), Some(moved), "the pin comes before XDG_CONFIG_HOME");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
