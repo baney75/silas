@@ -153,6 +153,12 @@ class Scoring(unittest.TestCase):
             self.assertEqual(score.word_errors(manifest[cid]["ref_verbatim"], hyp.replace("-", " "))[0],
                              score.word_errors(manifest[cid]["ref_verbatim"], ref.replace("-", " "))[0], cid)
 
+    def test_quote_marks_are_not_words(self):
+        # whisper.cpp large-v3-turbo types LibriSpeech dialogue in quotes.
+        hyp = "\"'Come, therefore, and let us fling mud at them.'\n"
+        self.assertEqual(score.word_errors("come therefore and let us fling mud at them", hyp), (0, 9))
+        self.assertEqual(score.normalize_silas("don't 'twas the students'"), "don't twas the students")
+
     def test_commands_must_match_exactly(self):
         ref = json.dumps([{"action": "new_line"}])
         self.assertTrue(score.command_match(ref, '[{"action": "new_line"}]'))

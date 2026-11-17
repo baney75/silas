@@ -163,9 +163,15 @@ def numbers_rule(words):
     return out
 
 
+def words(s):
+    """`normalize`, split into words, with quote marks taken off their ends: an engine that types 'Come,' in
+    single quotes said "come". Apostrophes inside a word ("don't") stay."""
+    return [w for w in (w.strip("'") for w in normalize(s).split()) if w]
+
+
 def normalize_silas(s):
-    """The default for WER: `normalize`, then the numbers rule."""
-    return " ".join(numbers_rule(normalize(s).split()))
+    """The default for WER: `words`, then the numbers rule."""
+    return " ".join(numbers_rule(words(s)))
 
 
 def normalize_whisper(s):
@@ -177,10 +183,8 @@ def normalize_whisper(s):
     s = re.sub(r"\$\s?(\d+(?:\.\d+)?)", r"\1 dollars", s)
     s = re.sub(r"(\d)\s?%", r"\1 percent", s)
     s = s.replace("&", " and ")
-    words = normalize(s).split()
-    words = [_spelling(w) for w in words if w not in FILLERS]
-    words = _number_words(words)
-    return " ".join(words)
+    ws = [_spelling(w) for w in words(s) if w not in FILLERS]
+    return " ".join(_number_words(ws))
 
 
 # ---------------------------------------------------------------- errors
