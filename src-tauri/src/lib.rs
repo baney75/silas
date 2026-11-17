@@ -8,7 +8,7 @@ pub mod updates;
 
 // The engine lives in core/voice (polycarp-voice). Re-exported so `crate::core::Shared`,
 // `silas_lib::models` and the other old paths keep working.
-pub use polycarp_voice::{audio, benchmark, core, dictionary, focus, keys, models, permissions, store, typer};
+pub use polycarp_voice::{audio, benchmark, core, dictionary, focus, keys, models, permissions, replay, store, typer};
 
 use tauri::{AppHandle, Manager};
 

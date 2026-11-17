@@ -12,6 +12,7 @@ pub mod keys;
 pub mod models;
 pub mod permissions;
 pub mod pieces;
+pub mod replay;
 pub mod store;
 pub mod typer;
 
