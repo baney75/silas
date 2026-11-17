@@ -10,7 +10,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "bench"))
 import ratchet  # noqa: E402
 import score  # noqa: E402
 
@@ -124,6 +125,33 @@ class Scoring(unittest.TestCase):
         self.assertEqual(score.normalize("Caf\u00e9 Na\u00efve"), "cafe naive")
         row = {"hypothesis": "So the plan.", "hypothesis_raw": "Um, so the plan."}
         self.assertEqual(score.word_errors("um so the plan", score.verbatim(row)), (0, 4))
+
+    def test_numbers_rule_applies_to_every_side(self):
+        # bench/README.md: 10 and above in digits, zero to nine in words. Books spell the numbers out.
+        for ref, hyp in [("a girl of sixteen", "a girl of 16"), ("this beauty of forty", "this beauty of 40"),
+                         ("twenty five yet", "25 yet"), ("a hundred serpents", "100 serpents"),
+                         ("april sixteenth eighteen sixty one", "April 16th, 1861"), ("three books", "3 books")]:
+            self.assertEqual(score.word_errors(ref, hyp), (0, len(score.normalize_silas(ref).split())), hyp)
+            self.assertEqual(score.word_errors(hyp, ref)[0], 0, ref)
+        self.assertEqual(score.normalize_silas("no one came, one by one"), "no one came one by one")
+        self.assertEqual(score.word_errors("a girl of sixteen", "a girl of 60"), (1, 4))
+        self.assertEqual(score.format_errors("a girl of sixteen, to whom", "a girl of 16, to whom"), (0, 6))
+        self.assertEqual(score.format_errors("appearance of twenty-five, yet", "appearance of 25, yet"), (0, 4))
+        self.assertEqual(score.format_errors("$47.50 at 3:30, 12%", "$47.50 at 3:30, 12%"), (0, 4))
+        self.assertEqual(score.format_errors("A man and a dog.", "a man and a dog."), (1, 5))
+
+    def test_published_longform_clips_typed_with_digits_score_clean(self):
+        manifest = score.load_manifest(ROOT / "bench" / "manifest.jsonl")
+        typed = {"sixteen": "16", "forty": "40", "twenty-five": "25", "a hundred": "100"}
+        for cid in ("longform-0004", "longform-0005"):
+            ref = manifest[cid]["ref_formatted"]
+            hyp = ref
+            for words, digits in typed.items():
+                hyp = hyp.replace(f" {words}", f" {digits}")
+            self.assertNotEqual(hyp, ref)
+            self.assertEqual(score.format_errors(ref, hyp)[0], 0, cid)
+            self.assertEqual(score.word_errors(manifest[cid]["ref_verbatim"], hyp.replace("-", " "))[0],
+                             score.word_errors(manifest[cid]["ref_verbatim"], ref.replace("-", " "))[0], cid)
 
     def test_commands_must_match_exactly(self):
         ref = json.dumps([{"action": "new_line"}])

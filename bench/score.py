@@ -1,14 +1,16 @@
 """Scores results.jsonl files from `silas-bench run` and the rival adapters against a manifest, and writes
 bench/out/report.json and a self-contained bench/out/report.html.
 
-  python3 -I bench/score.py --manifest bench/fixtures/manifest.jsonl bench/out/*.jsonl
+  python3 -I bench/score.py --manifest bench/manifest.jsonl bench/out/*.jsonl
 
 Metrics, per engine and per category:
   wer             word error rate on ref_verbatim, pooled over clips (errors / reference words), with a
-                  bootstrap 95% interval over clips. Text is normalized like core/voice/src/benchmark.rs by
-                  default; --whisper-norm adds Whisper-style English normalization (numbers, spellings,
-                  fillers, currency and percent) on top.
-  formatted_error token error on ref_formatted, case and punctuation sensitive: what the app types.
+                  bootstrap 95% interval over clips. By default text is normalized like core/voice/src/benchmark.rs,
+                  then numbers are written by the bench set's numbers rule (10 and above in digits, zero to nine
+                  in words) on both sides; --whisper-norm uses Whisper-style English normalization (numbers,
+                  spellings, fillers, currency and percent) instead.
+  formatted_error token error on ref_formatted, case and punctuation sensitive: what the app types. Numbers
+                  follow the numbers rule on both sides here too.
   command_acc     command clips only: the hypothesis must parse as JSON and equal the reference action list.
                   An engine with no command mode scores 0, and the report says so.
   t_first / t_final  median and p95 milliseconds; median RTF; peak memory; CPU seconds per audio minute (a
@@ -138,6 +140,32 @@ def _spelling(w):
     return w
 
 
+WORDS_UNDER_TEN = {n: w for w, n in ONES.items() if n is not None and n < 10}
+ORDINALS_UNDER_TEN = {n: w for w, n in ORDINALS.items() if n < 10}
+
+
+def numbers_rule(words):
+    """The bench set's numbers rule (bench/README.md), applied the same way to the reference and every engine:
+    10 and above in digits, zero to nine in words. Books spell "a girl of sixteen" and an app types "a girl of 16";
+    both come out "16", and "3" and "three" both come out "three". `words` are lowercase tokens."""
+    words = [w.replace(",", "") if re.fullmatch(r"\d{1,3}(,\d{3})+", w) else w for w in words]
+    # "a hundred" and "a thousand" are numbers too.
+    words = ["one" if w == "a" and i + 1 < len(words) and words[i + 1] in SCALES else w for i, w in enumerate(words)]
+    out = []
+    for w in _number_words(words):
+        m = re.fullmatch(r"(\d)(st|nd|rd|th)?", w)
+        if m:
+            n = int(m.group(1))
+            w = ORDINALS_UNDER_TEN.get(n, w) if m.group(2) else WORDS_UNDER_TEN[n]
+        out.append(w)
+    return out
+
+
+def normalize_silas(s):
+    """The default for WER: `normalize`, then the numbers rule."""
+    return " ".join(numbers_rule(normalize(s).split()))
+
+
 def normalize_whisper(s):
     """Whisper-style English normalization, then `normalize`. Applied to both sides, so "5" and "five",
     "colour" and "color", "10%" and "ten percent" all match."""
@@ -167,7 +195,7 @@ def edits(r, h):
     return prev[len(h)]
 
 
-def word_errors(ref, hyp, norm=normalize):
+def word_errors(ref, hyp, norm=normalize_silas):
     r, h = norm(ref).split(), norm(hyp).split()
     return edits(r, h), len(r)
 
@@ -177,9 +205,41 @@ def typed_tokens(s):
     return s.replace("\n", " \u00b6 ").split()
 
 
+def typed_numbers(tokens):
+    """The numbers rule on typed tokens, keeping the punctuation around them: "sixteen," and "16," are both "16,",
+    "twenty-five" and "25" both "25". A number the rule rewrites loses its capital ("Sixteen" at the start of a
+    sentence); everything else is left as typed."""
+    out, run = [], []
+
+    def flush():
+        words = [w for _, c, _, _ in run for w in c]
+        core = numbers_rule(words)
+        if core != words:
+            out.append(run[0][0] + " ".join(core) + run[-1][2])
+        else:
+            out.extend(t for *_, t in run)
+        run.clear()
+
+    for t in tokens:
+        m = re.fullmatch(r"([^\w$]*)([\w',-]*?\w)([^\w]*)", t)
+        parts = m.group(2).lower().split("-") if m else []
+        number = m and all(p in ONES or p in TENS or p in SCALES or p in ORDINALS or p == "and" or p == "a"
+                           or re.fullmatch(r"[\d,]+(st|nd|rd|th)?", p) for p in parts)
+        if number:
+            if run and (run[-1][2] or m.group(1)):
+                flush()
+            run.append((m.group(1), parts, m.group(3), t))
+        else:
+            flush()
+            out.append(t)
+    flush()
+    return " ".join(out).split()
+
+
 def format_errors(ref, hyp):
-    """Token errors on the text as typed: case, punctuation and line breaks count."""
-    r, h = typed_tokens(ref), typed_tokens(hyp)
+    """Token errors on the text as typed: case, punctuation and line breaks count. Numbers follow the numbers rule
+    on both sides, so writing "16" where a book spells "sixteen" is not an error."""
+    r, h = typed_numbers(typed_tokens(ref)), typed_numbers(typed_tokens(hyp))
     return edits(r, h), len(r)
 
 
@@ -273,7 +333,7 @@ def verbatim(row):
     return row.get("hypothesis_raw") or row.get("hypothesis", "")
 
 
-def summarize(rows, manifest, norm=normalize, rng=None):
+def summarize(rows, manifest, norm=normalize_silas, rng=None):
     """Metrics for one engine's rows: overall and per category."""
     rng = rng or random.Random(SEED)
     rows = [r for r in rows if r["id"] in manifest]
@@ -345,7 +405,7 @@ def compare(base_rows, rows, manifest, norm, rng):
 def score(manifest_path, result_paths, whisper_norm=False):
     manifest = load_manifest(manifest_path)
     runs = load_results(result_paths)
-    norm = normalize_whisper if whisper_norm else normalize
+    norm = normalize_whisper if whisper_norm else normalize_silas
     engines = {label: summarize(rows, manifest, norm, random.Random(SEED)) for label, rows in runs.items()}
     base = next((l for l, rows in runs.items() if rows[0]["engine"] == "silas"), None)
     comparisons = {}
@@ -356,7 +416,7 @@ def score(manifest_path, result_paths, whisper_norm=False):
     notes = [
         "WER is on each engine's raw model text against ref_verbatim. Normalization: " + (
             "Whisper-style English (numbers, spellings, fillers) on top of benchmark.rs normalize with accents folded"
-            if whisper_norm else "benchmark.rs normalize with accents folded (the default; --whisper-norm adds Whisper-style English normalization)"),
+            if whisper_norm else "benchmark.rs normalize with accents folded, then the numbers rule (10 and above in digits, zero to nine in words) on reference and hypothesis alike (the default; --whisper-norm uses Whisper-style English normalization)"),
         "Latency figures carry the machine's 1-minute load (load1) when each clip ran; compare them only at similar load.",
         "Formatted error compares the text as typed, token by token; case and punctuation count.",
         "Batch engines see the whole clip after key up: t_first = t_final = decode time. Model load is reported apart as load_ms.",

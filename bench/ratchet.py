@@ -34,7 +34,7 @@ MEMORY_SLACK = 0.10
 
 
 def metrics(rows, manifest):
-    s = score.summarize(rows, manifest, score.normalize, random.Random(score.SEED))
+    s = score.summarize(rows, manifest, score.normalize_silas, random.Random(score.SEED))
     return {
         "wer": {c: round(b["wer"], 6) for c, b in s["categories"].items() if b["wer"] is not None},
         "formatted_error": round(s["overall"]["formatted_error"], 6),
