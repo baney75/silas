@@ -374,7 +374,9 @@ linux_install() {
     curl -fL# "$url" -o "$tmp/silas.$format" || die "Could not download $url."
     stop_linux_silas
     if [ "$format" = deb ]; then
-      as_root apt-get install -y "$tmp/silas.deb"
+      # A stale package list names dependency versions the mirror has since dropped (404).
+      as_root apt-get install -y "$tmp/silas.deb" ||
+        { as_root apt-get update && as_root apt-get install -y "$tmp/silas.deb"; }
     elif command -v dnf >/dev/null 2>&1; then
       as_root dnf install -y "$tmp/silas.rpm"
     else
