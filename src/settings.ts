@@ -62,7 +62,8 @@ export function mountSettings(root: HTMLElement): () => void {
             toast(`Hotkey set to ${hotkeyLabel()}`);
           } catch (e) {
             capturing = false;
-            toast(errorText(e), "error");
+            // Escape ends the pick quietly; anything else says why.
+            if (errorText(e) !== "cancelled") toast(errorText(e), "error");
           }
           draw();
         },
@@ -177,15 +178,11 @@ export function mountSettings(root: HTMLElement): () => void {
   }
 
   draw();
-  if (!store.microphones.length) {
-    api
-      .listMicrophones()
-      .then((m) => {
-        store.microphones = m;
-        if (!capturing) draw();
-      })
-      .catch(() => undefined);
-  }
+  // The list is read at launch and on focus (`refreshMicrophones`); a newer one replaces only this control.
+  const unsubMics = subscribe(["microphones"], () => {
+    const old = body.querySelector("#set-mic");
+    if (old && document.activeElement !== old) old.replaceWith(micSelect());
+  });
   const unsubUpdate = subscribe(["update"], () => {
     const old = body.querySelector(".update-row");
     if (old) old.replaceWith(updateRow());
@@ -203,6 +200,7 @@ export function mountSettings(root: HTMLElement): () => void {
   return () => {
     unsub();
     unsubUpdate();
+    unsubMics();
   };
 }
 

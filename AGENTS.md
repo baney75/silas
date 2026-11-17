@@ -5,7 +5,7 @@ Tauri 2 app. Rust core in `src-tauri/src`, vanilla TypeScript UI in `src/`, cont
 ## Done means
 
 ```sh
-bun run build && (cd src-tauri && cargo test --lib && cargo clippy --lib -- -D warnings)
+bun run build && bun run check:theme && bun test && (cd src-tauri && cargo test --lib && cargo clippy --lib -- -D warnings)
 ```
 
 ## Rules
@@ -28,3 +28,5 @@ bun run build && (cd src-tauri && cargo test --lib && cargo clippy --lib -- -D w
   never write `if let Some(x) = self.m.lock().take()`: the guard lives through the body.
 - `[profile.release.build-override]` must stay: thin LTO otherwise breaks proc-macros.
 - Benchmark engines with `cargo run --release --features bench --bin silas-bench -- parakeet <dir> <wav>...`.
+- Colours, radii, fonts and durations come from the theme (`src/theme-vars.ts`, applied by `src/theme.ts`). Write `var(--x)` in rule bodies; defaults live in the `:root` blocks. `bun run check:theme` fails on a hex, `rgb()` or named colour, a literal `border-radius` (other than `50%`), `font-family` or `transition` time (other than 0 and 1ms), and a colour given to a variable outside `:root`. The only exceptions are the files in `ALLOW` in `scripts/check-theme.mjs`, each with a reason.
+- Theme logic that `bun test` runs (`theme-vars.ts`, `theme-boot.ts`) must not touch `window` or `document`. `bun test` and `cargo test --lib` both run the real `polycarp theme` command, so `cargo` must be on PATH.

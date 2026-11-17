@@ -30,34 +30,22 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+polycarp-voice = { path = "../../core/voice" }
 transcribe-rs = { version = "0.3.12", features = ["onnx"] }
-handy-keys = "0.3.4"
-cpal = "0.16"
-rphonetic = "4"
+tar = "0.4"
+hound = "3.5"
 dirs = "6"
 parking_lot = "0.12"
 anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
 ureq = "3"
-tar = "0.4"
 flate2 = "1"
-hound = "3.5"
 tokio = { version = "1", features = ["time"] }
 chrono = { version = "0.4", features = ["serde"] }
-sysinfo = { version = "0.38", default-features = false, features = ["system"] }
-
-[target.'cfg(not(target_os = "macos"))'.dependencies]
-enigo = "0.6"
-
-[target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-core-graphics = "0.24"
-core-foundation = "0.10"
 objc2 = "0.6"
-objc2-foundation = "0.3"
 
 [profile.release]
 opt-level = 3

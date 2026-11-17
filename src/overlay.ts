@@ -2,6 +2,7 @@
 import "./overlay.css";
 import { inTauri, on, type Status } from "./api";
 import { startOverlayDemo } from "./mock";
+import { initTheme, themeReducedMotion } from "./theme";
 
 type Face = "idle" | "recording" | "writing" | "typing" | "learned";
 
@@ -11,7 +12,8 @@ const elapsedEl = document.getElementById("elapsed")!;
 const learnedEl = document.getElementById("learned")!;
 
 const BARS = 16;
-const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
+const systemReduced = window.matchMedia("(prefers-reduced-motion: reduce)");
+const reduced = () => systemReduced.matches || themeReducedMotion();
 const bars: HTMLElement[] = [];
 for (let i = 0; i < BARS; i++) {
   const b = document.createElement("span");
@@ -56,7 +58,7 @@ function loop() {
       targets.push(shape(latest));
       lastPush = t;
     }
-    const ease = reduced.matches ? 1 : 0.28;
+    const ease = reduced() ? 1 : 0.28;
     for (let i = 0; i < BARS; i++) {
       // Taper the edges so the waveform reads as a soft lozenge.
       const edge = Math.sin(((i + 0.5) / BARS) * Math.PI) * 0.55 + 0.45;
@@ -79,6 +81,7 @@ function onStatus(status: Status) {
   else if (face !== "learned") setFace("idle");
 }
 
+void initTheme();
 void on("status", ({ status }) => onStatus(status));
 void on("level", (level) => {
   latest = level;

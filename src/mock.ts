@@ -22,6 +22,7 @@ import type {
   Settings,
   Stats,
   Status,
+  Theme,
 } from "./api";
 
 type Listener = (payload: unknown) => void;
@@ -50,6 +51,7 @@ const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
 
 const hotkeyLabels: Record<string, string> = {
+  Dictation: "the microphone key",
   CmdRight: "Right ⌘",
   CmdLeft: "Left ⌘",
   CtrlRight: "Right Ctrl",
@@ -397,6 +399,8 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
   await delay(60);
   const out = (v: unknown) => clone(v) as T;
   switch (cmd) {
+    case "get_theme":
+      return (await previewTheme()) as T;
     case "get_state":
       return out(state);
     case "get_settings":
@@ -580,4 +584,47 @@ export function startOverlayDemo() {
     void loop();
   };
   void loop();
+}
+
+// Preview only: `?themeFile=/__theme/still-water-dark.json` loads a theme file that vite serves from
+// the folder named by SILAS_THEME_DIR (see vite.config.ts). `import.meta.env.DEV` is false in a
+// production build, so this whole block is removed from it.
+async function previewTheme(): Promise<Theme | null> {
+  if (!import.meta.env.DEV) return null;
+  const file = params.get("themeFile");
+  if (!file) return null;
+  try {
+    const res = await fetch(file, { cache: "no-store" });
+    if (!res.ok) return null;
+    const text = await res.text();
+    watchThemeFile(file, text);
+    return fromFile(text);
+  } catch {
+    return null;
+  }
+}
+
+/** What the core would send: the voice surface of the file plus its name and mode (no checks here). */
+function fromFile(text: string): Theme {
+  const f = JSON.parse(text);
+  const v = f.surfaces.voice;
+  return { name: f.name, mode: f.mode, light: v.light, dark: v.dark, shape: v.shape, type: v.type, motion: v.motion };
+}
+
+let watching = false;
+function watchThemeFile(file: string, first: string) {
+  if (watching) return;
+  watching = true;
+  let last = first;
+  window.setInterval(async () => {
+    try {
+      const res = await fetch(file, { cache: "no-store" });
+      const text = res.ok ? await res.text() : "";
+      if (text === last) return;
+      last = text;
+      emit("theme_changed", text ? fromFile(text) : null);
+    } catch {
+      /* keep the last theme */
+    }
+  }, 1000);
 }

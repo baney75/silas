@@ -31,10 +31,35 @@
   --shadow-lg: 0 12px 32px rgba(20, 22, 26, 0.12), 0 2px 6px rgba(20, 22, 26, 0.06);
   --key-face: #fffdf8;
   --key-edge: #cfc3ad;
+  --key-hi: rgba(255, 255, 255, 0.5);
+  --key-hi-lg: rgba(255, 255, 255, 0.5);
+  --thumb: #fff;
+  --thumb-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --seg-shadow: 0 1px 2px rgba(20, 22, 26, 0.12);
+  --toast-bg: #1b1e23;
+  --toast-fg: #ede6d8;
+  --toast-border: #3a3f47;
+  --toast-border-w: 0px;
+  --toast-ok: #86b892;
+  --toast-learned: #d4af6a;
+  --toast-error: #e58a73;
 
   --r-sm: 6px;
   --r: 10px;
   --r-lg: 16px;
+  --r-2: 2px;
+  --r-4: 4px;
+  --r-5: 5px;
+  --r-7: 7px;
+  --r-8: 8px;
+  --r-9: 9px;
+  --r-11: 11px;
+  --r-12: 12px;
+  --r-20: 20px;
+  --r-pill: 999px;
+  --motion-fast: 120ms;
+  --motion-normal: 200ms;
+  --motion-slow: 260ms;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   --top: 0px;
 
@@ -70,6 +95,9 @@
     --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.3);
     --key-face: #262a31;
     --key-edge: #121418;
+    --key-hi: rgba(255, 255, 255, 0.06);
+    --toast-bg: #2a2e35;
+    --toast-border-w: 1px;
     color-scheme: dark;
   }
 }
@@ -180,7 +208,7 @@ button {
 ::-webkit-scrollbar-thumb {
   background: var(--line-strong);
   border: 3px solid var(--bg);
-  border-radius: 10px;
+  border-radius: var(--r);
 }
 ::-webkit-scrollbar-track {
   background: transparent;
@@ -234,19 +262,19 @@ button {
   height: 36px;
   padding: 0 10px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--r-8);
   background: transparent;
   color: var(--text-2);
   font-weight: 500;
   text-align: left;
   transition:
-    background 120ms ease,
-    color 120ms ease;
+    background var(--motion-fast) ease,
+    color var(--motion-fast) ease;
 }
 
 .nav-item svg {
   color: var(--text-3);
-  transition: color 120ms ease;
+  transition: color var(--motion-fast) ease;
 }
 
 .nav-item:hover {
@@ -269,7 +297,7 @@ button {
   min-width: 20px;
   height: 20px;
   padding: 0 6px;
-  border-radius: 10px;
+  border-radius: var(--r);
   background: var(--gold-soft);
   color: var(--gold-ink);
   font-size: 12px;
@@ -322,7 +350,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 24px;
-  animation: page-in 220ms var(--ease) both;
+  animation: page-in calc(var(--motion-normal) * 11 / 10) var(--ease) both;
 }
 
 @keyframes page-in {
@@ -363,7 +391,7 @@ button {
   height: 8px;
   border-radius: 50%;
   background: var(--text-3);
-  transition: background 200ms ease;
+  transition: background var(--motion-normal) ease;
 }
 
 .live-ready .dot {
@@ -406,10 +434,10 @@ button {
   font-weight: 550;
   white-space: nowrap;
   transition:
-    background 120ms ease,
-    border-color 120ms ease,
-    color 120ms ease,
-    transform 80ms ease;
+    background var(--motion-fast) ease,
+    border-color var(--motion-fast) ease,
+    color var(--motion-fast) ease,
+    transform calc(var(--motion-fast) * 2 / 3) ease;
 }
 
 .btn:active:not(:disabled) {
@@ -448,7 +476,7 @@ button {
   height: 30px;
   padding: 0 12px;
   font-size: 13px;
-  border-radius: 8px;
+  border-radius: var(--r-8);
   gap: 6px;
 }
 
@@ -456,7 +484,7 @@ button {
   height: 44px;
   padding: 0 24px;
   font-size: 15px;
-  border-radius: 12px;
+  border-radius: var(--r-12);
 }
 
 .icon-btn {
@@ -465,12 +493,12 @@ button {
   width: 30px;
   height: 30px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--r-8);
   background: transparent;
   color: var(--text-3);
   transition:
-    background 120ms ease,
-    color 120ms ease;
+    background var(--motion-fast) ease,
+    color var(--motion-fast) ease;
 }
 .icon-btn:hover {
   background: var(--surface-2);
@@ -506,23 +534,15 @@ button {
   border-bottom-color: var(--key-edge);
   box-shadow:
     0 2px 0 var(--key-edge),
-    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+    inset 0 1px 0 var(--key-hi);
   white-space: nowrap;
   vertical-align: middle;
-}
-
-@media (prefers-color-scheme: dark) {
-  .keycap {
-    box-shadow:
-      0 2px 0 var(--key-edge),
-      inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  }
 }
 
 .keycap-sm {
   height: 22px;
   padding: 0 7px;
-  border-radius: 5px;
+  border-radius: var(--r-5);
   font-size: 12px;
   box-shadow: 0 1px 0 var(--key-edge);
   margin: 0 2px;
@@ -531,18 +551,18 @@ button {
 .keycap-md {
   height: 32px;
   padding: 0 12px;
-  border-radius: 8px;
+  border-radius: var(--r-8);
   font-size: 14px;
 }
 
 .keycap-lg {
   height: 48px;
   padding: 0 18px;
-  border-radius: 11px;
+  border-radius: var(--r-11);
   font-size: 20px;
   box-shadow:
     0 3px 0 var(--key-edge),
-    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+    inset 0 1px 0 var(--key-hi-lg);
 }
 
 .keycap.capturing {
@@ -589,12 +609,12 @@ button {
   gap: 8px;
   margin-top: 24px;
   padding: 6px 12px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--surface-2);
   font-size: 13px;
   font-weight: 550;
   color: var(--text-2);
-  transition: background 200ms ease;
+  transition: background var(--motion-normal) ease;
 }
 
 .live-recording {
@@ -652,11 +672,11 @@ button {
   gap: 12px;
   min-height: 44px;
   padding: 6px 6px 6px 16px;
-  border-radius: 12px;
+  border-radius: var(--r-12);
   background: var(--surface);
   border: 1px solid var(--gold-line);
   font-size: 13px;
-  animation: page-in 260ms var(--ease) both;
+  animation: page-in var(--motion-slow) var(--ease) both;
 }
 
 .update-dot {
@@ -777,11 +797,11 @@ button {
   background: var(--surface);
   border: 1px solid var(--line);
   transition:
-    border-color 160ms ease,
-    box-shadow 160ms ease,
-    opacity 160ms ease,
-    transform 160ms ease;
-  animation: page-in 240ms var(--ease) both;
+    border-color calc(var(--motion-normal) * 4 / 5) ease,
+    box-shadow calc(var(--motion-normal) * 4 / 5) ease,
+    opacity calc(var(--motion-normal) * 4 / 5) ease,
+    transform calc(var(--motion-normal) * 4 / 5) ease;
+  animation: page-in calc(var(--motion-normal) * 6 / 5) var(--ease) both;
 }
 
 .entry:hover {
@@ -834,7 +854,7 @@ button {
   align-items: center;
   gap: 4px;
   opacity: 0.75;
-  transition: opacity 140ms ease;
+  transition: opacity calc(var(--motion-fast) * 7 / 6) ease;
 }
 
 .entry:hover .entry-actions,
@@ -905,11 +925,11 @@ button {
   gap: 8px;
   margin-top: 12px;
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: var(--r-8);
   background: var(--gold-soft);
   font-size: 13px;
   color: var(--text-2);
-  animation: page-in 260ms var(--ease) both;
+  animation: page-in var(--motion-slow) var(--ease) both;
 }
 .lesson > svg {
   color: var(--gold-ink);
@@ -927,7 +947,7 @@ button {
   gap: 8px;
   max-width: 100%;
   padding: 3px 12px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--surface);
   border: 1px solid var(--line);
   font-size: 13px;
@@ -951,7 +971,7 @@ button {
 
 .term-chip {
   padding: 3px 10px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   border: 1px solid var(--line);
   background: var(--surface);
   font-size: 13px;
@@ -963,7 +983,7 @@ button {
   align-items: center;
   height: 22px;
   padding: 0 8px;
-  border-radius: 6px;
+  border-radius: var(--r-sm);
   background: var(--surface-2);
   color: var(--text-2);
   font-size: 12px;
@@ -1013,9 +1033,9 @@ button {
   right: 0;
   bottom: -1px;
   height: 2px;
-  border-radius: 2px;
+  border-radius: var(--r-2);
   background: transparent;
-  transition: background 160ms ease;
+  transition: background calc(var(--motion-normal) * 4 / 5) ease;
 }
 
 .tabs [role="tab"]:hover {
@@ -1033,7 +1053,7 @@ button {
   min-width: 20px;
   height: 20px;
   padding: 0 6px;
-  border-radius: 10px;
+  border-radius: var(--r);
   background: var(--surface-2);
   font-size: 12px;
   line-height: 20px;
@@ -1050,7 +1070,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  animation: page-in 180ms var(--ease) both;
+  animation: page-in calc(var(--motion-normal) * 9 / 10) var(--ease) both;
 }
 
 .panel-note {
@@ -1072,8 +1092,8 @@ button {
   border: 1px solid var(--line);
   background: var(--surface);
   transition:
-    border-color 120ms ease,
-    box-shadow 120ms ease;
+    border-color var(--motion-fast) ease,
+    box-shadow var(--motion-fast) ease;
 }
 .input {
   flex: 1;
@@ -1126,11 +1146,11 @@ button {
   gap: 6px;
   height: 32px;
   padding: 0 4px 0 12px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   border: 1px solid var(--line);
   background: var(--surface);
   font-weight: 550;
-  animation: page-in 180ms var(--ease) both;
+  animation: page-in calc(var(--motion-normal) * 9 / 10) var(--ease) both;
 }
 
 .term-src {
@@ -1214,7 +1234,7 @@ button {
   border-radius: var(--r-lg);
   background: var(--surface);
   border: 1px solid var(--line);
-  transition: border-color 160ms ease;
+  transition: border-color calc(var(--motion-normal) * 4 / 5) ease;
 }
 
 .model-card.is-active {
@@ -1234,7 +1254,7 @@ button {
   align-items: center;
   height: 22px;
   padding: 0 8px;
-  border-radius: 6px;
+  border-radius: var(--r-sm);
   font-size: 12px;
   font-weight: 650;
   letter-spacing: 0.02em;
@@ -1288,7 +1308,7 @@ button {
   gap: 8px;
   height: 30px;
   padding: 0 12px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   font-size: 13px;
   font-weight: 600;
   background: var(--surface-2);
@@ -1321,7 +1341,7 @@ button {
 .progress {
   position: relative;
   height: 6px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--surface-2);
   overflow: hidden;
 }
@@ -1333,7 +1353,7 @@ button {
   background: var(--gold);
   transform-origin: left;
   transform: scaleX(0);
-  transition: transform 240ms var(--ease);
+  transition: transform calc(var(--motion-normal) * 6 / 5) var(--ease);
 }
 
 .progress.indeterminate .progress-fill {
@@ -1546,9 +1566,9 @@ button {
   height: 22px;
   padding: 0;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--line-strong);
-  transition: background 160ms ease;
+  transition: background calc(var(--motion-normal) * 4 / 5) ease;
 }
 .switch-thumb {
   position: absolute;
@@ -1557,9 +1577,9 @@ button {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
-  transition: transform 180ms var(--ease);
+  background: var(--thumb);
+  box-shadow: var(--thumb-shadow);
+  transition: transform calc(var(--motion-normal) * 9 / 10) var(--ease);
 }
 .switch[aria-checked="true"] {
   background: var(--gold);
@@ -1568,13 +1588,13 @@ button {
   transform: translateX(16px);
 }
 .switch:focus-visible {
-  border-radius: 999px;
+  border-radius: var(--r-pill);
 }
 
 .segmented {
   display: inline-flex;
   padding: 2px;
-  border-radius: 9px;
+  border-radius: var(--r-9);
   background: var(--surface-2);
   border: 1px solid var(--line);
 }
@@ -1582,15 +1602,15 @@ button {
   height: 28px;
   padding: 0 14px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--r-7);
   background: transparent;
   color: var(--text-2);
   font-size: 13px;
   font-weight: 550;
   transition:
-    background 140ms ease,
-    color 140ms ease,
-    box-shadow 140ms ease;
+    background calc(var(--motion-fast) * 7 / 6) ease,
+    color calc(var(--motion-fast) * 7 / 6) ease,
+    box-shadow calc(var(--motion-fast) * 7 / 6) ease;
 }
 .segmented button:hover {
   color: var(--text);
@@ -1598,7 +1618,7 @@ button {
 .segmented [aria-checked="true"] {
   background: var(--surface);
   color: var(--text);
-  box-shadow: 0 1px 2px rgba(20, 22, 26, 0.12);
+  box-shadow: var(--seg-shadow);
 }
 
 .spinner {
@@ -1692,11 +1712,11 @@ button {
   align-items: center;
   text-align: center;
   padding: 48px 48px 32px;
-  border-radius: 20px;
+  border-radius: var(--r-20);
   background: var(--surface);
   border: 1px solid var(--line);
   box-shadow: var(--shadow-lg);
-  animation: page-in 260ms var(--ease) both;
+  animation: page-in var(--motion-slow) var(--ease) both;
 }
 
 .onb-card > * + * {
@@ -1771,11 +1791,11 @@ button {
 .onb-dots li {
   width: 8px;
   height: 8px;
-  border-radius: 4px;
+  border-radius: var(--r-4);
   background: var(--line-strong);
   transition:
-    width 220ms var(--ease),
-    background 220ms ease;
+    width calc(var(--motion-normal) * 11 / 10) var(--ease),
+    background calc(var(--motion-normal) * 11 / 10) ease;
 }
 .onb-dots li.done {
   background: var(--gold-line);
@@ -1812,12 +1832,12 @@ button {
   align-items: center;
   gap: 16px;
   padding: 16px;
-  border-radius: 12px;
+  border-radius: var(--r-12);
   border: 1px solid var(--line);
   background: var(--bg);
   transition:
-    border-color 200ms ease,
-    background 200ms ease;
+    border-color var(--motion-normal) ease,
+    background var(--motion-normal) ease;
 }
 .perm.ok {
   border-color: transparent;
@@ -1829,7 +1849,7 @@ button {
   width: 40px;
   height: 40px;
   flex: none;
-  border-radius: 10px;
+  border-radius: var(--r);
   background: var(--surface);
   border: 1px solid var(--line);
   color: var(--gold-ink);
@@ -1888,7 +1908,7 @@ button {
   width: 100%;
   min-height: 112px;
   padding: 16px;
-  border-radius: 12px;
+  border-radius: var(--r-12);
   border: 1px solid var(--line);
   background: var(--bg);
   font-size: 15px;
@@ -1897,8 +1917,8 @@ button {
   text-align: left;
   caret-color: var(--gold);
   transition:
-    border-color 120ms ease,
-    box-shadow 120ms ease;
+    border-color var(--motion-fast) ease,
+    box-shadow var(--motion-fast) ease;
 }
 .try-area:focus {
   outline: none;
@@ -1930,17 +1950,18 @@ button {
   gap: 10px;
   max-width: 420px;
   padding: 10px 16px 10px 12px;
-  border-radius: 12px;
-  background: #1b1e23;
-  color: #ede6d8;
+  border-radius: var(--r-12);
+  background: var(--toast-bg);
+  color: var(--toast-fg);
+  border: var(--toast-border-w) solid var(--toast-border);
   font-size: 13px;
   font-weight: 500;
   box-shadow: var(--shadow-lg);
   opacity: 0;
   transform: translateY(8px) scale(0.98);
   transition:
-    opacity 200ms ease,
-    transform 240ms var(--ease);
+    opacity var(--motion-normal) ease,
+    transform calc(var(--motion-normal) * 6 / 5) var(--ease);
 }
 .toast.in {
   opacity: 1;
@@ -1948,20 +1969,13 @@ button {
 }
 .toast svg {
   flex: none;
-  color: #86b892;
+  color: var(--toast-ok);
 }
 .toast-learned svg {
-  color: #d4af6a;
+  color: var(--toast-learned);
 }
 .toast-error svg {
-  color: #e58a73;
-}
-
-@media (prefers-color-scheme: dark) {
-  .toast {
-    background: #2a2e35;
-    border: 1px solid #3a3f47;
-  }
+  color: var(--toast-error);
 }
 
 /* ---------- Fatal ---------- */
@@ -2012,4 +2026,14 @@ button {
     transition-duration: 1ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* Polycarp theme asks for no motion (set by theme.ts). */
+html[data-reduced-motion] *,
+html[data-reduced-motion] *::before,
+html[data-reduced-motion] *::after {
+  animation-duration: 1ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 1ms !important;
+  scroll-behavior: auto !important;
 }

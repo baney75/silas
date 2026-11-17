@@ -179,7 +179,8 @@ mac_install() {
   [ -z "${SILAS_NO_OPEN:-}" ] || { say "Installed to $dest."; return; }
   say "Installed to $dest. Opening Silas…"
   open "$dest/Silas.app" || { sleep 2; open "$dest/Silas.app"; }
-  say "Allow Microphone and Accessibility when Silas asks. Then hold Right ⌘ and speak."
+  if [ "$(uname -m)" = arm64 ]; then key="the microphone key"; else key="Right ⌘"; fi
+  say "Allow Microphone and Accessibility when Silas asks. Then hold $key and speak."
 }
 
 linux_desktop_entry() {

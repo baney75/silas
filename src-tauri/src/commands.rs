@@ -7,7 +7,6 @@ use tauri::{AppHandle, State};
 
 use crate::core::{Scope, Shared, Status};
 use crate::dictionary::{Dictionary, LearnResult};
-use crate::keys::Trigger;
 use crate::models::{self, ModelEntry};
 use crate::store::{self, HistoryItem, Settings, Stats};
 use crate::{audio, benchmark, permissions, updates};
@@ -64,26 +63,8 @@ pub fn get_settings(core: State<Shared>) -> Settings {
 
 #[tauri::command]
 pub fn set_settings(core: State<Shared>, app: AppHandle, settings: Settings) -> R<Settings> {
-    let mut settings = settings;
-    let trigger = Trigger::parse(&settings.hotkey)
-        .ok_or_else(|| format!("{} is not a key Silas can use", settings.hotkey))?;
-    if !cfg!(target_os = "macos") {
-        settings.update_channel = "nightly".into();
-    }
-    // The model and who chose it belong to the core: a benchmark can switch models while the
-    // UI holds an older copy of the settings, and saving that copy must not undo the switch.
-    // The UI changes models with select_model.
-    let old = {
-        let mut cur = core.settings.lock();
-        settings.model = cur.model.clone();
-        settings.model_source = cur.model_source.clone();
-        std::mem::replace(&mut *cur, settings.clone())
-    };
-    {
-        let mut m = core.machine.lock();
-        m.trigger = trigger;
-        m.tap_to_toggle = settings.tap_to_toggle;
-    }
+    // The model, its source and the hotkey are handled by the core (see `Core::apply_settings`).
+    let (settings, old) = core.inner().apply_settings(settings)?;
     if old.launch_at_login != settings.launch_at_login {
         use tauri_plugin_autostart::ManagerExt;
         let al = app.autolaunch();
@@ -92,10 +73,6 @@ pub fn set_settings(core: State<Shared>, app: AppHandle, settings: Settings) -> 
         } else {
             al.disable()
         };
-    }
-    core.save_settings();
-    if old.hotkey != settings.hotkey && core.status().0 == Status::Ready {
-        core.set_status(Status::Ready, None); // refresh the tray label
     }
     Ok(settings)
 }
@@ -259,7 +236,8 @@ pub async fn capture_hotkey(core: State<'_, Shared>) -> R<String> {
     tauri::async_runtime::spawn_blocking(move || {
         let got = rx.recv_timeout(Duration::from_secs(10));
         core.capture.lock().take();
-        got.map_err(|_| "No key pressed".to_string())
+        // Escape gives `cancelled`; a key that types text gives a sentence saying why.
+        got.map_err(|_| "No key pressed".to_string())?
     })
     .await
     .map_err(err)?
@@ -315,9 +293,13 @@ pub fn fix_accessibility(app: AppHandle) {
     }
 }
 
+/// Async, so it runs off the main thread: on Linux, listing ALSA devices opens each one and the
+/// window would freeze until it finished.
 #[tauri::command]
-pub fn list_microphones() -> Vec<String> {
-    audio::microphones()
+pub async fn list_microphones() -> R<Vec<String>> {
+    tauri::async_runtime::spawn_blocking(audio::microphones)
+        .await
+        .map_err(err)
 }
 
 #[tauri::command]
@@ -385,4 +367,65 @@ pub async fn check_update(app: AppHandle) -> R<Option<updates::UpdateInfo>> {
 #[tauri::command]
 pub async fn install_update(app: AppHandle) -> R<()> {
     updates::install(&app).await.map_err(err)
+}
+
+/// The Polycarp theme for Silas, or null when there is none or it is not valid. The read runs on a
+/// blocking thread: a plain command runs on the main thread, and a stalled disk would freeze the window.
+#[tauri::command]
+pub async fn get_theme() -> Option<crate::theme::Theme> {
+    tauri::async_runtime::spawn_blocking(crate::theme::current).await.ok().flatten()
+}
+
+#[cfg(test)]
+mod tests {
+    /// Tauri runs a command that isn't `async` on the main thread, where the window draws and takes
+    /// input, so the window freezes for as long as one takes. These stay there: each reads memory
+    /// or writes one small file, and the settings writes must keep their order. Devices, network,
+    /// processes and big files go in an `async` command. This list only shrinks.
+    const ON_MAIN_THREAD: &[&str] = &[
+        "accept_pending",
+        "add_correction",
+        "add_term",
+        "clear_history",
+        "correct_history",
+        "delete_history",
+        "delete_model",
+        "dismiss_pending",
+        "export_dictionary",
+        "fix_accessibility",
+        "get_dictionary",
+        "get_history",
+        "get_settings",
+        "get_state",
+        "get_stats",
+        "import_dictionary",
+        "open_permission",
+        "remove_correction",
+        "remove_term",
+        "reset_accessibility",
+        "save_dictionary",
+        "select_model",
+        "set_settings",
+        "show_main",
+        "toggle_recording",
+    ];
+
+    #[test]
+    fn only_the_listed_commands_run_on_the_main_thread() {
+        let mut sync = Vec::new();
+        let mut lines = include_str!("commands.rs").lines().map(str::trim);
+        while let Some(line) = lines.next() {
+            if line != "#[tauri::command]" {
+                continue;
+            }
+            let Some(sig) = lines.find(|l| !l.starts_with("#[") && !l.starts_with("//")) else {
+                break;
+            };
+            if let Some(rest) = sig.strip_prefix("pub fn ") {
+                sync.push(rest.split('(').next().unwrap_or(rest));
+            }
+        }
+        sync.sort_unstable();
+        assert_eq!(sync, ON_MAIN_THREAD, "a new command on the main thread: make it async, or list it with a reason");
+    }
 }
