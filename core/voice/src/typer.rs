@@ -86,12 +86,19 @@ fn chunks(text: &str, size: usize) -> Vec<String> {
     out
 }
 
+/// How many characters (spaces not counted) a tool that types whole strings gets per process.
+/// Small enough that focus and Escape are checked every few words, large enough that a sentence
+/// is a handful of processes.
+const WHOLE_BATCH: usize = 24;
+
 /// The key events for one run of text. A tool that types a whole string per call (wtype,
-/// ydotool) gets the whole run: starting a process per character made a sentence take seconds.
-/// It paces itself, and the double-space shortcut `chunks` guards against is macOS's.
+/// ydotool) gets batches of about `WHOLE_BATCH` characters: starting a process per character made
+/// a sentence take seconds, and one process for the whole run kept typing a long paragraph into
+/// whatever window took focus, with no check until it finished. It paces itself, and the
+/// double-space shortcut `chunks` guards against is macOS's.
 fn events(text: &str, size: usize, whole: bool) -> Vec<String> {
     if whole {
-        vec![text.to_string()]
+        chunks(text, WHOLE_BATCH)
     } else {
         chunks(text, size)
     }
@@ -317,11 +324,24 @@ mod tests {
 
     #[test]
     fn a_tool_that_types_whole_strings_gets_one_call_per_run() {
-        let text = "Man needs no excuse to strive for excellence.";
+        let text = "Man needs no excuse.";
         assert_eq!(events(text, 1, true), vec![text]);
         // Key by key elsewhere, as before.
         assert_eq!(events(text, 1, false), chunks(text, 1));
-        assert!(events(text, 1, false).len() > 30);
+        assert!(events(text, 1, false).len() > 15);
+    }
+
+    #[test]
+    fn a_long_run_reaches_a_whole_string_tool_in_batches_so_focus_is_checked_between_them() {
+        // Review sol-F1: one ydotool process per paragraph kept typing after focus moved.
+        let text = "Man needs no excuse to strive for excellence, and a long dictated paragraph \
+                    must stop when the person changes windows or presses Escape.";
+        let batches = events(text, 1, true);
+        assert!(batches.len() > 3, "{batches:?}");
+        assert_eq!(batches.concat(), text);
+        for b in &batches {
+            assert!(b.chars().filter(|c| !c.is_whitespace()).count() <= WHOLE_BATCH, "{b:?}");
+        }
     }
 
     #[cfg(unix)]
