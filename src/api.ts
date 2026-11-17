@@ -232,12 +232,19 @@ export interface Theme {
   motion: { fast: number; normal: number; slow: number; easing: string; scale_from: number; reduced: boolean };
 }
 
+/** A short line on why a press did nothing or a dictation stopped. The overlay shows it. */
+export interface Notice {
+  kind: "error" | "busy" | "stopped";
+  message: string;
+}
+
 export interface EventMap {
   theme_changed: Theme | null;
   status: StatusEvent;
   level: number;
   transcript: HistoryItem;
   learned: LearnResult;
+  notice: Notice;
   "model-progress": ModelProgress;
   "benchmark-progress": BenchmarkProgress;
   "benchmark-done": Report;
