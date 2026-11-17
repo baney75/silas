@@ -11,6 +11,8 @@ so keep `core/voice` free of Tauri.
 bun install --frozen-lockfile && bun run build && bun run check:theme && bun test && (cd core/voice && cargo test) && (cd src-tauri && cargo test --lib && cargo clippy --lib -- -D warnings)
 ```
 
+On a Mac, also run `swift test` at the repo root (SilasCore, the Swift package the Apple apps pin; macOS CI runs it).
+
 ## Rules
 
 - Never paste. Text goes out as keystrokes (`core/voice/src/typer.rs`); the clipboard is never touched.
