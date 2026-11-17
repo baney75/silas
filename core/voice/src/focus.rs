@@ -33,7 +33,7 @@ pub fn focused() -> Option<u64> {
 /// None and nothing guards the typing or the edit learning, as before.
 #[cfg(target_os = "linux")]
 pub fn focused() -> Option<u64> {
-    hypr::active()
+    hypr::active().map(|w| w.id)
 }
 
 /// True while a password field has the keyboard (macOS secure input). macOS then hides every
@@ -57,6 +57,20 @@ pub fn secure_input() -> bool {
 /// is tested on every platform; only Linux calls it.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod hypr {
+    pub const OVERLAY_TITLE: &str = "Silas Overlay";
+
+    /// One window as Hyprland reports it.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub struct Window {
+        /// Address and class as one id (see `parse`).
+        pub id: u64,
+        /// What `hyprctl dispatch focuswindow` needs to give it the keyboard back.
+        pub address: u64,
+        /// Silas's recording overlay, which can take the keyboard as it opens even though it
+        /// asks not to. Its other windows count as any app's: a click there is a choice.
+        pub overlay: bool,
+    }
+
     /// Running under Hyprland, with `hyprctl` on the PATH.
     fn available() -> bool {
         std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some()
@@ -64,7 +78,7 @@ mod hypr {
                 .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("hyprctl").is_file()))
     }
 
-    pub fn active() -> Option<u64> {
+    pub fn active() -> Option<Window> {
         if !available() {
             return None;
         }
@@ -78,21 +92,37 @@ mod hypr {
         parse(&String::from_utf8_lossy(&out.stdout))
     }
 
+    /// Gives the keyboard to the window at `address`. False when Hyprland refused.
+    pub fn focus(address: u64) -> bool {
+        available()
+            && std::process::Command::new("hyprctl")
+                .args(["dispatch", "focuswindow", &window_arg(address)])
+                .output()
+                .is_ok_and(|o| o.status.success())
+    }
+
+    /// How `hyprctl dispatch` names a window: the address as `activewindow -j` prints it.
+    pub fn window_arg(address: u64) -> String {
+        format!("address:0x{address:x}")
+    }
+
     /// The window's address and class as one id. An address alone can come back for a later
     /// window once the first one closes; the class makes that much less likely to pass. None when
-    /// no window has the keyboard (`{}`) or the reply isn't JSON.
-    pub fn parse(json: &str) -> Option<u64> {
+    /// no window has the keyboard (`{}`) or the reply isn't JSON. The overlay is known by its
+    /// title (`tauri.conf.json`), which holds inside a Flatpak too, where pids don't match.
+    pub fn parse(json: &str) -> Option<Window> {
         let v: serde_json::Value = serde_json::from_str(json).ok()?;
         let addr = v.get("address")?.as_str()?.trim();
-        let addr = u64::from_str_radix(addr.trim_start_matches("0x"), 16).ok().filter(|a| *a != 0)?;
+        let address = u64::from_str_radix(addr.trim_start_matches("0x"), 16).ok().filter(|a| *a != 0)?;
         let class = v.get("class").and_then(|c| c.as_str()).unwrap_or("");
         // FNV-1a over the class, seeded with the address.
-        let mut h = addr ^ 0xcbf2_9ce4_8422_2325;
+        let mut h = address ^ 0xcbf2_9ce4_8422_2325;
         for b in class.bytes() {
             h ^= u64::from(b);
             h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }
-        Some(h)
+        let overlay = v.get("title").and_then(|t| t.as_str()) == Some(OVERLAY_TITLE);
+        Some(Window { id: h, address, overlay })
     }
 }
 
@@ -106,21 +136,42 @@ pub struct Target {
     mac: mac::Target,
     /// Hyprland: the window that had the keyboard, and the last check of it (`linux_here`).
     #[cfg(target_os = "linux")]
-    window: u64,
+    window: hypr::Window,
     #[cfg(target_os = "linux")]
     checked: parking_lot::Mutex<Option<(std::time::Instant, bool)>>,
 }
 
 /// Where the Linux target stands, from the window that had the keyboard and the one that has it
-/// now. None now: Hyprland didn't answer, so nothing is known and typing goes ahead.
-pub fn linux_restore(then: u64, now: Option<u64>) -> Restore {
+/// now. None now: Hyprland didn't answer, so nothing is known and typing goes ahead. When
+/// Silas's overlay took the keyboard, `refocus` hands it back to the target and reports
+/// the window that has it after.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn linux_restore(
+    then: &hypr::Window,
+    now: Option<hypr::Window>,
+    refocus: impl FnOnce(u64) -> Option<hypr::Window>,
+) -> Restore {
     match now {
-        Some(w) if w == then => Restore::InPlace,
+        Some(w) if w.id == then.id => Restore::InPlace,
+        // Silas's overlay took it; nobody chose that, so put the keyboard back.
+        Some(w) if w.overlay && !then.overlay => match refocus(then.address) {
+            Some(w) if w.id == then.id => Restore::Restored,
+            _ => Restore::Failed,
+        },
         // Hyprland could move focus back, but a click there is the user's choice; keep the
         // text in History rather than type into the wrong window.
         Some(_) => Restore::Failed,
         None => Restore::Elsewhere,
     }
+}
+
+/// Hands the keyboard back to the window at `address` and says which window has it now.
+#[cfg(target_os = "linux")]
+fn hypr_refocus(address: u64) -> Option<hypr::Window> {
+    if !hypr::focus(address) {
+        return None;
+    }
+    hypr::active()
 }
 
 impl Target {
@@ -131,7 +182,7 @@ impl Target {
 
     #[cfg(target_os = "linux")]
     pub fn capture() -> Option<Self> {
-        focused().map(|window| Self { window, checked: parking_lot::Mutex::new(None) })
+        hypr::active().map(|window| Self { window, checked: parking_lot::Mutex::new(None) })
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -145,7 +196,7 @@ impl Target {
         #[cfg(target_os = "macos")]
         return self.mac.restore();
         #[cfg(target_os = "linux")]
-        return linux_restore(self.window, focused());
+        return linux_restore(&self.window, hypr::active(), hypr_refocus);
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         Restore::Elsewhere
     }
@@ -160,7 +211,7 @@ impl Target {
                 return here;
             }
         }
-        let here = linux_restore(self.window, focused()) != Restore::Failed;
+        let here = linux_restore(&self.window, hypr::active(), hypr_refocus) != Restore::Failed;
         *checked = Some((now, here));
         here
     }
@@ -903,31 +954,81 @@ mod hypr_tests {
     /// replaced).
     const RECORDED: &str = include_str!("testdata/hyprctl-activewindow.json");
 
+    fn id(json: &str) -> Option<u64> {
+        hypr::parse(json).map(|w| w.id)
+    }
+
+    fn window(id: u64, overlay: bool) -> hypr::Window {
+        hypr::Window { id, address: id * 16, overlay }
+    }
+
     #[test]
     fn hyprland_names_the_window_by_address_and_class() {
-        let id = hypr::parse(RECORDED).expect("a window");
+        let w = hypr::parse(RECORDED).expect("a window");
+        assert_eq!(w.address, 0x55ef19943100);
+        assert!(!w.overlay);
+        let id = w.id;
         // Same address and class: the same id, whatever else changed.
         let moved = RECORDED.replace("\"floating\": true", "\"floating\": false");
-        assert_eq!(hypr::parse(&moved), Some(id));
+        assert_eq!(self::id(&moved), Some(id));
         // Another window, or the same address reused by another app: another id.
-        assert_ne!(hypr::parse(&RECORDED.replace("0x55ef19943100", "0x55ef19943200")), Some(id));
-        assert_ne!(hypr::parse(&RECORDED.replace("\"class\": \"org.omarchy.screensaver\"", "\"class\": \"foot\"")), Some(id));
+        assert_ne!(self::id(&RECORDED.replace("0x55ef19943100", "0x55ef19943200")), Some(id));
+        assert_ne!(self::id(&RECORDED.replace("\"class\": \"org.omarchy.screensaver\"", "\"class\": \"foot\"")), Some(id));
+    }
+
+    #[test]
+    fn the_hand_back_names_the_window_as_hyprland_printed_it() {
+        let w = hypr::parse(RECORDED).expect("a window");
+        assert_eq!(hypr::window_arg(w.address), "address:0x55ef19943100");
+    }
+
+    #[test]
+    fn hyprland_knows_the_overlay_by_its_title() {
+        let titled = |t: &str| RECORDED.replacen("\"title\": \"(scrubbed)\"", &format!("\"title\": \"{t}\""), 1);
+        assert!(hypr::parse(&titled(hypr::OVERLAY_TITLE)).expect("a window").overlay);
+        // Silas's main window is a window like any other.
+        assert!(!hypr::parse(&titled("Silas")).expect("a window").overlay);
+        assert!(!hypr::parse(RECORDED).expect("a window").overlay);
+    }
+
+    #[test]
+    fn the_overlay_title_matches_the_window_config() {
+        let conf = include_str!("../../../src-tauri/tauri.conf.json");
+        assert!(conf.contains(&format!("\"title\": \"{}\"", hypr::OVERLAY_TITLE)));
     }
 
     #[test]
     fn no_window_or_no_answer_is_none() {
-        assert_eq!(hypr::parse("{}"), None);
-        assert_eq!(hypr::parse("Invalid"), None);
-        assert_eq!(hypr::parse(""), None);
-        assert_eq!(hypr::parse(r#"{"address": "0x0", "class": "foot"}"#), None);
-        assert_eq!(hypr::parse(r#"{"address": "", "class": "foot"}"#), None);
+        assert_eq!(id("{}"), None);
+        assert_eq!(id("Invalid"), None);
+        assert_eq!(id(""), None);
+        assert_eq!(id(r#"{"address": "0x0", "class": "foot"}"#), None);
+        assert_eq!(id(r#"{"address": "", "class": "foot"}"#), None);
     }
 
     #[test]
     fn the_linux_target_types_only_into_the_window_it_started_in() {
-        assert_eq!(linux_restore(7, Some(7)), Restore::InPlace);
-        assert_eq!(linux_restore(7, Some(8)), Restore::Failed);
+        let never = |_| -> Option<hypr::Window> { panic!("only the overlay is moved off") };
+        assert_eq!(linux_restore(&window(7, false), Some(window(7, false)), never), Restore::InPlace);
+        assert_eq!(linux_restore(&window(7, false), Some(window(8, false)), never), Restore::Failed);
         // Hyprland didn't answer: as before, nothing stops the typing.
-        assert_eq!(linux_restore(7, None), Restore::Elsewhere);
+        assert_eq!(linux_restore(&window(7, false), None, never), Restore::Elsewhere);
+    }
+
+    /// Review second-F4 on #23: on Hyprland the overlay can take the keyboard as it opens.
+    /// Before, every dictation then saw another window, went to History and typed nothing.
+    #[test]
+    fn the_overlay_taking_the_keyboard_hands_it_back() {
+        let target = window(7, false);
+        let mut asked = None;
+        let got = linux_restore(&target, Some(window(9, true)), |address| {
+            asked = Some(address);
+            Some(target)
+        });
+        assert_eq!(got, Restore::Restored);
+        assert_eq!(asked, Some(target.address));
+        // Hyprland refused, or something else has it after: still not safe to type.
+        assert_eq!(linux_restore(&target, Some(window(9, true)), |_| None), Restore::Failed);
+        assert_eq!(linux_restore(&target, Some(window(9, true)), |_| Some(window(8, false))), Restore::Failed);
     }
 }
