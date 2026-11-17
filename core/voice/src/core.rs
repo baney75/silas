@@ -25,8 +25,9 @@ use crate::typer;
 /// so an implementation must return quickly and must not call back into [`Core`] methods
 /// that take the status lock (`set_status`).
 pub trait Host: Send + Sync + 'static {
-    /// A named event with a JSON payload: `status`, `transcript`, `learned`,
-    /// `model-progress`, `benchmark-progress`, `benchmark-done`, `benchmark-error`.
+    /// A named event with a JSON payload: `status`, `transcript`, `learned`, `notice`,
+    /// `model-progress`, `benchmark-progress`, `benchmark-done`, `benchmark-error`. A host
+    /// with an overlay keeps it up for a `notice` (see [`overlay_shown`]).
     fn emit(&self, event: &str, payload: serde_json::Value);
     /// Microphone level in 0..=1, many times a second while recording.
     fn level(&self, level: f32);
@@ -1562,9 +1563,37 @@ pub fn overlay_status(s: Status) -> bool {
     matches!(s, Status::Recording | Status::Transcribing | Status::Typing)
 }
 
+/// How long a notice keeps the overlay up: about as long as the error it explains.
+pub const NOTICE_FOR: Duration = Duration::from_secs(4);
+
+/// Whether the overlay is up. A dictation's statuses show it while the setting is on. A notice
+/// shows it until `notice_until` whatever the setting and the status, since a failure nobody
+/// sees reads as Silas doing nothing.
+pub fn overlay_shown(status: Status, enabled: bool, notice_until: Option<Instant>, now: Instant) -> bool {
+    (enabled && overlay_status(status)) || notice_until.is_some_and(|until| now < until)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review sol-F2 on #23: an error's notice went out while its status hid the overlay, and
+    /// with the main window hidden nothing showed it.
+    #[test]
+    fn a_notice_keeps_the_overlay_up_until_it_runs_out() {
+        let now = Instant::now();
+        let until = Some(now + NOTICE_FOR);
+        assert!(overlay_shown(Status::Error, true, until, now));
+        // The overlay setting is off and the main window is hidden: the notice still shows.
+        assert!(overlay_shown(Status::Error, false, until, now));
+        assert!(overlay_shown(Status::Ready, false, until, now + NOTICE_FOR / 2));
+        assert!(!overlay_shown(Status::Error, true, until, now + NOTICE_FOR));
+        assert!(!overlay_shown(Status::Error, true, None, now));
+        // Without a notice, as before: the setting and the status decide.
+        assert!(overlay_shown(Status::Recording, true, None, now));
+        assert!(!overlay_shown(Status::Recording, false, None, now));
+        assert!(overlay_shown(Status::Typing, true, Some(now), now));
+    }
 
     #[test]
     fn the_mac_key_message_explains_a_stale_grant() {

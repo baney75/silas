@@ -164,6 +164,7 @@ interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string
 | `level` | `number` 0..1 microphone level, ~30 Hz while recording (overlay) |
 | `transcript` | `HistoryItem` just typed |
 | `learned` | `LearnResult` when Silas learned from an edit |
+| `notice` | `{ kind: "error" \| "busy" \| "stopped", message }` why a press did nothing or a dictation stopped. The overlay shows it for 4 s (`NOTICE_FOR`) even when its setting is off; the main window shows it as a toast |
 | `benchmark-progress` | `{ model, clip, clips }` clips finished so far for `model` (0 when it starts) |
 | `benchmark-done` | `Report` just saved |
 | `benchmark-error` | `{ message }` |

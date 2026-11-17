@@ -74,6 +74,7 @@ function wireEvents() {
     notify("history");
     void refreshStats();
   });
+  void on("notice", ({ kind, message }) => toast(message, kind === "error" ? "error" : "info", 5000));
   void on("learned", (res) => {
     for (const c of res.learned) toast(`Learned: ${c.from} → ${c.to}`, "learned", 4200);
     void refreshDict();

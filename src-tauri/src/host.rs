@@ -1,9 +1,21 @@
 //! The Tauri side of the engine's [`Host`]: events go to the webviews, the status goes to the
 //! tray and the overlay window.
 
-use polycarp_voice::core::{overlay_status, Host, Shared, Status};
+use polycarp_voice::core::{overlay_shown, Host, Shared, Status, NOTICE_FOR};
 use serde_json::Value;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager};
+
+/// Until when the last notice keeps the overlay up.
+static NOTICE_UNTIL: parking_lot::Mutex<Option<Instant>> = parking_lot::Mutex::new(None);
+/// The overlay setting as of the last status, for a notice's show and hide.
+static OVERLAY_ON: AtomicBool = AtomicBool::new(true);
+
+/// Whether the overlay should be up now, for this status.
+fn shown(status: Status) -> bool {
+    overlay_shown(status, OVERLAY_ON.load(Ordering::Relaxed), *NOTICE_UNTIL.lock(), Instant::now())
+}
 
 pub struct TauriHost {
     app: AppHandle,
@@ -17,7 +29,20 @@ impl TauriHost {
 
 impl Host for TauriHost {
     fn emit(&self, event: &str, payload: Value) {
+        let notice = event == "notice";
         let _ = self.app.emit(event, payload);
+        if notice {
+            // The overlay shows it even with the main window hidden, then hides once it runs out.
+            *NOTICE_UNTIL.lock() = Some(Instant::now() + NOTICE_FOR);
+            self.overlay(self.status());
+            let app = self.app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(NOTICE_FOR + std::time::Duration::from_millis(50));
+                if let Some(w) = app.get_webview_window("overlay") {
+                    place_overlay(&app, w);
+                }
+            });
+        }
     }
 
     fn level(&self, level: f32) {
@@ -26,7 +51,8 @@ impl Host for TauriHost {
 
     fn status_changed(&self, status: Status, show_overlay: bool) {
         crate::tray::refresh(&self.app, status);
-        self.overlay(status, show_overlay);
+        OVERLAY_ON.store(show_overlay, Ordering::Relaxed);
+        self.overlay(status);
     }
 
     fn show_main(&self) {
@@ -48,12 +74,16 @@ impl Host for TauriHost {
 }
 
 impl TauriHost {
-    fn overlay(&self, s: Status, enabled: bool) {
+    /// The engine's status now. Only the status lock, held for a copy.
+    fn status(&self) -> Status {
+        self.app.try_state::<Shared>().map_or(Status::Ready, |c| c.status().0)
+    }
+
+    fn overlay(&self, s: Status) {
         let Some(w) = self.app.get_webview_window("overlay") else {
             return;
         };
-        let show = enabled && overlay_status(s);
-        if show {
+        if shown(s) {
             if let Ok(Some(monitor)) = w.primary_monitor().or_else(|_| w.current_monitor()) {
                 let size = monitor.size();
                 let pos = monitor.position();
@@ -64,7 +94,7 @@ impl TauriHost {
                 let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
             }
         }
-        place_overlay(&self.app, w, enabled);
+        place_overlay(&self.app, w);
     }
 }
 
@@ -78,14 +108,11 @@ impl TauriHost {
 /// before each show puts it back on every Space; full-screen auxiliary lets it sit over a
 /// full-screen app. `orderFrontRegardless` orders it in without making it key or activating
 /// Silas, which runs in the background.
-fn place_overlay(app: &AppHandle, w: tauri::WebviewWindow, enabled: bool) {
+fn place_overlay(app: &AppHandle, w: tauri::WebviewWindow) {
     let app = app.clone();
     let _ = w.clone().run_on_main_thread(move || {
         // Only the status lock, held for a copy: no thread holds it while waiting on this one.
-        let show = enabled
-            && app
-                .try_state::<Shared>()
-                .is_some_and(|c| overlay_status(c.status().0));
+        let show = app.try_state::<Shared>().is_some_and(|c| shown(c.status().0));
         #[cfg(target_os = "macos")]
         order_overlay(&w, show);
         #[cfg(not(target_os = "macos"))]

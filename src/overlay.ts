@@ -1,15 +1,18 @@
-// The floating recording pill. Driven only by events: status, level and learned.
+// The floating recording pill. Driven only by events: status, level, notice and learned.
 import "./overlay.css";
 import { inTauri, on, type Status } from "./api";
 import { startOverlayDemo } from "./mock";
 import { initTheme, themeReducedMotion } from "./theme";
 
-type Face = "idle" | "recording" | "writing" | "typing" | "learned";
+type Face = "idle" | "recording" | "writing" | "typing" | "learned" | "notice";
 
 const pill = document.getElementById("pill")!;
 const barsEl = document.getElementById("bars")!;
 const elapsedEl = document.getElementById("elapsed")!;
 const learnedEl = document.getElementById("learned")!;
+const noticeEl = document.getElementById("notice")!;
+// The host keeps the window up as long (NOTICE_FOR in core.rs).
+const NOTICE_MS = 4000;
 
 const BARS = 16;
 const systemReduced = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -29,6 +32,8 @@ let lastPush = 0;
 let raf = 0;
 let startedAt = 0;
 let learnedTimer = 0;
+let noticeTimer = 0;
+let lastStatus: Status = "ready";
 let face: Face = "idle";
 
 function setFace(next: Face) {
@@ -78,11 +83,14 @@ function onStatus(status: Status) {
     if (face !== "recording") setFace("recording");
   } else if (status === "transcribing") setFace("writing");
   else if (status === "typing") setFace("typing");
-  else if (face !== "learned") setFace("idle");
+  else if (face !== "learned" && face !== "notice") setFace("idle");
 }
 
 void initTheme();
-void on("status", ({ status }) => onStatus(status));
+void on("status", ({ status }) => {
+  lastStatus = status;
+  onStatus(status);
+});
 void on("level", (level) => {
   latest = level;
 });
@@ -103,6 +111,20 @@ void on("learned", (res) => {
   setFace("learned");
   window.clearTimeout(learnedTimer);
   learnedTimer = window.setTimeout(() => setFace("idle"), 2200);
+});
+
+void on("notice", ({ kind, message }) => {
+  noticeEl.textContent = message;
+  noticeEl.title = message;
+  pill.dataset.kind = kind;
+  setFace("notice");
+  window.clearTimeout(noticeTimer);
+  noticeTimer = window.setTimeout(() => {
+    if (face !== "notice") return;
+    // Back to what the status shows now (still typing, say), or gone.
+    setFace("idle");
+    onStatus(lastStatus);
+  }, NOTICE_MS);
 });
 
 if (!inTauri) {
