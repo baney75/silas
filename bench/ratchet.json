@@ -2,5 +2,20 @@
   "model": "parakeet-v3",
   "manifest": "bench/manifest.jsonl",
   "subset": "bench/subsets/ratchet.txt",
-  "set": "~/.cache/silas-bench/bench-set-v1"
+  "set": "~/.cache/silas-bench/bench-set-v1",
+  "metrics": {
+    "wer": {
+      "accent": 0.286885,
+      "clean": 0.011111,
+      "code": 0.263158,
+      "dictation": 0.1875,
+      "longform": 0.028497,
+      "noise": 0.068493
+    },
+    "formatted_error": 0.193396,
+    "t_final_ms_median": 963.1,
+    "peak_rss_mb": 1497.1,
+    "timing": "real time"
+  },
+  "updated": "2026-11-17"
 }
