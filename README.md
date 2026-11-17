@@ -30,7 +30,9 @@ irm https://raw.githubusercontent.com/baney75/silas/main/install.ps1 | iex
 installs the `.deb` on Debian and Ubuntu, the `.rpm` on Fedora and openSUSE Tumbleweed, and otherwise an
 AppImage with a launcher entry and a udev rule so Silas can read the hold-to-talk key.
 
-Run the same line again to update by hand. Silas also updates itself.
+Run the same line again to update by hand. Silas also updates itself. macOS installs the stable
+channel (`SILAS_CHANNEL=nightly` for nightly); Windows and Linux install nightly until a stable
+release carries them. Pick any channel later in Settings › Updates.
 
 <details>
 <summary>Rather download it yourself?</summary>
@@ -111,16 +113,19 @@ from a terminal.
 
 ## Updates
 
-| Channel | Platforms | Source |
+| Channel | For | Source |
 | --- | --- | --- |
-| Stable | macOS | `vX.Y.Z` releases, built and signed on the maintainer's Mac (`scripts/release-stable.sh`) |
-| Nightly | macOS, Windows, Linux | the rolling `nightly` pre-release, rebuilt by CI each night when `main` changed |
+| Stable | Everyone. The default. | `vX.Y.Z` releases, promoted from a nightly at least 72 hours old. macOS today; Windows and Linux from the next stable release |
+| Nightly | People who want new work first | the rolling `nightly` pre-release, rebuilt by CI each night when `main` changed |
+| Dev | Testing a change | the rolling `dev` pre-release, rebuilt by CI on every merge to `main` |
 
-Silas checks at launch and every four hours. With auto-update on, it installs once it has
-been idle for two minutes. Each channel has its own signing key, and Silas refuses an update
-that isn't signed by its channel's key. The stable key never leaves the release Mac. Mac nightly
-builds are ad-hoc signed until the repo has a Developer ID certificate in its secrets, so macOS
-asks for Accessibility again after each nightly update. See [docs/signing.md](docs/signing.md).
+Choose the channel in Settings › Updates. Switching replaces the install, and it may go to a lower
+version. Until a stable release carries Windows and Linux, those systems on stable get nightly.
+Silas checks at launch and every four hours. With auto-update on, it installs once it has been
+idle for two minutes. Stable has its own signing key, which never leaves the release Mac; nightly
+and dev share a second one, and Silas refuses an update that isn't signed by its channel's key. Mac
+nightly and dev builds are published only when the repo has a Developer ID certificate in its
+secrets. See [docs/channels.md](docs/channels.md) and [docs/signing.md](docs/signing.md).
 
 ## If something's off
 

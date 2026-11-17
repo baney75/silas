@@ -1,0 +1,323 @@
+name: Channel build
+# Builds one release channel into a private draft (docs/channels.md). Called by nightly.yml,
+# dev.yml and promote.yml; it never runs on its own.
+#
+# nightly, dev: macOS, Windows and Linux. Updater bundles are signed with the CI key
+#   (TAURI_SIGNING_PRIVATE_KEY, the nightly key). Only when every platform succeeded does the
+#   publish job write one latest.json and swap the draft in as the rolling `nightly` or `dev`
+#   release, so users never see a half-built release. The Mac build ships only when the APPLE_*
+#   signing secrets exist; an ad-hoc one is built but never uploaded, and latest.json then has no
+#   darwin entry (docs/signing.md).
+# stable: Windows and Linux only, into a draft for vX.Y.Z with unsigned updater bundles. The stable
+#   updater key never leaves the release Mac: scripts/release-stable.sh adds the Mac build there,
+#   signs every updater bundle, writes latest.json and publishes the draft.
+#
+# Re-run with "Re-run all jobs", never "Re-run failed jobs": a failed run deletes its draft.
+on:
+  workflow_call:
+    inputs:
+      channel:
+        description: nightly, dev or stable
+        type: string
+        required: true
+      version:
+        description: Stable only, X.Y.Z. Nightly and dev versions come from scripts/channel-version.sh.
+        type: string
+        default: ""
+      ref:
+        description: The commit to build. Defaults to the caller's commit.
+        type: string
+        default: ""
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY:
+        required: false
+      APPLE_CERTIFICATE:
+        required: false
+      APPLE_CERTIFICATE_PASSWORD:
+        required: false
+      APPLE_SIGNING_IDENTITY:
+        required: false
+env:
+  REPO: ${{ github.repository }}
+  CHANNEL: ${{ inputs.channel }}
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      sha: ${{ steps.v.outputs.sha }}
+      skip: ${{ steps.v.outputs.skip }}
+      draft: ${{ steps.v.outputs.draft }}
+      matrix: ${{ steps.v.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STABLE_VERSION: ${{ inputs.version }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          mac='{"os":"macos-15","args":"--target aarch64-apple-darwin --bundles app,dmg"}'
+          linux='{"os":"ubuntu-24.04","args":"--bundles deb,rpm,appimage"}'
+          win='{"os":"windows-latest","args":"--bundles nsis"}'
+          case "$CHANNEL" in
+            nightly | dev)
+              version=$(scripts/channel-version.sh next "$CHANNEL" "$sha")
+              matrix="[$mac,$linux,$win]" ;;
+            stable)
+              [[ "$STABLE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "stable version must be X.Y.Z, not '$STABLE_VERSION'" >&2; exit 1; }
+              version=$STABLE_VERSION
+              # The Mac build and every updater signature come from scripts/release-stable.sh.
+              matrix="[$linux,$win]" ;;
+            *) echo "unknown channel $CHANNEL" >&2; exit 1 ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "matrix={\"include\":$matrix}" >> "$GITHUB_OUTPUT"
+          # A scheduled nightly is skipped when main has not changed since the last one.
+          if built=$(gh api "repos/$REPO/git/ref/tags/$CHANNEL" -q .object.sha 2>/dev/null); then :; else built=""; fi
+          if [ "$CHANNEL" = nightly ] && [ "$EVENT" = schedule ] && [ "$built" = "$sha" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          if [ "$CHANNEL" = stable ]; then
+            # A failed earlier run may have left a draft for this tag; release-stable.sh must find one.
+            gh api "repos/$REPO/releases" --paginate -q ".[] | select(.draft and .tag_name == \"v$version\") | .id" |
+              while read -r old; do gh api -X DELETE "repos/$REPO/releases/$old"; done
+            id=$(gh api "repos/$REPO/releases" -f tag_name="v$version" -f target_commitish="$sha" \
+              -f name="Silas $version" -F draft=true -F prerelease=false \
+              -f body="Windows and Linux built by CI from $sha. scripts/release-stable.sh adds macOS, signs the updates and publishes." -q .id)
+          else
+            title=$([ "$CHANNEL" = nightly ] && echo Nightly || echo Dev)
+            id=$(gh api "repos/$REPO/releases" -f tag_name="$CHANNEL-build-$GITHUB_RUN_ID" -f target_commitish="$sha" \
+              -f name="Silas $title $version" -F draft=true -F prerelease=true -q .id)
+          fi
+          echo "draft=$id" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    strategy:
+      fail-fast: true
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      # The same ort-sys pin as ci.yml.
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: ${{ matrix.os == 'windows-latest' && '1.99.1' || 'stable' }}
+          targets: ${{ matrix.os == 'macos-15' && 'aarch64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with: { workspaces: src-tauri, key: "${{ matrix.os }}" }
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libudev-dev libxdo-dev
+      - run: bun install --frozen-lockfile
+      - name: Set the channel version
+        shell: bash
+        run: |
+          jq --arg v "${{ needs.prepare.outputs.version }}" '.version = $v' src-tauri/tauri.conf.json > t.json && mv t.json src-tauri/tauri.conf.json
+      - name: Build
+        shell: bash
+        env:
+          # Stable never gets the CI key, even if a caller passes it: stable updates are signed
+          # on the release Mac with the stable key.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.channel != 'stable' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          # macOS keeps Accessibility and Microphone grants only while the signature's
+          # designated requirement stays the same. See docs/signing.md.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          if [ "${{ runner.os }}" = macOS ] && [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "Signing with the stable identity from secrets."
+          else
+            # Tauri tries to import a certificate whenever the variable exists, even empty.
+            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD
+            export APPLE_SIGNING_IDENTITY=-
+            if [ "${{ runner.os }}" = macOS ]; then
+              echo "::warning title=Mac build not published::APPLE_CERTIFICATE or APPLE_SIGNING_IDENTITY is missing, so this Mac build is ad-hoc signed. It is built to prove it compiles, but not uploaded: an ad-hoc build is a new app to macOS and leaves Accessibility on for the old signature while the new one is not trusted. See docs/signing.md."
+            fi
+          fi
+          if [ "$CHANNEL" = stable ]; then
+            # Without the private key Tauri refuses to make updater artifacts. On Windows and Linux
+            # the installers are the updater bundles, so nothing is lost; the Mac signs them.
+            unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+            bunx tauri build ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          else
+            bunx tauri build ${{ matrix.args }}
+          fi
+      - name: Check the designated requirement
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          SIGNED: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_SIGNING_IDENTITY != '' }}
+        run: |
+          # A signed build must match the last stable release (scripts/release-requirement.txt),
+          # or moving between channels asks for permissions again. See docs/signing.md.
+          if [ "$SIGNED" = true ]; then
+            scripts/check-requirement.sh "$(find src-tauri/target -type d -path '*release/bundle/macos/Silas.app' | head -1)"
+          else
+            scripts/check-requirement.sh --pin
+          fi
+      - name: Upload to the draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.channel != 'stable' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          MAC_SIGNED: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_SIGNING_IDENTITY != '' }}
+        run: |
+          set -euo pipefail
+          # Fail closed: an ad-hoc Mac build never reaches the draft, so it can't become the
+          # channel's Mac asset. The publish job leaves darwin out of latest.json to match.
+          if [ "${{ runner.os }}" = macOS ] && [ "$MAC_SIGNED" != true ]; then
+            echo "Ad-hoc Mac build: not uploaded. See docs/signing.md."
+            exit 0
+          fi
+          mkdir -p out
+          bundle=$(find src-tauri/target -type d -path '*release/bundle' | head -1)
+          case "${{ runner.os }}" in
+            macOS)
+              cp "$bundle/macos/Silas.app.tar.gz" out/Silas_aarch64.app.tar.gz
+              cp "$bundle/macos/Silas.app.tar.gz.sig" out/Silas_aarch64.app.tar.gz.sig
+              cp "$bundle"/dmg/*.dmg out/Silas_aarch64.dmg ;;
+            Linux)
+              cp "$bundle"/deb/*.deb* "$bundle"/rpm/*.rpm* "$bundle"/appimage/*.AppImage* out/ ;;
+            Windows)
+              cp "$bundle"/nsis/*-setup.exe* out/ ;;
+          esac
+          if [ "$CHANNEL" != stable ]; then
+            # Every installable file needs an updater signature; sign any the bundler skipped.
+            for f in out/*; do
+              case "$f" in *.sig) continue ;; esac
+              [ -f "$f.sig" ] || bunx tauri signer sign "$f" > /dev/null
+            done
+          fi
+          ls -la out
+          for f in out/*; do
+            # The version's +sha7 would reach GitHub as a space in the upload's query string.
+            name=$(basename "$f"); name=${name//+/.}
+            curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/octet-stream" \
+              --data-binary @"$f" \
+              "https://uploads.github.com/repos/$REPO/releases/${{ needs.prepare.outputs.draft }}/assets?name=$name" > /dev/null
+          done
+
+  publish:
+    needs: [prepare, build]
+    if: inputs.channel != 'stable' && needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+      - name: Write latest.json and swap the draft in
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Same test as the build job: without these the Mac leg uploads nothing.
+          MAC_SIGNED: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_SIGNING_IDENTITY != '' }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          set -euo pipefail
+          id=${{ needs.prepare.outputs.draft }}
+          base="https://github.com/$REPO/releases/download/$CHANNEL"
+          gh api "repos/$REPO/releases/$id/assets" --paginate -q '.[] | [.name, .url, (.digest // "")] | @tsv' > assets.tsv
+          platforms='{}'
+          add() { # platform-key asset-name
+            sig_url=$(awk -F'\t' -v n="$2.sig" '$1==n {print $2}' assets.tsv)
+            [ -n "$sig_url" ] || { echo "no signature for $2" >&2; exit 1; }
+            sig=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" "$sig_url")
+            sha256=$(awk -F'\t' -v n="$2" '$1==n {sub(/^sha256:/, "", $3); print $3}' assets.tsv)
+            platforms=$(jq --arg k "$1" --arg s "$sig" --arg u "$base/$2" --arg h "$sha256" \
+              '. + {($k): ({signature: $s, url: $u} + (if $h == "" then {} else {sha256: $h} end))}' <<< "$platforms")
+          }
+          while IFS=$'\t' read -r name _; do
+            case "$name" in
+              Silas_aarch64.app.tar.gz) add darwin-aarch64 "$name" ;;
+              *.AppImage) add linux-x86_64 "$name"; add linux-x86_64-appimage "$name" ;;
+              *.deb) add linux-x86_64-deb "$name" ;;
+              *.rpm) add linux-x86_64-rpm "$name" ;;
+              *-setup.exe) add windows-x86_64 "$name"; add windows-x86_64-nsis "$name" ;;
+            esac
+          done < assets.tsv
+          required="linux-x86_64 linux-x86_64-deb linux-x86_64-rpm windows-x86_64"
+          if [ "$CHANNEL" = nightly ]; then
+            title=Nightly notes="Nightly build. Untested on Windows and Linux."
+          else
+            title=Dev notes="Dev build of every merge to main, for testing changes. Expect breakage."
+          fi
+          if [ "$MAC_SIGNED" = true ]; then
+            required="darwin-aarch64 $required"
+          else
+            # An ad-hoc Mac asset must never be offered, even if one slipped into the draft.
+            if jq -e 'has("darwin-aarch64")' <<< "$platforms" > /dev/null; then
+              echo "darwin-aarch64 is in the draft but the Mac signing secrets are missing" >&2; exit 1
+            fi
+            notes="$notes No macOS build: the Mac signing secrets are missing (docs/signing.md)."
+          fi
+          for k in $required; do
+            jq -e --arg k "$k" 'has($k)' <<< "$platforms" > /dev/null || { echo "missing $k" >&2; exit 1; }
+          done
+          # Refuse to publish a build that is not newer than the one the feed already offers.
+          if feed=$(curl -fsSL "$base/latest.json" | jq -r .version); then
+            scripts/channel-version.sh newer "$VERSION" "$feed" || { echo "the $CHANNEL feed already holds $feed, not older than $VERSION" >&2; exit 1; }
+          fi
+          jq -n --arg v "$VERSION" --arg c "$CHANNEL" --arg sha "$SHA" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg n "$notes" --argjson p "$platforms" \
+            '{product: "silas", channel: $c, version: $v, commit: $sha, notes: $n, pub_date: $d, platforms: $p}' > latest.json
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" --data-binary @latest.json \
+            "https://uploads.github.com/repos/$REPO/releases/$id/assets?name=latest.json" > /dev/null
+
+          # The outgoing nightly stays installable and promotable as nightly-YYYYMMDDHHMMSS for 14
+          # days; the outgoing dev build is dropped.
+          if old_sha=$(gh api "repos/$REPO/git/ref/tags/$CHANNEL" -q .object.sha 2>/dev/null); then
+            if [ "$CHANNEL" = nightly ] && old=$(gh api "repos/$REPO/releases/tags/nightly" -q '[.id, .name, .published_at] | @tsv' 2>/dev/null); then
+              IFS=$'\t' read -r old_id old_name old_date <<< "$old"
+              stamp=$(grep -oE 'nightly\.[0-9]{12,14}' <<< "$old_name" | cut -d. -f2 || true)
+              stamp=${stamp:-$(date -u -d "$old_date" +%Y%m%d%H%M%S)}
+              gh api "repos/$REPO/git/refs" -f ref="refs/tags/nightly-$stamp" -f sha="$old_sha" > /dev/null 2>&1 || true
+              gh api -X PATCH "repos/$REPO/releases/$old_id" -f tag_name="nightly-$stamp" > /dev/null
+              gh api -X DELETE "repos/$REPO/git/refs/tags/nightly" || true
+            else
+              gh release delete "$CHANNEL" -R "$REPO" --cleanup-tag --yes 2>/dev/null || gh api -X DELETE "repos/$REPO/git/refs/tags/$CHANNEL" || true
+            fi
+          fi
+          gh api -X PATCH "repos/$REPO/releases/$id" -f tag_name="$CHANNEL" -f target_commitish="$SHA" \
+            -F draft=false -F prerelease=true -f make_latest=false -f name="Silas $title $VERSION" \
+            -f body="Built from $SHA. $notes" > /dev/null
+      - name: Drop nightlies older than 14 days
+        if: inputs.channel == 'nightly'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cutoff=$(date -u -d '14 days ago' +%s)
+          gh api "repos/$REPO/releases" --paginate \
+            -q '.[] | select((.draft | not) and (.tag_name | test("^nightly-[0-9]{12,14}$"))) | [.tag_name, .published_at] | @tsv' |
+            while IFS=$'\t' read -r tag date; do
+              [ "$(date -u -d "$date" +%s)" -lt "$cutoff" ] || continue
+              echo "dropping $tag ($date)"
+              gh release delete "$tag" -R "$REPO" --cleanup-tag --yes
+            done
+
+  cleanup:
+    needs: [prepare, build, publish]
+    if: always() && needs.prepare.outputs.draft != '' && (needs.build.result != 'success' || (inputs.channel != 'stable' && needs.publish.result != 'success'))
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X DELETE "repos/$REPO/releases/${{ needs.prepare.outputs.draft }}" || true

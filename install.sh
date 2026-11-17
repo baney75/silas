@@ -3,8 +3,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | sh
 # Remove it (your dictionary and history stay):
 #   curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | sh -s -- --uninstall
-# macOS gets the stable channel (SILAS_CHANNEL=nightly for nightly); Linux gets nightly,
-# the only Linux channel. Other knobs: SILAS_INSTALL_DIR (macOS, default /Applications),
+# macOS gets the stable channel (SILAS_CHANNEL=nightly for nightly); Linux gets nightly
+# until a stable release carries Linux (docs/channels.md). Other knobs: SILAS_INSTALL_DIR (macOS, default /Applications),
 # SILAS_LINUX_FORMAT=appimage (skip the .deb/.rpm), SILAS_NO_OPEN=1 (don't launch Silas),
 # SILAS_ALLOW_NEW_SIGNATURE=1 (macOS: replace a Silas signed with a different certificate).
 set -eu

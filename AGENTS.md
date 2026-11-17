@@ -18,13 +18,15 @@ bun install --frozen-lockfile && bun run build && bun run check:theme && bun tes
 - Fuzzy matching must not touch common English words (`core/voice/src/dictionary.rs` guards with
   `core/voice/data/common-en.txt`). Add a test to `common_words_are_never_bent_into_jargon` for any
   new matching rule.
-- Stable releases are macOS only and come from `scripts/release-stable.sh` on Donovan's Mac
-  (Developer ID Application, else Apple Development; a stable designated requirement keeps macOS
-  permissions across updates). CI builds nightly only, ad-hoc unless the signing secrets exist.
-  See `docs/signing.md`.
+- Channels are stable, nightly and dev (`docs/channels.md`). `promote.yml` moves `stable`, tags
+  `vX.Y.Z` and builds the Windows and Linux drafts; `scripts/release-stable.sh` on Donovan's Mac
+  builds and signs the Mac app (Developer ID Application, else Apple Development; a stable
+  designated requirement keeps macOS permissions across updates), signs every stable update and
+  publishes. No workflow starts on a pushed tag, and none may name a stable signing secret
+  (`scripts/check-channels.sh`). See `docs/signing.md`.
 - Reading a permission never asks for it. Requests go through `PermissionGate` in
   `core/voice/src/permissions.rs`: preflight first, never ask when granted, each prompt at most once per run.
-- Two updater keys. Nightly: `~/.tauri/silas.key`, also the `TAURI_SIGNING_PRIVATE_KEY` repo
+- Two updater keys. Nightly and dev: `~/.tauri/silas.key`, also the `TAURI_SIGNING_PRIVATE_KEY` repo
   secret. Stable: `~/.tauri/silas-stable.key`, which never leaves the Mac. `updates.rs` pins each
   channel to its own public key. Never print, copy or commit either private key.
 - Never call `set_status` (it waits on the main thread for the tray) while holding a lock, and

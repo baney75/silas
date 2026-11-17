@@ -43,6 +43,15 @@ pub trait Host: Send + Sync + 'static {
     fn is_nightly(&self) -> bool {
         false
     }
+    /// The channel this build came from (`store::build_channel`). A fresh install starts on it,
+    /// so a nightly or dev build doesn't jump to stable.
+    fn build_channel(&self) -> &'static str {
+        if self.is_nightly() {
+            "nightly"
+        } else {
+            "stable"
+        }
+    }
     /// What messages call the app ("Silas" in the Tauri app, "Polycarp" in the native one).
     fn product_name(&self) -> String {
         "Silas".into()
@@ -385,11 +394,9 @@ impl Core {
             );
             store::migrate_hotkey(&mut settings, &store::read_raw("settings.json"));
         }
-        // A fresh nightly install stays on nightly instead of jumping to stable.
-        if !store::exists("settings.json")
-            && host.is_nightly()
-        {
-            settings.update_channel = "nightly".into();
+        // A fresh nightly or dev install stays on its channel instead of jumping to stable.
+        if !store::exists("settings.json") {
+            settings.update_channel = host.build_channel().into();
         }
         // A saved key this build can't use is replaced, not kept: every later settings save sends it
         // back and would be refused for it.
@@ -952,9 +959,7 @@ impl Core {
         let mut settings = settings;
         let trigger = Trigger::parse(&settings.hotkey)
             .ok_or_else(|| format!("{} is not a key {} can use", settings.hotkey, self.host.product_name()))?;
-        if !cfg!(target_os = "macos") {
-            settings.update_channel = "nightly".into();
-        }
+        settings.update_channel = settings.effective_channel().into();
         let old = {
             let mut cur = self.settings.lock();
             settings.model = cur.model.clone();

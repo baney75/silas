@@ -1,0 +1,19 @@
+name: Dev
+# Rebuilds the rolling `dev` pre-release for macOS, Windows and Linux on every merge to `main`.
+# The build itself is channel-build.yml, shared with nightly.yml and promote.yml; see it and
+# docs/channels.md. A newer merge cancels the build in progress.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: dev
+  cancel-in-progress: true
+jobs:
+  dev:
+    uses: ./.github/workflows/channel-build.yml
+    with:
+      channel: dev
+    secrets: inherit

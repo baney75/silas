@@ -51,7 +51,7 @@ export interface Settings {
 
 export type ModelSource = "default" | "registry" | "benchmark" | "user";
 
-export type UpdateChannel = "stable" | "nightly";
+export type UpdateChannel = "stable" | "nightly" | "dev";
 
 export interface UpdateInfo {
   version: string;
