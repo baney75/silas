@@ -93,8 +93,8 @@ def _number_words(words):
                 current += ONES[w]
                 last = "ones"
             elif w in TENS:
-                # Years and similar pairs: "nineteen ninety", "twenty twenty".
-                if last in ("ones", "tens") and 10 <= current < 100 and total == 0:
+                # Years, prices and addresses said in pairs: "nineteen ninety", "two forty", "one twenty five".
+                if last in ("ones", "tens") and 0 < current < 100 and total == 0:
                     current = current * 100 + TENS[w]
                 elif last not in (None, "scale", "and"):
                     break
@@ -163,10 +163,30 @@ def numbers_rule(words):
     return out
 
 
+SPOKEN_SYMBOLS = [
+    (r"\$\s?(\d[\d,]*(?:\.\d+)?)", r" \1 dollars"),
+    (r"(\d)\s?%", r"\1 percent"),
+    (r"(\d)\.(?=\d)", r"\1 point "),
+    (r"(\w)\.(?=\w\w)", r"\1 dot "),
+    (r"(\w)/(?=\w)", r"\1 slash "),
+    (r"(\w)@(?=\w)", r"\1 at "),
+]
+
+
 def words(s):
-    """`normalize`, split into words, with quote marks taken off their ends: an engine that types 'Come,' in
-    single quotes said "come". Apostrophes inside a word ("don't") stay."""
-    return [w for w in (w.strip("'") for w in normalize(s).split()) if w]
+    """`normalize`, split into words. Written symbols first become the words spoken for them, since ref_verbatim
+    spells out what was said: "$389" is "389 dollars", "3.2" is "3 point 2", "silas.app/download" is "silas dot
+    app slash download". Quote marks come off the ends of words (an engine that types 'Come,' said "come") and
+    "a m" is "am", as "a.m." normalizes. Apostrophes inside a word ("don't") stay."""
+    for pattern, spoken in SPOKEN_SYMBOLS:
+        s = re.sub(pattern, spoken, s)
+    out = []
+    for w in (w.strip("'") for w in normalize(s).split()):
+        if w == "m" and out and out[-1] in ("a", "p"):
+            out[-1] += "m"
+        elif w:
+            out.append(w)
+    return out
 
 
 def normalize_silas(s):

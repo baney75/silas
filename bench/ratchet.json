@@ -7,9 +7,9 @@
     "wer": {
       "accent": 0.295082,
       "clean": 0.022222,
-      "code": 0.245614,
-      "dictation": 0.1875,
-      "longform": 0.028497,
+      "code": 0.210526,
+      "dictation": 0.08871,
+      "longform": 0.012953,
       "noise": 0.068493
     },
     "formatted_error": 0.198113,

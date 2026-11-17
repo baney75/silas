@@ -159,6 +159,21 @@ class Scoring(unittest.TestCase):
         self.assertEqual(score.word_errors("come therefore and let us fling mud at them", hyp), (0, 9))
         self.assertEqual(score.normalize_silas("don't 'twas the students'"), "don't twas the students")
 
+    def test_written_symbols_read_as_spoken(self):
+        # Parakeet's own text on dictation clips, against what ref_verbatim says was spoken.
+        cases = [
+            ("the flight was three hundred eighty nine dollars the hotel was two forty dollars a night",
+             "The flight was$389, the hotel was$240 a night"),
+            ("version three point two fixed most of the memory leaks", "version 3.2 fixed most of the memory leaks"),
+            ("around nine a m", "around 9 a.m."),
+            ("the new office is at one twenty five west elm street", "The new office is at 125 West Elm Street"),
+            ("silas dot app slash download", "silas.app/download"),
+            ("twelve percent of jane dot porter at example dot com", "12% of jane.porter@example.com"),
+        ]
+        for ref, hyp in cases:
+            self.assertEqual(score.word_errors(ref, hyp)[0], 0, (score.normalize_silas(ref), score.normalize_silas(hyp)))
+        self.assertEqual(score.normalize_silas("one two three, Mr. Smith"), "one two three mr smith")
+
     def test_commands_must_match_exactly(self):
         ref = json.dumps([{"action": "new_line"}])
         self.assertTrue(score.command_match(ref, '[{"action": "new_line"}]'))
