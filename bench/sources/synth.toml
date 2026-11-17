@@ -1,0 +1,512 @@
+# Synthesized clips for bench set v1: dictation, code, command and longform documents.
+#
+# say        What the speaker says. ref_verbatim is derived from it (lowercase, punctuation
+#            dropped, hyphens split). Punctuation here only shapes TTS pauses and intonation.
+#            Numbers are always written as the words spoken.
+# formatted  ref_formatted: what an excellent dictation app should type. Written by hand.
+#            For command clips it is a JSON action list (see bench/README.md).
+# notes      Optional note copied to the manifest.
+# speak      Optional. Replaces say as the TTS input only, when a clip needs other wording or
+#            pauses to be voiced right. The references still follow say.
+# voice      Optional. Overrides the rotating Kokoro voice for a clip one voice misreads.
+#
+# [respell] maps a spoken token to the spelling Kokoro needs to pronounce it right. It changes
+# only the TTS input, never ref_verbatim.
+
+[respell]
+"A M" = "ay em"
+"onnx" = "onyx"
+
+# ---------------------------------------------------------------- dictation, spoken punctuation
+
+[[item]]
+id = "dictation-0001"
+say = "Hi Jane comma, thanks for sending the draft so quickly period. I'll read it tonight and send my notes by Thursday morning period."
+formatted = "Hi Jane, thanks for sending the draft so quickly. I'll read it tonight and send my notes by Thursday morning."
+notes = "spoken punctuation; email"
+
+[[item]]
+id = "dictation-0002"
+say = "Hey comma, are we still on for lunch tomorrow question mark. I can do twelve thirty at the Thai place on Main Street period."
+formatted = "Hey, are we still on for lunch tomorrow? I can do 12:30 at the Thai place on Main Street."
+notes = "spoken punctuation; message; time"
+
+[[item]]
+id = "dictation-0003"
+say = "Please send the signed contract to jane dot porter at example dot com period. Let me know if the attachment doesn't come through period."
+formatted = "Please send the signed contract to jane.porter@example.com. Let me know if the attachment doesn't come through."
+notes = "spoken punctuation; email address"
+
+[[item]]
+id = "dictation-0004"
+say = "The total for the order comes to forty two dollars, no wait, forty seven dollars and fifty cents period. I'll pay you back on Friday period."
+formatted = "The total for the order comes to $47.50. I'll pay you back on Friday."
+notes = "spoken punctuation; money; self-correction"
+
+[[item]]
+id = "dictation-0005"
+say = "Dear Mister Okafor comma. New paragraph. Thank you for meeting with us on March fourth period. We have attached the revised proposal for your review period. New paragraph. Best regards comma. New line. Maria"
+formatted = "Dear Mr. Okafor,\n\nThank you for meeting with us on March 4. We have attached the revised proposal for your review.\n\nBest regards,\nMaria"
+notes = "spoken punctuation; letter; new paragraph and new line"
+
+[[item]]
+id = "dictation-0006"
+say = "Grocery list colon. New line. Eggs. New line. Two pounds of chicken thighs. New line. Oat milk. New line. Coffee filters."
+speak = "Grocery list colon. New line, eggs. New line, two pounds of chicken thighs. New line, oat milk. New line, coffee filters."
+formatted = "Grocery list:\nEggs\n2 pounds of chicken thighs\nOat milk\nCoffee filters"
+notes = "spoken punctuation; list with new line"
+
+[[item]]
+id = "dictation-0007"
+say = "Um, so I think we should, uh, push the launch to next week period. The build still crashes on older Macs period."
+formatted = "So I think we should push the launch to next week. The build still crashes on older Macs."
+notes = "spoken punctuation; fillers"
+
+[[item]]
+id = "dictation-0008"
+say = "You can download the beta from silas dot app slash download period. It takes less than a minute to install period."
+formatted = "You can download the beta from silas.app/download. It takes less than a minute to install."
+notes = "spoken punctuation; URL"
+
+[[item]]
+id = "dictation-0009"
+say = "Call me back at five five five, eight six seven, five three oh nine period. I'm free after four P M period."
+formatted = "Call me back at 555-867-5309. I'm free after 4 PM."
+notes = "spoken punctuation; phone number; time"
+
+[[item]]
+id = "dictation-0010"
+say = "Congratulations on the new job exclamation point! We should celebrate this weekend period."
+formatted = "Congratulations on the new job! We should celebrate this weekend."
+notes = "spoken punctuation; message"
+
+[[item]]
+id = "dictation-0011"
+say = "Move the review meeting to Tuesday, no, Wednesday at ten A M period. Sam can't make it earlier in the week period."
+formatted = "Move the review meeting to Wednesday at 10 AM. Sam can't make it earlier in the week."
+notes = "spoken punctuation; self-correction; time"
+
+[[item]]
+id = "dictation-0012"
+say = "Revenue grew by twelve percent in the third quarter comma, and we expect similar growth through December thirty first period."
+formatted = "Revenue grew by 12% in the third quarter, and we expect similar growth through December 31."
+notes = "spoken punctuation; percent; date"
+
+[[item]]
+id = "dictation-0013"
+say = "Reminder colon, the library books are due on November twentieth period. The late fee is twenty five cents a day period."
+formatted = "Reminder: the library books are due on November 20. The late fee is 25 cents a day."
+notes = "spoken punctuation; colon; date; money"
+
+[[item]]
+id = "dictation-0014"
+say = "The new office is at one twenty five West Elm Street comma, Suite four hundred comma, Columbus comma, Ohio period."
+formatted = "The new office is at 125 West Elm Street, Suite 400, Columbus, Ohio."
+notes = "spoken punctuation; address"
+
+[[item]]
+id = "dictation-0015"
+say = "Did you get a chance to look at the budget question mark? Can we talk about it before the three o'clock call question mark?"
+formatted = "Did you get a chance to look at the budget? Can we talk about it before the 3 o'clock call?"
+notes = "spoken punctuation; questions"
+
+# ------------------------------------------------------------- dictation, no spoken punctuation
+
+[[item]]
+id = "dictation-0016"
+say = "Hi Marcus, I wanted to follow up on the invoice from last month. We still haven't received the payment of two thousand four hundred dollars, so could you check with your accounting team? Thanks so much."
+formatted = "Hi Marcus, I wanted to follow up on the invoice from last month. We still haven't received the payment of $2,400, so could you check with your accounting team? Thanks so much."
+notes = "email; money"
+
+[[item]]
+id = "dictation-0017"
+say = "Hey, um, I'm running about ten minutes late, actually make that fifteen. Go ahead and order without me."
+formatted = "Hey, I'm running about 15 minutes late. Go ahead and order without me."
+notes = "message; filler; self-correction"
+
+[[item]]
+id = "dictation-0018"
+say = "Send the report to the team on Tuesday, no, Wednesday, after the numbers are final."
+formatted = "Send the report to the team on Wednesday, after the numbers are final."
+notes = "self-correction"
+
+[[item]]
+id = "dictation-0019"
+say = "Doctor's appointment on April ninth at two fifteen. Bring the insurance card and the list of medications."
+formatted = "Doctor's appointment on April 9 at 2:15. Bring the insurance card and the list of medications."
+notes = "note; date; time"
+
+[[item]]
+id = "dictation-0020"
+say = "I talked to Priya Raman and Mateo Alvarez about the hiring plan, and they both want to interview Grace Okonkwo before we decide."
+formatted = "I talked to Priya Raman and Mateo Alvarez about the hiring plan, and they both want to interview Grace Okonkwo before we decide."
+notes = "names"
+
+[[item]]
+id = "dictation-0021"
+say = "My new email is d dot reyes at proton dot me, so please update your contacts."
+speak = "My new email is d dot Ray ess at proton dot me, so please update your contacts."
+formatted = "My new email is d.reyes@proton.me, so please update your contacts."
+notes = "email address"
+
+[[item]]
+id = "dictation-0022"
+say = "The flight was three hundred eighty nine dollars, the hotel was two forty a night, and the rental car came to about one fifty."
+formatted = "The flight was $389, the hotel was $240 a night, and the rental car came to about $150."
+notes = "money; amounts implied by context"
+
+[[item]]
+id = "dictation-0023"
+say = "Uh, quick note from the standup. Lena finished the onboarding flow, Raj is still blocked on the API keys, and we're, um, targeting the twenty second for the release."
+formatted = "Quick note from the standup. Lena finished the onboarding flow, Raj is still blocked on the API keys, and we're targeting the 22nd for the release."
+notes = "note; fillers; date"
+
+[[item]]
+id = "dictation-0024"
+say = "The docs are at docs dot example dot org slash getting dash started, and the API reference is linked from the sidebar."
+formatted = "The docs are at docs.example.org/getting-started, and the API reference is linked from the sidebar."
+notes = "URL"
+
+[[item]]
+id = "dictation-0025"
+say = "Can you pick up the kids at three thirty? I have a call that might run long."
+formatted = "Can you pick up the kids at 3:30? I have a call that might run long."
+notes = "message; time"
+
+[[item]]
+id = "dictation-0026"
+say = "Let's meet at the coffee shop on Fifth Avenue, sorry, I mean Sixth Avenue, around nine A M."
+formatted = "Let's meet at the coffee shop on Sixth Avenue around 9 AM."
+notes = "self-correction; time"
+
+[[item]]
+id = "dictation-0027"
+say = "We upgraded the servers in twenty twenty four, and version three point two fixed most of the memory leaks."
+formatted = "We upgraded the servers in 2024, and version 3.2 fixed most of the memory leaks."
+notes = "year; version"
+
+[[item]]
+id = "dictation-0028"
+say = "Remember to renew the car registration before the end of the month. It costs sixty five dollars online, or seventy if you go in person."
+formatted = "Remember to renew the car registration before the end of the month. It costs $65 online, or $70 if you go in person."
+notes = "note to self; money"
+
+[[item]]
+id = "dictation-0029"
+say = "Hi everyone, um, just a reminder that the office will be closed on Monday for the holiday. If you need anything urgent, uh, reach out to Karen at extension four one two."
+formatted = "Hi everyone, just a reminder that the office will be closed on Monday for the holiday. If you need anything urgent, reach out to Karen at extension 412."
+notes = "email; fillers; number"
+
+[[item]]
+id = "dictation-0030"
+say = "The package weighs about three and a half pounds and should arrive by Friday, November twenty first."
+formatted = "The package weighs about 3.5 pounds and should arrive by Friday, November 21."
+notes = "measurement; date"
+
+# ---------------------------------------------------------------------------------------- code
+
+[[item]]
+id = "code-0001"
+say = "git commit dash m quote fix login redirect quote"
+formatted = 'git commit -m "fix login redirect"'
+notes = "terminal; flag; quotes"
+
+[[item]]
+id = "code-0002"
+say = "npm install dash dash save dash dev typescript"
+formatted = "npm install --save-dev typescript"
+notes = "terminal; long flag; library name"
+
+[[item]]
+id = "code-0003"
+say = "const camel case user name equals await camel case fetch user open paren id close paren semicolon"
+formatted = "const userName = await fetchUser(id);"
+notes = "camelCase; brackets; operators"
+
+[[item]]
+id = "code-0004"
+say = "kube control get pods dash n kube dash system"
+formatted = "kubectl get pods -n kube-system"
+notes = "terminal; Kubernetes CLI"
+
+[[item]]
+id = "code-0005"
+say = "C D tilde slash projects slash silas"
+speak = "C D tilde slash projects slash Sighless"
+formatted = "cd ~/projects/silas"
+notes = "terminal; file path"
+
+[[item]]
+id = "code-0006"
+say = "In Postgres Q L, add an index on the snake case created at column."
+formatted = "In PostgreSQL, add an index on the created_at column."
+notes = "prose with code; snake_case; PostgreSQL"
+
+[[item]]
+id = "code-0007"
+say = "def snake case parse config open paren path close paren colon"
+formatted = "def parse_config(path):"
+notes = "Python; snake_case"
+
+[[item]]
+id = "code-0008"
+say = "if open paren count greater than or equal to ten close paren open brace"
+formatted = "if (count >= 10) {"
+notes = "operators; brackets"
+
+[[item]]
+id = "code-0009"
+say = "pip install onnx runtime"
+formatted = "pip install onnxruntime"
+notes = "terminal; ONNX"
+
+[[item]]
+id = "code-0010"
+say = "The Tauri app calls the Rust backend through invoke, and the front end is written in TypeScript."
+formatted = "The Tauri app calls the Rust backend through invoke, and the front end is written in TypeScript."
+notes = "prose with library names"
+
+[[item]]
+id = "code-0011"
+say = "Kubernetes keeps restarting the pod because the readiness probe times out after five seconds."
+formatted = "Kubernetes keeps restarting the pod because the readiness probe times out after five seconds."
+notes = "prose with library names"
+
+[[item]]
+id = "code-0012"
+say = "export all caps node underscore env equals production"
+formatted = "export NODE_ENV=production"
+notes = "terminal; environment variable"
+
+[[item]]
+id = "code-0013"
+say = "docker run dash dash rm dash p eight zero eight zero colon eighty engine x"
+formatted = "docker run --rm -p 8080:80 nginx"
+notes = "terminal; flags; port mapping"
+
+[[item]]
+id = "code-0014"
+say = "open bracket one comma two comma three close bracket dot map open paren x arrow x times two close paren"
+formatted = "[1, 2, 3].map(x => x * 2)"
+notes = "brackets; arrow function; operators"
+
+[[item]]
+id = "code-0015"
+say = "cargo test dash dash release dash dash features bench"
+formatted = "cargo test --release --features bench"
+notes = "terminal; long flags"
+
+[[item]]
+id = "code-0016"
+say = "Rename the struct pascal case audio buffer to pascal case ring buffer."
+formatted = "Rename the struct AudioBuffer to RingBuffer."
+notes = "PascalCase"
+
+[[item]]
+id = "code-0017"
+say = "git checkout dash b feature slash kebab case noise gate"
+formatted = "git checkout -b feature/noise-gate"
+notes = "terminal; branch name; kebab-case"
+
+[[item]]
+id = "code-0018"
+say = "Set camel case max retries to three and camel case timeout millis to five thousand."
+formatted = "Set maxRetries to 3 and timeoutMillis to 5000."
+notes = "camelCase; config values"
+
+[[item]]
+id = "code-0019"
+say = "S S H admin at one nine two dot one six eight dot one dot ten dash p two two two two"
+formatted = "ssh admin@192.168.1.10 -p 2222"
+notes = "terminal; IP address; flag"
+
+[[item]]
+id = "code-0020"
+say = "The onnx model runs on the C P U, so set the thread count to four in config dot toml."
+formatted = "The ONNX model runs on the CPU, so set the thread count to 4 in config.toml."
+notes = "prose with code; ONNX; file name"
+
+[[item]]
+id = "code-0021"
+say = "C H mod plus X build dot S H"
+formatted = "chmod +x build.sh"
+notes = "terminal; spelled command"
+
+[[item]]
+id = "code-0022"
+say = "Wrap the camel case fetch data call in a use effect hook with an empty dependency array."
+formatted = "Wrap the fetchData call in a useEffect hook with an empty dependency array."
+notes = "camelCase; React hook name"
+
+[[item]]
+id = "code-0023"
+say = "total plus equals price times open paren one minus discount close paren"
+formatted = "total += price * (1 - discount)"
+notes = "operators; brackets"
+
+[[item]]
+id = "code-0024"
+say = "Back up the Postgres database with P G underscore dump before running the migration."
+formatted = "Back up the Postgres database with pg_dump before running the migration."
+notes = "prose with CLI name"
+
+[[item]]
+id = "code-0025"
+say = "interface pascal case user settings open brace theme colon string semicolon close brace"
+formatted = "interface UserSettings { theme: string; }"
+notes = "TypeScript; PascalCase; braces"
+
+# ------------------------------------------------------------------------------------ commands
+
+[[item]]
+id = "command-0001"
+say = "new line"
+voice = "bm_george"
+formatted = '[{"action":"newline"}]'
+notes = "Insert a line break."
+
+[[item]]
+id = "command-0002"
+say = "new paragraph"
+formatted = '[{"action":"new_paragraph"}]'
+notes = "Insert a blank line (two line breaks)."
+
+[[item]]
+id = "command-0003"
+say = "delete that"
+formatted = '[{"action":"delete_last"}]'
+notes = "Delete the last dictated phrase."
+
+[[item]]
+id = "command-0004"
+say = "scratch that"
+formatted = '[{"action":"delete_last"}]'
+notes = "Delete the last dictated phrase."
+
+[[item]]
+id = "command-0005"
+say = "undo"
+formatted = '[{"action":"undo"}]'
+notes = "Undo the last edit."
+
+[[item]]
+id = "command-0006"
+say = "go to the end of the line"
+formatted = '[{"action":"move","to":"line_end"}]'
+notes = "Move the cursor to the end of the current line."
+
+[[item]]
+id = "command-0007"
+say = "select previous word"
+formatted = '[{"action":"select","unit":"word","direction":"previous","count":1}]'
+notes = "Select the word before the cursor."
+
+[[item]]
+id = "command-0008"
+say = "select the last three words"
+formatted = '[{"action":"select","unit":"word","direction":"previous","count":3}]'
+notes = "Select the three words before the cursor."
+
+[[item]]
+id = "command-0009"
+say = "cap that"
+voice = "am_michael"
+formatted = '[{"action":"capitalize","target":"last"}]'
+notes = "Capitalize the first letter of the last dictated phrase (or the selection)."
+
+[[item]]
+id = "command-0010"
+say = "all caps that"
+formatted = '[{"action":"uppercase","target":"last"}]'
+notes = "Make the last dictated phrase (or the selection) all capitals."
+
+[[item]]
+id = "command-0011"
+say = "select all"
+formatted = '[{"action":"select_all"}]'
+notes = "Select all text in the field."
+
+[[item]]
+id = "command-0012"
+say = "delete the last two words"
+formatted = '[{"action":"delete","unit":"word","direction":"previous","count":2}]'
+notes = "Delete the two words before the cursor."
+
+[[item]]
+id = "command-0013"
+say = "press enter"
+formatted = '[{"action":"key","key":"enter"}]'
+notes = "Press the Enter key (submit), not a typed line break."
+
+[[item]]
+id = "command-0014"
+say = "Buy milk. New line. Buy eggs."
+formatted = '[{"action":"insert","text":"Buy milk"},{"action":"newline"},{"action":"insert","text":"Buy eggs"}]'
+notes = "Dictation mixed with a command. Final text: two lines, Buy milk and Buy eggs."
+
+[[item]]
+id = "command-0015"
+say = "Send the invoice today. Scratch that. Send it tomorrow."
+formatted = '[{"action":"insert","text":"Send the invoice today."},{"action":"delete_last"},{"action":"insert","text":"Send it tomorrow."}]'
+notes = "Dictation mixed with a command. Final text: Send it tomorrow."
+
+# ---------------------------------------------------------------------- longform, synthesized
+
+[[item]]
+id = "longform-0006"
+notes = "long email; no spoken punctuation"
+say = """Hi team, I wanted to put everything about next month's launch in one place so nobody has to dig through the chat history. First, the date. We are planning to ship version two point oh on Tuesday, March eleventh, assuming the release candidate passes testing by the end of next week. If it doesn't, we will slip by exactly one week rather than trying to squeeze fixes in at the last minute. Second, the scope. The headline feature is offline mode, which lets people keep working when their connection drops and syncs everything once they are back online. We are also shipping the new onboarding flow that Maya's group has been testing with customers since January. The early numbers look good. Completion went from about sixty one percent to just over eighty percent, and support tickets about account setup dropped by almost half. Third, the work that is not making it. The calendar integration is being pushed to the next release. It is close, but the sync logic still loses events when two people edit the same meeting at once, and I would rather ship it late than ship it broken. Please don't promise it to customers yet. Now for the schedule over the next three weeks. Engineering freezes features this Friday. From then on, only bug fixes go into the release branch, and every fix needs a second reviewer. Quality assurance runs the full regression suite on Monday and Wednesday, and Daniel will post the results in the release channel by five P M each day. Marketing needs final screenshots by March fourth, so if you own a screen that is still changing, tell Rebecca today. On the support side, we are adding two temporary contractors for the first two weeks after launch. They start on March tenth and will handle the first line of tickets so the core team can focus on anything urgent. The budget for that is about eight thousand five hundred dollars, which finance has already approved. A few things I need from each of you. Please review the launch checklist in the shared drive and add anything I missed. Update your tickets so the board reflects reality, especially anything marked in progress that has actually been sitting idle. And if you are planning time off in March, let me know by Thursday so we can cover your areas. I know this has been a long push, and I really appreciate how carefully everyone has worked through it. Let's finish strong. Thanks, Alex."""
+formatted = """Hi team, I wanted to put everything about next month's launch in one place so nobody has to dig through the chat history. First, the date. We are planning to ship version 2.0 on Tuesday, March 11, assuming the release candidate passes testing by the end of next week. If it doesn't, we will slip by exactly one week rather than trying to squeeze fixes in at the last minute. Second, the scope. The headline feature is offline mode, which lets people keep working when their connection drops and syncs everything once they are back online. We are also shipping the new onboarding flow that Maya's group has been testing with customers since January. The early numbers look good. Completion went from about 61% to just over 80%, and support tickets about account setup dropped by almost half. Third, the work that is not making it. The calendar integration is being pushed to the next release. It is close, but the sync logic still loses events when two people edit the same meeting at once, and I would rather ship it late than ship it broken. Please don't promise it to customers yet. Now for the schedule over the next three weeks. Engineering freezes features this Friday. From then on, only bug fixes go into the release branch, and every fix needs a second reviewer. Quality assurance runs the full regression suite on Monday and Wednesday, and Daniel will post the results in the release channel by 5 PM each day. Marketing needs final screenshots by March 4, so if you own a screen that is still changing, tell Rebecca today. On the support side, we are adding two temporary contractors for the first two weeks after launch. They start on March 10 and will handle the first line of tickets so the core team can focus on anything urgent. The budget for that is about $8,500, which finance has already approved. A few things I need from each of you. Please review the launch checklist in the shared drive and add anything I missed. Update your tickets so the board reflects reality, especially anything marked in progress that has actually been sitting idle. And if you are planning time off in March, let me know by Thursday so we can cover your areas. I know this has been a long push, and I really appreciate how carefully everyone has worked through it. Let's finish strong. Thanks, Alex."""
+
+[[item]]
+id = "longform-0007"
+notes = "meeting notes; spoken punctuation throughout"
+say = """Meeting notes colon, design review comma, Thursday November thirteenth. New paragraph. Attendees colon, Sarah comma, Kevin comma, Luis comma, and Priya period. New paragraph. First topic colon, the settings page period. Kevin showed the new layout comma, and everyone agreed it is much easier to scan period. Sarah wants the advanced options collapsed by default comma, because most people never touch them period. Luis pointed out that the toggle labels are still too long on small screens period. New paragraph. Second topic colon, onboarding period. Priya ran five user sessions last week period. Three of the five people missed the microphone permission prompt entirely comma, so we are going to add a short explanation before the system dialog appears period. Nobody had trouble with the hotkey setup comma, which is a nice change from last time period. New paragraph. Third topic colon, accessibility period. Sarah ran the screen reader over every screen comma, and the only real problem was the waveform overlay comma, which announces itself every time it updates period. Kevin will hide it from screen readers and add a single label instead period. New paragraph. Fourth topic colon, the release date period. We agreed to hold the date of December second as long as the crash on wake is fixed by Monday period. If it is not comma, we move to December ninth and tell the beta group right away period. New paragraph. Action items colon. New line. Kevin to shorten the toggle labels by Friday period. New line. Kevin to hide the waveform overlay from screen readers period. New line. Priya to draft the permission explanation and share it in the design channel period. New line. Luis to confirm the crash fix with a clean install on an older laptop period. New line. Sarah to send these notes to the wider team period. New paragraph. The next review is Thursday at two P M in the small conference room period."""
+formatted = """Meeting notes: design review, Thursday, November 13
+
+Attendees: Sarah, Kevin, Luis, and Priya.
+
+First topic: the settings page. Kevin showed the new layout, and everyone agreed it is much easier to scan. Sarah wants the advanced options collapsed by default, because most people never touch them. Luis pointed out that the toggle labels are still too long on small screens.
+
+Second topic: onboarding. Priya ran five user sessions last week. Three of the five people missed the microphone permission prompt entirely, so we are going to add a short explanation before the system dialog appears. Nobody had trouble with the hotkey setup, which is a nice change from last time.
+
+Third topic: accessibility. Sarah ran the screen reader over every screen, and the only real problem was the waveform overlay, which announces itself every time it updates. Kevin will hide it from screen readers and add a single label instead.
+
+Fourth topic: the release date. We agreed to hold the date of December 2 as long as the crash on wake is fixed by Monday. If it is not, we move to December 9 and tell the beta group right away.
+
+Action items:
+Kevin to shorten the toggle labels by Friday.
+Kevin to hide the waveform overlay from screen readers.
+Priya to draft the permission explanation and share it in the design channel.
+Luis to confirm the crash fix with a clean install on an older laptop.
+Sarah to send these notes to the wider team.
+
+The next review is Thursday at 2 PM in the small conference room."""
+
+[[item]]
+id = "longform-0008"
+notes = "short essay; no spoken punctuation"
+say = """When I was eleven, the public library in our town moved into an old hardware store on the main street. The building still had the wide wooden floors and the tall front windows, and for years you could see faint outlines on the walls where the shelves of paint and nails had been. I spent most of my summers there. Looking back, that small library taught me more about learning than any classroom I sat in. The first lesson was that curiosity needs room to wander. The library had no computer catalog for most of the time I went there. If you wanted a book about birds, you walked to the five hundreds and started reading spines. Half the time you left with something else entirely, a history of lighthouses or a book about how bridges are built, because it happened to sit on the shelf next to the one you wanted. That kind of accident is harder to come by now. Search is fast and precise, and it gives us exactly what we ask for, which means it rarely gives us what we didn't know to ask for. The second lesson was that patience is a skill, not a personality trait. The library allowed three books per visit, and interlibrary loans took two or three weeks to arrive. You learned to plan, to read slowly, and to finish what you started, because the next book was not going to appear the moment you got bored. I don't think we should go back to waiting weeks for a book, but I do think we lose something when nothing in our lives asks us to wait. The third lesson came from the librarian, a retired science teacher named Missus Delgado. She never told me what to read. Instead, she asked what I had liked about the last book and handed me two more that shared that one quality, whether it was a stubborn main character or a story told out of order. She was teaching me to notice why I liked things, which turned out to be the beginning of thinking clearly about almost anything. The library moved again about ten years ago into a modern building with skylights and a coffee counter. It is a better library by almost every measure. It has more books, longer hours, and a room full of computers that are rarely empty. Still, when I visit, I find myself walking the shelves instead of using the catalog, waiting to be surprised by whatever happens to be sitting next to the book I came for."""
+formatted = """When I was 11, the public library in our town moved into an old hardware store on the main street. The building still had the wide wooden floors and the tall front windows, and for years you could see faint outlines on the walls where the shelves of paint and nails had been. I spent most of my summers there. Looking back, that small library taught me more about learning than any classroom I sat in. The first lesson was that curiosity needs room to wander. The library had no computer catalog for most of the time I went there. If you wanted a book about birds, you walked to the 500s and started reading spines. Half the time you left with something else entirely, a history of lighthouses or a book about how bridges are built, because it happened to sit on the shelf next to the one you wanted. That kind of accident is harder to come by now. Search is fast and precise, and it gives us exactly what we ask for, which means it rarely gives us what we didn't know to ask for. The second lesson was that patience is a skill, not a personality trait. The library allowed three books per visit, and interlibrary loans took two or three weeks to arrive. You learned to plan, to read slowly, and to finish what you started, because the next book was not going to appear the moment you got bored. I don't think we should go back to waiting weeks for a book, but I do think we lose something when nothing in our lives asks us to wait. The third lesson came from the librarian, a retired science teacher named Mrs. Delgado. She never told me what to read. Instead, she asked what I had liked about the last book and handed me two more that shared that one quality, whether it was a stubborn main character or a story told out of order. She was teaching me to notice why I liked things, which turned out to be the beginning of thinking clearly about almost anything. The library moved again about 10 years ago into a modern building with skylights and a coffee counter. It is a better library by almost every measure. It has more books, longer hours, and a room full of computers that are rarely empty. Still, when I visit, I find myself walking the shelves instead of using the catalog, waiting to be surprised by whatever happens to be sitting next to the book I came for."""
+
+[[item]]
+id = "longform-0009"
+notes = "status report with numbers, dates and money; spoken new paragraph"
+say = """Project update for the Hillcrest community center renovation, week of October twentieth. New paragraph. Overall, we are on schedule and slightly under budget. Demolition finished on October fourteenth, two days ahead of plan, and the framing crew started the following Monday. The roof inspection passed on the first try, which saves us the cost of a second visit. New paragraph. On the budget, we have spent one hundred eighty seven thousand dollars of the three hundred twenty thousand dollar total, or about fifty eight percent, with roughly forty five percent of the work complete by schedule. That gap looks worse than it is. Most of the big purchases, including the windows and the new heating system, were paid up front to lock in prices before the winter increase. Our contingency fund is still at twenty two thousand dollars, and we have only drawn on it once, for the water damage we found under the kitchen floor. New paragraph. There are two risks worth watching. First, the electrical permit is still pending with the county. The clerk told us to expect it by October thirty first, but if it slips past November seventh, the electricians will have to move to another job and we lose about two weeks. Second, the accessible ramp design needs one more revision. The architect wants to widen the landing from five feet to six feet to meet the updated code, which adds about three thousand four hundred dollars. I recommend we approve that change now rather than wait for the inspector to flag it. New paragraph. Next steps for the coming two weeks. The framing crew will finish the east wing by November first. The plumbers start rough in on November third. We will hold the next community meeting on Thursday, November sixth at six thirty P M in the church hall across the street, where we will show the updated floor plan and take questions. New paragraph. If anyone on the committee has concerns about the ramp change or the permit timeline, please call me at five five five, two one two, four four eight oh before Friday."""
+formatted = """Project update for the Hillcrest community center renovation, week of October 20
+
+Overall, we are on schedule and slightly under budget. Demolition finished on October 14, two days ahead of plan, and the framing crew started the following Monday. The roof inspection passed on the first try, which saves us the cost of a second visit.
+
+On the budget, we have spent $187,000 of the $320,000 total, or about 58%, with roughly 45% of the work complete by schedule. That gap looks worse than it is. Most of the big purchases, including the windows and the new heating system, were paid up front to lock in prices before the winter increase. Our contingency fund is still at $22,000, and we have only drawn on it once, for the water damage we found under the kitchen floor.
+
+There are two risks worth watching. First, the electrical permit is still pending with the county. The clerk told us to expect it by October 31, but if it slips past November 7, the electricians will have to move to another job and we lose about two weeks. Second, the accessible ramp design needs one more revision. The architect wants to widen the landing from 5 feet to 6 feet to meet the updated code, which adds about $3,400. I recommend we approve that change now rather than wait for the inspector to flag it.
+
+Next steps for the coming two weeks. The framing crew will finish the east wing by November 1. The plumbers start rough-in on November 3. We will hold the next community meeting on Thursday, November 6 at 6:30 PM in the church hall across the street, where we will show the updated floor plan and take questions.
+
+If anyone on the committee has concerns about the ramp change or the permit timeline, please call me at 555-212-4480 before Friday."""
+
+[[item]]
+id = "longform-0010"
+notes = "personal letter; fillers and self-corrections; no spoken punctuation"
+say = """Dear Tom, it has been far too long since I wrote, and I'm sorry about that. The last few months have been, um, a lot, but mostly in good ways. We finally sold the old house in August. It took almost four months, which felt like forever, but the family who bought it has three little kids, and the oldest one asked if she could keep the swing in the backyard, so I think it went to the right people. We moved into the new place on Labor Day weekend. It's smaller, about twelve hundred square feet, but it's ten minutes from the hospital where Ellen works, so she gets an extra hour a day back. That alone has been worth it. The garden is a mess right now, uh, mostly weeds and one very determined rosebush, but I have big plans for the spring. Work has been steady. I'm still at the print shop three days a week, no, four now, since they lost one of the morning people. I don't mind. I like the quiet before the shop opens, and I've gotten pretty good at fixing the old press when it jams, which is about twice a week. The owner keeps saying he'll replace it next year, and I keep saying I'll believe it when I see it. How is your father doing? The last I heard, he was recovering from the knee surgery and driving your mother crazy by trying to mow the lawn too early. I hope he has, um, slowed down a little. Please tell him we have been praying for him and that the offer to come fishing still stands, whenever the doctor says he can sit in a boat for a whole morning. We are planning to drive up to see Ellen's sister the week after Thanksgiving, and your town is right on the way. Would you have time for lunch on Saturday the twenty ninth, or, actually, Sunday the thirtieth might be easier, since we will be heading home that day anyway? Let me know what works for you. You can reach me at the same number as always, or email me at walt dot becker at example dot net if that is easier. Take care of yourself, and give my best to Anna and the boys. Your friend, Walt."""
+formatted = """Dear Tom, it has been far too long since I wrote, and I'm sorry about that. The last few months have been a lot, but mostly in good ways. We finally sold the old house in August. It took almost four months, which felt like forever, but the family who bought it has three little kids, and the oldest one asked if she could keep the swing in the backyard, so I think it went to the right people. We moved into the new place on Labor Day weekend. It's smaller, about 1,200 square feet, but it's 10 minutes from the hospital where Ellen works, so she gets an extra hour a day back. That alone has been worth it. The garden is a mess right now, mostly weeds and one very determined rosebush, but I have big plans for the spring. Work has been steady. I'm still at the print shop four days a week now, since they lost one of the morning people. I don't mind. I like the quiet before the shop opens, and I've gotten pretty good at fixing the old press when it jams, which is about twice a week. The owner keeps saying he'll replace it next year, and I keep saying I'll believe it when I see it. How is your father doing? The last I heard, he was recovering from the knee surgery and driving your mother crazy by trying to mow the lawn too early. I hope he has slowed down a little. Please tell him we have been praying for him and that the offer to come fishing still stands, whenever the doctor says he can sit in a boat for a whole morning. We are planning to drive up to see Ellen's sister the week after Thanksgiving, and your town is right on the way. Would you have time for lunch on Sunday the 30th, since we will be heading home that day anyway? Let me know what works for you. You can reach me at the same number as always, or email me at walt.becker@example.net if that is easier. Take care of yourself, and give my best to Anna and the boys. Your friend, Walt."""

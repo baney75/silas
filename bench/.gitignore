@@ -1,0 +1,5 @@
+# Audio and archives live in ~/.cache/silas-bench, never in git.
+*.wav
+*.flac
+*.tar
+*.tar.zst
