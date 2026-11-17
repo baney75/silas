@@ -11,10 +11,13 @@ The ratchet runs --fast by default because it repeats word for word: the model's
 much silence trails the clip, and in real time that tail varies by a few milliseconds of thread timing, enough
 to change a word on a handful of clips between two runs. --fast pads exactly the app's 200 ms tail every time.
 
-ratchet.json keeps one baseline per machine: "local" (abbey1) and "ci" (GitHub's ubuntu-latest runner). The
-same model gives slightly different text on a different CPU (onnxruntime picks different kernels): 10 of the 40
-clips differed by a word or a comma between abbey1 and the runner, enough to move a category by a few points.
-Each baseline records its CPU, and a run on another CPU says so.
+The same model gives slightly different text on a different CPU (onnxruntime picks different kernels): 10 of
+the 40 clips differed by a word or a comma between abbey1's Ryzen and an Intel runner, enough to move a category
+by a few points, and GitHub's runners are not all one CPU. So ratchet.json keeps baselines in groups, "local"
+(abbey1) and "ci" (GitHub's ubuntu-latest runners), one per CPU model. A run compares with the baseline for its own
+CPU. On a CPU not yet recorded it passes if it is within the limits of any recorded one, and says so; --update
+then records that CPU. A new CPU whose text differs enough to fail is seeded with --new-cpu, from a run of code that
+already passed on another CPU. Pass --cpu with --results to name the CPU they came from.
 
 Fails (exit 1) when any category's WER or the formatted error rises more than 0.5 points absolute, the median
 t_final_ms rises more than 15%, or peak memory rises more than 10%. Latency is compared only between runs with
@@ -120,6 +123,8 @@ def main(argv=None):
     p.add_argument("--ratchet", type=Path, default=RATCHET)
     p.add_argument("--baseline", default="local", help="which machine's numbers to compare against (local, ci)")
     p.add_argument("--cpu", help="the CPU the --results came from (default: this machine's when it runs Silas)")
+    p.add_argument("--new-cpu", action="store_true",
+                   help="record a first baseline for this CPU without comparing; only for a run of code that passed on another CPU")
     a = p.parse_args(argv)
 
     cfg = json.loads(a.ratchet.read_text())
@@ -136,21 +141,36 @@ def main(argv=None):
         run_silas(cfg, binary, not a.real_time, results)
     rows = [json.loads(l) for l in results.read_text().splitlines() if l.strip()]
     new = metrics(rows, manifest)
-    base = cfg.get("baselines", {}).get(a.baseline)
+    group = cfg.get("baselines", {}).get(a.baseline, {})
+    key = cpu or "unknown"
+    base = group.get(key)
+    candidates = {key: base} if base is not None else group
 
     print(json.dumps({**new, "cpu": cpu}, indent=2))
-    if base is None:
+    if a.new_cpu:
+        if base is not None or not cpu:
+            print(f"--new-cpu only records a CPU the {a.baseline!r} group has no baseline for, named by --cpu or detected")
+            return 1
+        cfg.setdefault("baselines", {}).setdefault(a.baseline, {})[key] = {**new, "updated": date.today().isoformat()}
+        a.ratchet.write_text(json.dumps(cfg, indent=2) + "\n")
+        print(f"recorded a first baseline for {key} in {a.baseline!r}")
+        return 0
+    if not candidates:
         if not a.update:
             print(f"ratchet.json has no {a.baseline!r} baseline yet; run with --update to record it")
             return 1
         bad = []
     else:
-        bad = check(base, new, a.gate)
-        if cpu and base.get("cpu") and cpu != base["cpu"]:
-            print(f"note: the {a.baseline!r} baseline was recorded on {base['cpu']}; this run is on {cpu}. "
-                  "Text can differ by a few words across CPUs.")
-        if base.get("timing") != new["timing"] and a.gate == "all":
-            print(f"latency not compared: the ratchet holds {base.get('timing')} timing, this run is {new['timing']}")
+        if base is None:
+            print(f"note: no {a.baseline!r} baseline for {key}; comparing with the CPUs recorded ({', '.join(group)}). "
+                  "Text differs by a few words across CPUs, so passing against any one of them passes.")
+        found = {k: check(b, new, a.gate) for k, b in candidates.items()}
+        nearest = min(found, key=lambda k: len(found[k]))
+        bad = found[nearest]
+        if bad and base is None:
+            print(f"closest baseline: {nearest}")
+        if candidates[nearest].get("timing") != new["timing"] and a.gate == "all":
+            print(f"latency not compared: the ratchet holds {candidates[nearest].get('timing')} timing, this run is {new['timing']}")
     for b in bad:
         print("REGRESSION", b)
     if bad:
@@ -160,11 +180,10 @@ def main(argv=None):
         if base is not None and not no_worse(base, new):
             print("not updated: some metric is worse than the ratchet (within the slack), so it stays put")
             return 0
-        cfg.setdefault("baselines", {})[a.baseline] = {**new, "cpu": cpu, "updated": date.today().isoformat()}
+        cfg.setdefault("baselines", {}).setdefault(a.baseline, {})[key] = {**new, "updated": date.today().isoformat()}
         a.ratchet.write_text(json.dumps(cfg, indent=2) + "\n")
-        print(f"updated {a.ratchet}")
+        print(f"updated {a.ratchet} ({a.baseline}, {key})")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
