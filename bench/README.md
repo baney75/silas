@@ -183,9 +183,10 @@ All selection is seeded (`20261117`) and frozen in `bench/sources/selection.json
   longer unbroken run of utterances with punctuated text.
 - One test-other chapter (5764-299665, a polemical essay against religion) was skipped for
   longform; any other chapter tests the model as well.
-- All synthesized speech is Kokoro on chapel1. Parish1's Qwen3-TTS was not used: its GPU
-  was busy (`parish-media status` reported `not_ready`) and the host was short of memory.
-  No second TTS engine was added; voice variety comes from 8 Kokoro voices.
+- All synthesized speech is Kokoro on CPU (chapel1, plus 7 re-renders on abbey1). Parish1's
+  Qwen3-TTS was not used: its GPU was busy (`parish-media status` reported `not_ready`) and
+  the host was short of memory. A second engine such as Piper on abbey1 was optional and
+  skipped; voice variety comes from 8 Kokoro voices.
 
 ## Adding Qwen3-TTS clips later
 
