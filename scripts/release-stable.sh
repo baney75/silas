@@ -41,6 +41,8 @@ drafts=$(gh api "repos/$REPO/releases" --paginate -q ".[] | select(.draft and .t
 [ -n "$drafts" ] || { echo "no draft release for $tag; promote.yml makes it (or $tag is already published)" >&2; exit 1; }
 [ "$(wc -l <<<"$drafts" | tr -d ' ')" = 1 ] || { echo "more than one draft for $tag; delete the stale ones" >&2; exit 1; }
 IFS=$'\t' read -r draft sha <<<"$drafts"
+# shellcheck source=scripts/release-draft.sh
+. scripts/release-draft.sh
 same_draft() { # the draft is still there, still a draft, still for this tag and commit
   [ "$(gh api "repos/$REPO/releases/$draft" -q '[.draft, .tag_name, .target_commitish] | @tsv' 2>/dev/null)" = "$(printf 'true\t%s\t%s' "$tag" "$sha")" ] ||
     { echo "the $tag draft ($draft) changed or went away (promote.yml re-run?); start again" >&2; exit 1; }
@@ -108,7 +110,7 @@ hdiutil create -quiet -volname Silas -srcfolder "$dir/dmg" -ov -format UDZO "$di
 # bundle; sign it here with the stable key.
 mkdir -p "$dir/ci"
 same_draft
-gh release download "$tag" -R "$REPO" --dir "$dir/ci" --pattern '*.AppImage' --pattern '*.deb' --pattern '*.rpm' --pattern '*-setup.exe'
+draft_download "$dir/ci" '*.AppImage' '*.deb' '*.rpm' '*-setup.exe'
 for pattern in '*.AppImage' '*.deb' '*.rpm' '*-setup.exe'; do
   [ "$(find "$dir/ci" -name "$pattern" | wc -l | tr -d ' ')" = 1 ] || { echo "the $tag draft needs exactly one $pattern; re-run promote.yml's build" >&2; exit 1; }
 done
@@ -139,10 +141,10 @@ jq -n --arg v "$version" --arg n "$notes" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ
 # Upload into the draft, retrying slow uploads, and publish only once every file is there, so the
 # update feed never points at a missing file.
 same_draft
-gh release edit "$tag" -R "$REPO" --title "Silas $version" --notes "$notes" >/dev/null
+draft_edit "Silas $version" "$notes"
 for f in "$dir"/Silas_aarch64.dmg "$dir"/Silas_aarch64.app.tar.gz "$dir"/Silas_aarch64.app.tar.gz.sig "$dir"/ci/*.sig "$dir"/latest.json; do
   for attempt in 1 2 3 4 5; do
-    gh release upload "$tag" -R "$REPO" "$f" --clobber && break
+    draft_upload "$f" && break
     [ "$attempt" -lt 5 ] || { echo "upload of $f failed; the draft $tag is still there" >&2; exit 1; }
     sleep $((attempt * 5))
   done

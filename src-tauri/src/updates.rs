@@ -20,8 +20,10 @@ use crate::core::{Shared, Status};
 
 const REPO: &str = "https://github.com/baney75/silas/releases";
 
-/// Each channel has its own signing key. The stable key never leaves the release Mac,
-/// so nothing CI signs can ever install on a stable user's machine.
+/// Each channel has its own signing key. The stable key never leaves the release Mac, so
+/// nothing CI signs installs from the stable feed. Until a stable release carries Windows and
+/// Linux, stable installs there read the nightly feed instead (`falls_back_to_nightly`) and
+/// trust the nightly key.
 const STABLE_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI0OUZBOTBFNEEyQUQzNTgKUldSWTB5cEtEcW1mdE5FYXBNV1AyT3NGaXdzVXFvUHRPeGZlZHFiWE9mNXhZTUtEZTJWZGhicWMK";
 const NIGHTLY_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ1QTkyOTlGNzM0MEJGMTIKUldRU3YwQnpueW1wMVUvOEtteWFXL0xyUys3L1JOSmhZbkFqNEtUVTh5RjdwWGZMdWV1VzA4cGcK";
 

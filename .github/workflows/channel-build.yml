@@ -282,9 +282,17 @@ jobs:
             jq -e --arg k "$k" 'has($k)' <<< "$platforms" > /dev/null || { echo "missing $k" >&2; exit 1; }
           done
           # Refuse to publish a build that is not newer than the one the feed already offers.
-          if feed=$(curl -fsSL "$base/latest.json" | jq -r .version); then
-            scripts/channel-version.sh newer "$VERSION" "$feed" || { echo "the $CHANNEL feed already holds $feed, not older than $VERSION" >&2; exit 1; }
-          fi
+          # Only a feed that is confirmed missing (404) may be skipped: any other failure to read it
+          # could let an older build replace a newer one.
+          code=$(curl -sSL -o feed.json -w '%{http_code}' "$base/latest.json") || code=000
+          case "$code" in
+            200)
+              feed=$(jq -r '.version // empty' feed.json)
+              [ -n "$feed" ] || { echo "the $CHANNEL feed has no version" >&2; exit 1; }
+              scripts/channel-version.sh newer "$VERSION" "$feed" || { echo "the $CHANNEL feed already holds $feed, not older than $VERSION" >&2; exit 1; } ;;
+            404) echo "no $CHANNEL feed yet; this is the first" ;;
+            *) echo "can't read the $CHANNEL feed (HTTP $code); not publishing over it" >&2; exit 1 ;;
+          esac
           jq -n --arg v "$VERSION" --arg c "$CHANNEL" --arg sha "$SHA" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg n "$notes" --argjson p "$platforms" \
             '{product: "silas", channel: $c, version: $v, commit: $sha, notes: $n, pub_date: $d, platforms: $p}' > latest.json
           curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" --data-binary @latest.json \

@@ -1,8 +1,9 @@
 name: Nightly
 # Rebuilds the rolling `nightly` pre-release for macOS, Windows and Linux at 07:00 UTC when `main`
 # changed. The build itself is channel-build.yml, shared with dev.yml and promote.yml; see it and
-# docs/channels.md. Nothing built here can reach stable users: stable updates are signed on the
-# release Mac with a different key.
+# docs/channels.md. Stable updates are signed on the release Mac with a different key, so nothing
+# built here is offered on the stable feed. Windows and Linux installs on stable read this feed
+# until a stable release carries their platform (updates.rs, falls_back_to_nightly).
 on:
   schedule:
     - cron: "0 7 * * *"
