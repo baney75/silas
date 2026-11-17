@@ -7,7 +7,6 @@ on:
     paths:
       - core/voice/**
       - bench/**
-      - src-tauri/src/bin/silas-bench.rs
       - .github/workflows/bench-ratchet.yml
 permissions:
   contents: read
@@ -27,12 +26,12 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          workspaces: src-tauri
+          workspaces: core/voice
           key: bench-release
       - name: Linux packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libudev-dev libxdo-dev
+          sudo apt-get install -y libasound2-dev libudev-dev libxdo-dev
       # The model silas-bench downloads (hash-checked by models.rs) and the test-set audio.
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -41,12 +40,15 @@ jobs:
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cache/silas-bench/bench-set-v1
-          key: silas-bench-set-${{ hashFiles('bench/manifest.jsonl', 'bench/subsets/ratchet.txt') }}
+          key: silas-bench-set-${{ hashFiles('bench/release.json', 'bench/manifest.jsonl') }}
+      # Downloads the release asset once, checks its sha256 and every clip, then the cache keeps it.
+      - name: Bench set audio
+        run: python3 -I bench/tools/fetch.py && python3 -I bench/tools/check.py
       - name: Build silas-bench
-        working-directory: src-tauri
+        working-directory: core/voice
         run: cargo build --release --features bench --bin silas-bench
       - name: Ratchet
-        run: python3 -I bench/ratchet.py --fast --gate accuracy --bin src-tauri/target/release/silas-bench
+        run: python3 -I bench/ratchet.py --fast --gate accuracy --bin core/voice/target/release/silas-bench
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
