@@ -1,0 +1,6 @@
+{
+  "model": "parakeet-v3",
+  "manifest": "bench/manifest.jsonl",
+  "subset": "bench/subsets/ratchet.txt",
+  "set": "~/.cache/silas-bench/bench-set-v1"
+}

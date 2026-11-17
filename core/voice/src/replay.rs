@@ -199,6 +199,11 @@ pub fn energy_joules() -> Option<f64> {
     Some(uj.trim().parse::<f64>().ok()? / 1e6)
 }
 
+/// The machine's 1-minute load average, where the system reports it. Latency means little without it.
+pub fn load1() -> Option<f64> {
+    std::fs::read_to_string("/proc/loadavg").ok()?.split_whitespace().next()?.parse().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,6 +282,13 @@ mod tests {
             sim.raw
         );
         assert!(live.after_release >= TAIL);
+    }
+
+    #[test]
+    fn load_is_read_where_linux_reports_it() {
+        if cfg!(target_os = "linux") {
+            assert!(load1().is_some_and(|l| l >= 0.0));
+        }
     }
 
     #[test]

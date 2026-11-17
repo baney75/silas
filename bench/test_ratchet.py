@@ -107,7 +107,7 @@ class Scoring(unittest.TestCase):
     def test_normalization_matches_benchmark_rs(self):
         # The cases in core/voice/src/benchmark.rs normalize_follows_the_spec.
         self.assertEqual(score.normalize("  Hello,   World!  "), "hello world")
-        self.assertEqual(score.normalize("Well-known — and don't"), "well known and don't")
+        self.assertEqual(score.normalize("Well-known \u2014 and don't"), "well known and don't")
         self.assertEqual(score.normalize("It cost $5.50 (really)"), "it cost 550 really")
         self.assertEqual(score.normalize("A\tB\nC"), "a b c")
         self.assertEqual(score.normalize("...!?"), "")
@@ -118,6 +118,12 @@ class Scoring(unittest.TestCase):
 
     def test_formatted_error_counts_case_and_punctuation(self):
         self.assertEqual(score.format_errors("Paris, France.", "paris france"), (2, 2))
+        self.assertEqual(score.format_errors("Dear Ann,\nThanks.", "Dear Ann, Thanks."), (1, 4))
+
+    def test_accents_fold_and_wer_scores_the_raw_model_text(self):
+        self.assertEqual(score.normalize("Caf\u00e9 Na\u00efve"), "cafe naive")
+        row = {"hypothesis": "So the plan.", "hypothesis_raw": "Um, so the plan."}
+        self.assertEqual(score.word_errors("um so the plan", score.verbatim(row)), (0, 4))
 
     def test_commands_must_match_exactly(self):
         ref = json.dumps([{"action": "new_line"}])

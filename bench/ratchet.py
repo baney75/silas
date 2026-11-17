@@ -9,7 +9,8 @@
 Fails (exit 1) when any category's WER or the formatted error rises more than 0.5 points absolute, the median
 t_final_ms rises more than 15%, or peak memory rises more than 10%. Latency is compared only between runs with
 the same timing (real time or --fast). The silas-bench binary comes from $SILAS_BENCH_BIN or --bin; build it with
-  cd src-tauri && cargo build --release --features bench --bin silas-bench
+  cd core/voice && cargo build --release --features bench --bin silas-bench
+The audio comes from bench/tools/fetch.py (default ~/.cache/silas-bench/bench-set-v1).
 """
 
 import argparse
@@ -105,7 +106,7 @@ def main(argv=None):
         manifest = {k: v for k, v in manifest.items() if k in keep}
     results = a.results
     if results is None:
-        binary = a.bin or str(ROOT / "src-tauri/target/release/silas-bench")
+        binary = a.bin or str(ROOT / "core/voice/target/release/silas-bench")
         results = HERE / "out" / "ratchet-silas.jsonl"
         results.parent.mkdir(exist_ok=True)
         run_silas(cfg, binary, a.fast, results)

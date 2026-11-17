@@ -26,6 +26,7 @@ import random
 import re
 import statistics
 import sys
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,10 +36,15 @@ SEED = 20261117
 # ---------------------------------------------------------------- normalization
 
 
+def fold(s):
+    """Accents off ("caf\u00e9" -> "cafe"), as bench set v1 writes ref_verbatim."""
+    return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+
+
 def normalize(s):
-    """benchmark.rs `normalize`: lowercase; `-` and the em dash become spaces; keep letters, digits,
-    apostrophes and whitespace; collapse whitespace."""
-    s = s.lower().replace("-", " ").replace("—", " ")
+    """benchmark.rs `normalize` with accents folded first: lowercase; `-` and the em dash become
+    spaces; keep letters, digits, apostrophes and whitespace; collapse whitespace."""
+    s = fold(s.lower()).replace("-", " ").replace("\u2014", " ")
     kept = "".join(c for c in s if c.isalnum() or c == "'" or c.isspace())
     return " ".join(kept.split())
 
@@ -166,9 +172,14 @@ def word_errors(ref, hyp, norm=normalize):
     return edits(r, h), len(r)
 
 
+def typed_tokens(s):
+    """Whitespace-separated tokens of typed text; a line break is a token of its own."""
+    return s.replace("\n", " \u00b6 ").split()
+
+
 def format_errors(ref, hyp):
-    """Token errors on the text as typed: case and punctuation count."""
-    r, h = ref.split(), hyp.split()
+    """Token errors on the text as typed: case, punctuation and line breaks count."""
+    r, h = typed_tokens(ref), typed_tokens(hyp)
     return edits(r, h), len(r)
 
 
@@ -256,6 +267,12 @@ def load_results(paths):
     return runs
 
 
+def verbatim(row):
+    """The text WER is scored on: the model's own words (`hypothesis_raw`), before any cleanup removes the
+    fillers ref_verbatim keeps. What the app types is scored by formatted error."""
+    return row.get("hypothesis_raw") or row.get("hypothesis", "")
+
+
 def summarize(rows, manifest, norm=normalize, rng=None):
     """Metrics for one engine's rows: overall and per category."""
     rng = rng or random.Random(SEED)
@@ -267,7 +284,7 @@ def summarize(rows, manifest, norm=normalize, rng=None):
         clips = [manifest[r["id"]] for r in rs]
         speech = [(r, c) for r, c in zip(rs, clips) if c.get("category") != "command"]
         commands = [(r, c) for r, c in zip(rs, clips) if c.get("category") == "command"]
-        werp = [word_errors(c["ref_verbatim"], r.get("hypothesis", ""), norm) for r, c in speech]
+        werp = [word_errors(c["ref_verbatim"], verbatim(r), norm) for r, c in speech]
         fmtp = [format_errors(c["ref_formatted"], r.get("hypothesis", "")) for r, c in speech]
         audio = sum(r.get("audio_seconds") or 0 for r in rs)
         cpu = [r.get("cpu_seconds") for r in rs]
@@ -286,6 +303,8 @@ def summarize(rows, manifest, norm=normalize, rng=None):
             "rtf_median": median(r.get("rtf") for r in rs),
             "peak_rss_mb": max((r["peak_rss_mb"] for r in rs if r.get("peak_rss_mb") is not None), default=None),
             "cpu_s_per_audio_min": (sum(cpu) / audio * 60) if audio and all(x is not None for x in cpu) else None,
+            "load1_median": median(r.get("load1") for r in rs),
+            "load1_max": max((r["load1"] for r in rs if r.get("load1") is not None), default=None),
             "energy_j_per_audio_min": (sum(energy) / audio * 60) if audio and all(x is not None for x in energy) else None,
             "audio_seconds": audio,
         }
@@ -315,8 +334,8 @@ def compare(base_rows, rows, manifest, norm, rng):
         cats.setdefault(c.get("category") or "uncategorized", []).append(r)
         cats.setdefault("all", []).append(r)
     for cat, rs in sorted(cats.items()):
-        a = [word_errors(manifest[r["id"]]["ref_verbatim"], base[r["id"]].get("hypothesis", ""), norm) for r in rs]
-        b = [word_errors(manifest[r["id"]]["ref_verbatim"], r.get("hypothesis", ""), norm) for r in rs]
+        a = [word_errors(manifest[r["id"]]["ref_verbatim"], verbatim(base[r["id"]]), norm) for r in rs]
+        b = [word_errors(manifest[r["id"]]["ref_verbatim"], verbatim(r), norm) for r in rs]
         d, ci = paired_diff(a, b, rng)
         verdict = "tie" if ci[0] <= 0 <= ci[1] else ("worse" if d > 0 else "better")
         out[cat] = {"clips": len(rs), "wer_diff": d, "ci": ci, "verdict": verdict}
@@ -335,8 +354,10 @@ def score(manifest_path, result_paths, whisper_norm=False):
             if label != base:
                 comparisons[label] = compare(runs[base], rows, manifest, norm, random.Random(SEED))
     notes = [
-        "WER normalization: " + ("Whisper-style English (numbers, spellings, fillers) on top of benchmark.rs"
-                                 if whisper_norm else "benchmark.rs normalize (the default; --whisper-norm adds Whisper-style English normalization)"),
+        "WER is on each engine's raw model text against ref_verbatim. Normalization: " + (
+            "Whisper-style English (numbers, spellings, fillers) on top of benchmark.rs normalize with accents folded"
+            if whisper_norm else "benchmark.rs normalize with accents folded (the default; --whisper-norm adds Whisper-style English normalization)"),
+        "Latency figures carry the machine's 1-minute load (load1) when each clip ran; compare them only at similar load.",
         "Formatted error compares the text as typed, token by token; case and punctuation count.",
         "Batch engines see the whole clip after key up: t_first = t_final = decode time. Model load is reported apart as load_ms.",
     ]
@@ -388,7 +409,7 @@ def render(report):
     h = []
     h.append("<table><thead><tr><th>Engine</th><th>WER</th><th>Formatted error</th><th>Command acc.</th>"
              "<th>Final wait median (ms)</th><th>Final wait p95 (ms)</th><th>First text median (ms)</th>"
-             "<th>RTF median</th><th>Peak memory (MB)</th><th>CPU s / audio min</th><th>Energy J / audio min</th><th>Load (ms)</th></tr></thead><tbody>")
+             "<th>RTF median</th><th>Peak memory (MB)</th><th>CPU s / audio min</th><th>Energy J / audio min</th><th>Model load (ms)</th><th>load1 median / max</th></tr></thead><tbody>")
     for l in labels:
         o = e[l]["overall"]
         bar = "" if o["wer"] is None else f'<span class="bar" style="width:{min(100, o["wer"] * 400):.0f}%"></span>'
@@ -401,7 +422,8 @@ def render(report):
                  f"<td class=\"num\">{fmt(o['t_final_ms_median'], 'ms')}</td><td class=\"num\">{fmt(o['t_final_ms_p95'], 'ms')}</td>"
                  f"<td class=\"num\">{fmt(o['t_first_ms_median'], 'ms')}</td><td class=\"num\">{fmt(o['rtf_median'], 'x')}</td>"
                  f"<td class=\"num\">{fmt(o['peak_rss_mb'], 'mb')}</td><td class=\"num\">{fmt(o['cpu_s_per_audio_min'], '')}</td>"
-                 f"<td class=\"num\">{fmt(o['energy_j_per_audio_min'], '')}</td><td class=\"num\">{fmt(o['load_ms'], 'ms')}</td></tr>")
+                 f"<td class=\"num\">{fmt(o['energy_j_per_audio_min'], '')}</td><td class=\"num\">{fmt(o['load_ms'], 'ms')}</td>"
+                 f"<td class=\"num\">{fmt(o['load1_median'], '')} / {fmt(o['load1_max'], '')}</td></tr>")
     h.append("</tbody></table>")
     summary = "".join(h)
 
@@ -441,9 +463,9 @@ def render(report):
     clips = []
     for l in labels:
         rows = report["rows"][l]
-        clips.append(f"<details><summary>{html.escape(l)}: {len(rows)} clips</summary><table><thead><tr><th>Clip</th><th>Hypothesis</th><th>Final wait (ms)</th></tr></thead><tbody>")
+        clips.append(f"<details><summary>{html.escape(l)}: {len(rows)} clips</summary><table><thead><tr><th>Clip</th><th>Hypothesis</th><th>Final wait (ms)</th><th>load1</th></tr></thead><tbody>")
         for r in rows:
-            clips.append(f"<tr><td>{html.escape(r['id'])}</td><td>{html.escape(r.get('hypothesis', ''))}</td><td class=\"num\">{fmt(r.get('t_final_ms'), 'ms')}</td></tr>")
+            clips.append(f"<tr><td>{html.escape(r['id'])}</td><td>{html.escape(r.get('hypothesis', ''))}</td><td class=\"num\">{fmt(r.get('t_final_ms'), 'ms')}</td><td class=\"num\">{fmt(r.get('load1'), '')}</td></tr>")
         clips.append("</tbody></table></details>")
 
     notes = "".join(f"<li>{html.escape(n)}</li>" for n in report["notes"])

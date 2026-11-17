@@ -55,6 +55,13 @@ def wav_seconds(path):
         return w.getnframes() / w.getframerate()
 
 
+def load1():
+    try:
+        return float(Path("/proc/loadavg").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 def energy():
     try:
         return int(RAPL.read_text()) / 1e6
@@ -93,7 +100,7 @@ class Writer:
     def clip(self, clip, decode):
         """Runs decode(clip) -> (text, extra dict or None) and writes its row."""
         seconds = wav_seconds(clip["_path"])
-        cpu0, e0 = self.usage.cpu(), energy()
+        cpu0, e0, load = self.usage.cpu(), energy(), load1()
         t = time.perf_counter()
         text, extra = decode(clip)
         took = time.perf_counter() - t
@@ -105,10 +112,10 @@ class Writer:
             "audio_seconds": seconds, "compute_seconds": took, "rtf": took / max(seconds, 1e-6),
             "peak_rss_mb": self.usage.peak_mb(), "cpu_seconds": cpu1 - cpu0,
             "energy_j": (e1 - e0) if e0 is not None and e1 is not None and e1 >= e0 else None,
-            "load_ms": self.load_ms, "paced": False, "mode": self.mode,
+            "load_ms": self.load_ms, "load1": load, "paced": False, "mode": self.mode,
         }
         row.update(extra or {})
         self.f.write(json.dumps(row) + "\n")
         self.f.flush()
-        print(f"{clip['id']}: {seconds:.1f}s audio, final {row['t_final_ms']:.0f} ms", flush=True)
+        print(f"{clip['id']}: {seconds:.1f}s audio, final {row['t_final_ms']:.0f} ms, load {load}", flush=True)
         return row
