@@ -2,14 +2,16 @@
 # Finish a stable Silas release on this Mac (docs/channels.md).
 # ONNX Runtime ships no prebuilt x86_64-apple-darwin library, so there is no Intel build.
 #
-#   gh workflow run promote.yml --ref stable -f nightly=nightly-YYYYMMDDHHMMSS   # first, anywhere
-#   git fetch origin --tags && git checkout v0.2.0
+#   gh workflow run promote.yml --ref main -f nightly=nightly-YYYYMMDDHHMMSS   # first, anywhere
+#   git fetch origin && git checkout --detach <the commit promote.yml names>
 #   scripts/release-stable.sh 0.2.0 "What changed, in a sentence or two."
 #
-# promote.yml moves `stable`, tags vX.Y.Z and builds the Windows and Linux bundles into a draft
-# release for that tag, unsigned for the updater. This script builds and signs the Mac app from the
-# same tag, signs every updater bundle with the stable key, writes one latest.json for every
-# platform, uploads, and publishes the draft as the latest release.
+# promote.yml checks the promotion and builds the Windows and Linux bundles into a draft release
+# for vX.Y.Z whose target is the promoted commit, unsigned for the updater. This script builds and
+# signs the Mac app from that commit, signs every updater bundle with the stable key, writes one
+# latest.json for every platform and uploads it all into the draft. Then it fast-forwards
+# `stable` to the commit, tags vX.Y.Z there and publishes the draft as the latest release. It
+# pushes with your own credentials: the workflow token can't move `stable` over workflow changes.
 #
 # The Mac app is signed with a stable identity, so macOS keeps Silas's Microphone and Accessibility
 # grants across updates as long as the designated requirement stays the same (docs/signing.md).
@@ -33,11 +35,16 @@ find_identity() { security find-identity -v -p codesigning | awk -F'"' -v kind="
 [ -f "$key" ] || { echo "missing stable updater key $key" >&2; exit 1; }
 [ -z "$(git status --porcelain)" ] || { echo "commit your changes first" >&2; exit 1; }
 git fetch -q origin stable --tags
-git rev-parse -q --verify "refs/tags/$tag" >/dev/null || { echo "$tag does not exist; run promote.yml on the stable ref first" >&2; exit 1; }
-[ "$(git rev-parse "$tag^{commit}")" = "$(git rev-parse origin/stable)" ] || { echo "$tag is not stable's head" >&2; exit 1; }
-[ "$(git rev-parse HEAD)" = "$(git rev-parse "$tag^{commit}")" ] || { echo "check out $tag first: git checkout $tag" >&2; exit 1; }
 [ "$(gh release view "$tag" -R "$REPO" --json isDraft -q .isDraft 2>/dev/null)" = true ] ||
   { echo "no draft release for $tag; promote.yml makes it (or $tag is already published)" >&2; exit 1; }
+sha=$(gh release view "$tag" -R "$REPO" --json targetCommitish -q .targetCommitish)
+[[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "the $tag draft targets '$sha', not a commit; re-run promote.yml" >&2; exit 1; }
+[ "$(git rev-parse HEAD)" = "$sha" ] || { echo "check out the promoted commit first: git checkout --detach $sha" >&2; exit 1; }
+# A promotion fast-forwards stable; a hotfix is already stable's head.
+git merge-base --is-ancestor origin/stable "$sha" || { echo "$sha does not contain stable's head; moving stable there would drop a hotfix" >&2; exit 1; }
+if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+  [ "$(git rev-parse "$tag^{commit}")" = "$sha" ] || { echo "$tag already exists on another commit" >&2; exit 1; }
+fi
 
 identity="${APPLE_SIGNING_IDENTITY:-$(find_identity "Developer ID Application:")}"
 if [ -z "$identity" ] && [ "${SILAS_LOCAL_SIGNING:-1}" != 0 ]; then
@@ -48,8 +55,8 @@ identity="${identity:-$(find_identity "Apple Development:")}"
 [ -n "$identity" ] || { echo "no code-signing identity found" >&2; exit 1; }
 echo "signing with $identity"
 
-# The tag holds main's base version; the release version is stamped for the build only and
-# put back afterwards, since `stable` moves only by promotion or a hotfix pull request.
+# The promoted commit holds main's base version; the release version is stamped for the build
+# only and put back afterwards, since `stable` moves only by promotion or a hotfix pull request.
 restore() { git checkout -q -- src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock 2>/dev/null || true; }
 trap 'status=$?; restore; [ $status -eq 0 ] || git checkout -q -- scripts/release-requirement.txt 2>/dev/null || true' EXIT
 
@@ -131,6 +138,13 @@ for f in "$dir"/Silas_aarch64.dmg "$dir"/Silas_aarch64.app.tar.gz "$dir"/Silas_a
     sleep $((attempt * 5))
   done
 done
+# Move stable and tag it only now, with every file in the draft. A plain push refuses anything but
+# a fast-forward, and a re-run finds both already there.
+git push origin "$sha:refs/heads/stable"
+git rev-parse -q --verify "refs/tags/$tag" >/dev/null || git tag "$tag" "$sha"
+git push origin "refs/tags/$tag"
+git fetch -q origin stable --tags --force
+[ "$(git rev-parse "$tag^{commit}")" = "$(git rev-parse origin/stable)" ] || { echo "$tag is not stable's head; the draft is unpublished" >&2; exit 1; }
 gh release edit "$tag" -R "$REPO" --draft=false --latest >/dev/null
 echo "Released Silas $version (stable: macOS, Windows, Linux)."
 echo "Next: bump main's base version in a pull request (docs/channels.md)."

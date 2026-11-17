@@ -18,9 +18,9 @@ bun install --frozen-lockfile && bun run build && bun run check:theme && bun tes
 - Fuzzy matching must not touch common English words (`core/voice/src/dictionary.rs` guards with
   `core/voice/data/common-en.txt`). Add a test to `common_words_are_never_bent_into_jargon` for any
   new matching rule.
-- Channels are stable, nightly and dev (`docs/channels.md`). `promote.yml` moves `stable`, tags
-  `vX.Y.Z` and builds the Windows and Linux drafts; `scripts/release-stable.sh` on Donovan's Mac
-  builds and signs the Mac app (Developer ID Application, else Apple Development; a stable
+- Channels are stable, nightly and dev (`docs/channels.md`). `promote.yml` checks a promotion and
+  builds the Windows and Linux drafts; `scripts/release-stable.sh` on Donovan's Mac moves `stable`,
+  tags `vX.Y.Z`, builds and signs the Mac app (Developer ID Application, else Apple Development; a stable
   designated requirement keeps macOS permissions across updates), signs every stable update and
   publishes. No workflow starts on a pushed tag, and none may name a stable signing secret
   (`scripts/check-channels.sh`). See `docs/signing.md`.

@@ -30,10 +30,13 @@ done
 
 if [ -f "$root/.github/workflows/promote.yml" ]; then
   for t in $(triggers "$root/.github/workflows/promote.yml"); do
-    [ "$t" = workflow_dispatch ] || err ".github/workflows/promote.yml runs on $t; it runs only by hand on the stable ref"
+    [ "$t" = workflow_dispatch ] || err ".github/workflows/promote.yml runs on $t; it runs only by hand on main"
   done
-  grep -q "github.ref == 'refs/heads/stable'" "$root/.github/workflows/promote.yml" ||
-    err ".github/workflows/promote.yml does not check that it runs on the stable ref"
+  grep -q "github.ref == 'refs/heads/main'" "$root/.github/workflows/promote.yml" ||
+    err ".github/workflows/promote.yml does not check that it runs on main"
+  # The job's token can't move stable over workflow changes; release-stable.sh pushes on the Mac.
+  grep -qE 'git push|git/refs' "$root/.github/workflows/promote.yml" &&
+    err ".github/workflows/promote.yml pushes a branch or tag; release-stable.sh moves stable and tags it"
 fi
 
 # Only the stable app release may be marked latest: the stable feed is releases/latest. A release

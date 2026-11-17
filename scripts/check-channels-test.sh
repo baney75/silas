@@ -30,7 +30,7 @@ on:
       nightly: { type: string }
 jobs:
   promote:
-    if: github.ref == 'refs/heads/stable'
+    if: github.ref == 'refs/heads/main'
 EOF
 cat > "$good/scripts/release.sh" <<'EOF'
 gh release create v1 --draft --title x
@@ -63,6 +63,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: gh api -X PATCH "repos/x/releases/1" -F draft=false
+      - run: git push origin "$sha:refs/heads/stable"
 EOF
 cat > "$bad/scripts/models.sh" <<'EOF'
 gh release create models-1 --notes "bench set"
@@ -76,7 +77,8 @@ for want in \
   "stable.yml uses the stable environment but also runs on push" \
   "stable.yml names a stable signing secret" \
   "promote.yml runs on schedule" \
-  "promote.yml does not check that it runs on the stable ref" \
+  "promote.yml does not check that it runs on main" \
+  "promote.yml pushes a branch or tag" \
   "promote.yml publishes a release without make_latest" \
   "models.sh creates a release without --latest or --latest=false" \
   "models.sh publishes a release without --latest or --latest=false"; do

@@ -7,7 +7,7 @@ to Silas.
 
 | Channel | Version | Feed | Built by |
 | --- | --- | --- | --- |
-| stable | `X.Y.Z` | `releases/latest/download/latest.json` | `promote.yml` (Windows, Linux) and `scripts/release-stable.sh` on the release Mac (macOS, every signature) |
+| stable | `X.Y.Z` | `releases/latest/download/latest.json` | `promote.yml` (checks, Windows, Linux) and `scripts/release-stable.sh` on the release Mac (macOS, every signature, the `stable` move, the tag) |
 | nightly | `X.Y.Z-nightly.YYYYMMDDHHMMSS+sha7` | `releases/download/nightly/latest.json` | `nightly.yml`, 07:00 UTC when `main` changed |
 | dev | `X.Y.Z-dev.YYYYMMDDHHMMSS+sha7` | `releases/download/dev/latest.json` | `dev.yml`, every merge to `main` |
 
@@ -32,24 +32,37 @@ nightly key.
 The stable updater key never leaves the release Mac, and the Mac's signing keychain needs a GUI
 session there (field note `silas-stable-release-over-ssh-fails-codesign`). So stable is split:
 
-1. The lead runs `gh workflow run promote.yml --ref stable -f nightly=nightly-YYYYMMDDHHMMSS`
-   (or `-f nightly=nightly` for the newest). It checks the promotion conditions it can (72 hours
-   old, carries `stable`'s head, no open `regression` issue), fast-forwards `stable`, tags
-   `vX.Y.Z`, checks the tag equals `stable`'s head, and builds the Windows and Linux bundles
-   into a draft release for the tag. Their updater bundles are unsigned: no CI job ever holds a
-   stable key, and `check-channels.sh` fails any workflow that names one.
-2. On the release Mac, in a Terminal: `git fetch origin --tags && git checkout vX.Y.Z &&
-   scripts/release-stable.sh X.Y.Z "notes"`. It builds and signs the Mac app as before, signs
-   the Windows and Linux bundles from the draft with the stable key, writes one `latest.json`
-   for every platform, uploads, and publishes the draft as the latest release.
+1. The lead runs `gh workflow run promote.yml --ref main -f nightly=nightly-YYYYMMDDHHMMSS`
+   (or `-f nightly=nightly` for the newest). It checks the promotion conditions (72 hours old,
+   carries `stable`'s head, no open `regression` issue) and builds the Windows and Linux bundles
+   into a draft release for `vX.Y.Z` whose target is the nightly's commit. Their updater bundles
+   are unsigned: no CI job ever holds a stable key, and `check-channels.sh` fails any workflow
+   that names one.
+2. On the release Mac, in a Terminal: `git fetch origin && git checkout --detach <commit> &&
+   scripts/release-stable.sh X.Y.Z "notes"`, with the commit from the run's summary. It builds
+   and signs the Mac app as before, signs the Windows and Linux bundles from the draft with the
+   stable key, writes one `latest.json` for every platform and uploads it all. Only then does it
+   fast-forward `stable` to the commit, tag `vX.Y.Z` there, check the tag equals `stable`'s head,
+   and publish the draft as the latest release.
 3. Bump `main`'s base version (below).
 
-**Hotfix**: a pull request into `stable`, merged with a merge commit, then
-`gh workflow run promote.yml --ref stable -f hotfix=true`, which tags `stable`'s head as the next
-patch, then step 2. Merge `stable` back into `main` with a merge commit the same day.
+This is where Silas differs from the shared scheme, which has `promote.yml` move `stable` and
+push the tag. A workflow's own token can't push a ref update that carries changes to
+`.github/workflows/`, and it can't be given the permission to. A promotion nearly always carries
+some, so the move and the tag happen in `release-stable.sh`, with the release operator's own
+credentials, which also sign the release.
 
-The `stable` branch and its rulesets are set up by hand once: the branch starts at the v0.1.6
-commit, and only GitHub Actions running `promote.yml` may push it or create `v*` tags.
+**Hotfix**: a pull request into `stable`, reviewed and merged by a repository admin with a merge
+commit, then `gh workflow run promote.yml --ref main -f hotfix=true`, which builds `stable`'s
+head as the next patch, then step 2 (`stable` is already at the commit, so only the tag moves).
+The hotfix path skips the open-regression check, since fixing one is the usual reason for a
+hotfix and a pull request into `stable` never closes its issue. Merge `stable` back into `main`
+with a merge commit the same day.
+
+The `stable` branch and its rulesets are set up by hand once. The branch starts at the commit
+that merged this scheme into `main` (it contains v0.1.6, and every later nightly descends from
+it). Rulesets: `stable` can't be deleted or force-pushed, and only repository admins may update
+it (`release-stable.sh` or a hotfix merge); only repository admins may create `v*` tags.
 
 ## Versions
 

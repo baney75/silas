@@ -23,7 +23,7 @@ That line must stay the same from release to release, or every user is asked aga
 
 ## Stable channel
 
-`scripts/release-stable.sh` signs on Donovan's Mac, from the `vX.Y.Z` tag `promote.yml` made
+`scripts/release-stable.sh` signs on Donovan's Mac, from the commit `promote.yml` built its draft for
 (docs/channels.md). It picks, in order:
 
 1. `APPLE_SIGNING_IDENTITY` if set (an explicit override),
