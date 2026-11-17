@@ -12,7 +12,7 @@ Metrics, per engine and per category:
   formatted_error token error on ref_formatted, case and punctuation sensitive: what the app types. Numbers
                   follow the numbers rule on both sides here too.
   command_acc     command clips only: the hypothesis must parse as JSON and equal the reference action list.
-                  An engine with no command mode scores 0, and the report says so.
+                  An engine that produces no action lists scores 0, and the report says so.
   t_first / t_final  median and p95 milliseconds; median RTF; peak memory; CPU seconds per audio minute (a
                   battery proxy); energy per audio minute when RAPL was readable.
 Each engine is compared with Silas per category by a paired bootstrap of the WER difference; a difference
@@ -34,6 +34,8 @@ from pathlib import Path
 
 BOOTSTRAP = 1000
 SEED = 20261117
+# Fewer clips than this in a category and the paired bootstrap has nothing to resample: no verdict.
+MIN_PAIRED = 5
 
 # ---------------------------------------------------------------- normalization
 
@@ -397,7 +399,10 @@ def compare(base_rows, rows, manifest, norm, rng):
         a = [word_errors(manifest[r["id"]]["ref_verbatim"], verbatim(base[r["id"]]), norm) for r in rs]
         b = [word_errors(manifest[r["id"]]["ref_verbatim"], verbatim(r), norm) for r in rs]
         d, ci = paired_diff(a, b, rng)
-        verdict = "tie" if ci[0] <= 0 <= ci[1] else ("worse" if d > 0 else "better")
+        if len(rs) < MIN_PAIRED:
+            verdict = "too few clips"
+        else:
+            verdict = "tie" if ci[0] <= 0 <= ci[1] else ("worse" if d > 0 else "better")
         out[cat] = {"clips": len(rs), "wer_diff": d, "ci": ci, "verdict": verdict}
     return out
 
@@ -424,7 +429,7 @@ def score(manifest_path, result_paths, whisper_norm=False):
     if any(c.get("category") == "command" for c in manifest.values()):
         for label, e in engines.items():
             if not e["has_commands"]:
-                notes.append(f"{label} has no command mode: its command accuracy is 0 by construction.")
+                notes.append(f"{label} produced no command actions (a JSON action list) on the command clips: its command accuracy is 0 by construction.")
     if all(all(r.get("energy_j") is None for r in rows) for rows in runs.values()):
         notes.append("Energy: not available (RAPL /sys/class/powercap needs root on this machine). CPU seconds per audio minute stands in.")
     return {
@@ -474,7 +479,7 @@ def render(report):
         o = e[l]["overall"]
         bar = "" if o["wer"] is None else f'<span class="bar" style="width:{min(100, o["wer"] * 400):.0f}%"></span>'
         mark = ' class="base"' if l == report["baseline"] else ""
-        cmd = fmt(o["command_acc"], "pct") + ("" if e[l]["has_commands"] or o["command_acc"] is None else ' <span class="na">no command mode</span>')
+        cmd = fmt(o["command_acc"], "pct") + ("" if e[l]["has_commands"] or o["command_acc"] is None else ' <span class="na">no command actions</span>')
         missing = f", missing {len(e[l]['missing'])} clips" if e[l]["missing"] else ""
         h.append(f"<tr{mark}><td>{html.escape(l)}<div class=\"sub\">{html.escape(str(o.get('mode')))}{missing}</div></td>"
                  f"<td class=\"num\">{fmt(o['wer'], 'pct')} {ci_text(o['wer_ci'])}<div class=\"track\">{bar}</div></td>"
@@ -513,7 +518,7 @@ def render(report):
                 if not x:
                     cells.append('<td><span class="na">n/a</span></td>')
                     continue
-                cls = {"better": "good", "worse": "bad", "tie": "tie"}[x["verdict"]]
+                cls = {"better": "good", "worse": "bad"}.get(x["verdict"], "tie")
                 cells.append(f'<td><span class="pill {cls}">{x["verdict"]}</span> {x["wer_diff"] * 100:+.1f} pts'
                              f'<div class="sub">95% {x["ci"][0] * 100:+.1f} to {x["ci"][1] * 100:+.1f}</div></td>')
             h.append(f"<tr><td>{html.escape(l)}</td>{''.join(cells)}</tr>")

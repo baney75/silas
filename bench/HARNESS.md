@@ -77,12 +77,12 @@ simulated clock the way nerd-dictation does and reports when the text was ready.
   spellings, fillers, `$` and `%`.
 - **Formatted error** on `ref_formatted`: token errors with case, punctuation and line breaks counted, numbers
   under the same rule ("sixteen," and "16," match; "twenty-five" and "25" match).
-- **Command accuracy**: the hypothesis must parse as JSON and equal the action list. Engines with no
-  command mode score 0, and the report says so.
+- **Command accuracy**: the hypothesis must parse as JSON and equal the action list. An engine that
+  produces no action lists (every engine today, Silas included) scores 0, and the report says so.
 - Median and p95 of `t_first_ms` and `t_final_ms`, median RTF, peak memory, CPU seconds per audio minute
   (the battery proxy), energy per audio minute when RAPL is readable.
 - Bootstrap 95% intervals for WER per category, and a paired bootstrap of each engine against Silas. A
-  difference whose interval includes zero is reported as a tie.
+  difference whose interval includes zero is reported as a tie; a category with fewer than 5 clips gets no verdict.
 
 ## Ratchet
 
