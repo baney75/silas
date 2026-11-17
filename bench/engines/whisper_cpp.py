@@ -5,7 +5,7 @@
 """whisper.cpp on the Silas speech test set, through whisper-server so the model loads once.
 
   bench/engines/build-whisper-cpp.sh
-  uv run bench/engines/whisper_cpp.py --manifest bench/fixtures/manifest.jsonl --model small.en --out bench/out/whisper-small.en.jsonl
+  uv run bench/engines/whisper_cpp.py --manifest bench/manifest.jsonl --set ~/.cache/silas-bench/bench-set-v1 --model small.en --out bench/out/whisper-small.en.jsonl
 
 --model is a ggml model name under ~/.cache/silas-bench/models/ggml (base.en, small.en, large-v3-turbo-q5_0).
 The server keeps its own defaults (beam search, 4 threads unless --threads says otherwise). CPU and memory

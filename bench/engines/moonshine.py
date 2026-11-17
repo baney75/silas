@@ -4,7 +4,7 @@
 # ///
 """Moonshine (Useful Sensors' ONNX release) on the Silas speech test set.
 
-  uv run bench/engines/moonshine.py --manifest bench/fixtures/manifest.jsonl --model base --out bench/out/moonshine-base.jsonl
+  uv run bench/engines/moonshine.py --manifest bench/manifest.jsonl --set ~/.cache/silas-bench/bench-set-v1 --model base --out bench/out/moonshine-base.jsonl
 
 --model is tiny or base. Weights come from the Hugging Face repo UsefulSensors/moonshine into
 ~/.cache/silas-bench/hf. Each clip is decoded whole after the key comes up.

@@ -5,7 +5,7 @@
 """Vosk on the Silas speech test set, fed the way nerd-dictation feeds it: audio in small blocks as it is
 spoken, text taken at the end.
 
-  uv run bench/engines/vosk_engine.py --manifest bench/fixtures/manifest.jsonl --model small-en-us-0.15 --out bench/out/vosk.jsonl
+  uv run bench/engines/vosk_engine.py --manifest bench/manifest.jsonl --set ~/.cache/silas-bench/bench-set-v1 --model small-en-us-0.15 --out bench/out/vosk.jsonl
 
 --model names vosk-model-<model>.zip under ~/.cache/silas-bench/models/vosk (fetched from alphacephei.com if
 missing). Vosk streams, so the clip is replayed on a simulated clock like `silas-bench run --fast`: block i
