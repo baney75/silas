@@ -40,6 +40,9 @@ function setFace(next: Face) {
   face = next;
   pill.dataset.state = next;
   if (next === "recording") {
+    // Hollow until the microphone sends its first sound: the overlay comes up at key-down,
+    // before the stream is open, and the person should know when Silas can hear them.
+    pill.dataset.live = "false";
     startedAt = performance.now();
     targets.fill(0);
     shown.fill(0);
@@ -95,6 +98,7 @@ void on("status", ({ status }) => {
 });
 void on("level", (level) => {
   latest = level;
+  if (face === "recording" && pill.dataset.live !== "true") pill.dataset.live = "true";
 });
 void on("learned", (res) => {
   const c = res.learned[0];
