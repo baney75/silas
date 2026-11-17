@@ -1,0 +1,108 @@
+name: Promote
+# Checks a promotion (docs/channels.md, Promotion rule) and builds the Windows and Linux stable
+# bundles into a draft release for vX.Y.Z whose target is the promoted commit. Run it on main:
+#
+#   gh workflow run promote.yml --ref main -f nightly=nightly-YYYYMMDDHHMMSS
+#   gh workflow run promote.yml --ref main -f hotfix=true
+#
+# It moves no branch and pushes no tag: the job's token can't push a `stable` move that carries
+# workflow changes, and GitHub gives that token no way to. scripts/release-stable.sh on the
+# release Mac fast-forwards `stable`, tags vX.Y.Z, adds the Mac build, signs every updater bundle
+# with the stable key (which never leaves that Mac), writes latest.json and publishes. After that,
+# bump main's base version (docs/channels.md in this repo).
+on:
+  workflow_dispatch:
+    inputs:
+      nightly:
+        description: The nightly to promote, as its tag (nightly-YYYYMMDDHHMMSS, or nightly for the newest)
+        type: string
+        default: ""
+      hotfix:
+        description: Build stable's head as the next patch instead (a hotfix merged into stable)
+        type: boolean
+        default: false
+permissions:
+  contents: write # the draft release
+  issues: read
+concurrency:
+  group: promote
+  cancel-in-progress: false
+jobs:
+  promote:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.go.outputs.version }}
+      sha: ${{ steps.go.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - id: go
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NIGHTLY: ${{ inputs.nightly }}
+          HOTFIX: ${{ inputs.hotfix }}
+        run: |
+          set -euo pipefail
+          git fetch -q origin --tags --force
+          stable=$(git rev-parse origin/stable)
+          if [ "$HOTFIX" = true ]; then
+            [ -z "$NIGHTLY" ] || { echo "give either nightly or hotfix, not both" >&2; exit 1; }
+            sha=$stable
+            # A re-run finds stable's head already tagged and builds that tag again.
+            version=$(git tag --points-at "$sha" --list 'v*' | sed 's/^v//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
+            if [ -z "$version" ]; then
+              last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$sha") || { echo "stable carries no vX.Y.Z tag to hotfix" >&2; exit 1; }
+              IFS=. read -r ma mi pa <<< "${last#v}"
+              version="$ma.$mi.$((pa + 1))"
+            fi
+          else
+            [[ "$NIGHTLY" =~ ^nightly(-[0-9]{12,14})?$ ]] || { echo "nightly must be nightly or nightly-YYYYMMDDHHMMSS, not '$NIGHTLY'" >&2; exit 1; }
+            # One read gives the name, the age and the commit together, so a nightly swapped in
+            # meanwhile can't lend its commit another release's age.
+            release=$(gh api "repos/$REPO/releases/tags/$NIGHTLY" -q '[.name, .published_at, .target_commitish] | @tsv') || { echo "no release $NIGHTLY" >&2; exit 1; }
+            IFS=$'\t' read -r name published sha <<< "$release"
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "$NIGHTLY targets '$sha', not a commit; promote a nightly built by channel-build.yml" >&2; exit 1; }
+            version=$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+-nightly' <<< "$name" | sed 's/-nightly$//') || { echo "can't read a version from '$name'" >&2; exit 1; }
+            # 1. Published at least 72 hours ago.
+            age=$(( $(date -u +%s) - $(date -u -d "$published" +%s) ))
+            [ "$age" -ge $((72 * 3600)) ] || { echo "$NIGHTLY was published $((age / 3600)) hours ago; stable needs 72" >&2; exit 1; }
+            # It was built from main (channel-build.yml refuses other refs; this checks the commit).
+            git merge-base --is-ancestor "$sha" origin/main || { echo "$NIGHTLY ($sha) is not on main" >&2; exit 1; }
+            # 2. It carries every hotfix on stable, so moving stable to it is a fast-forward.
+            git merge-base --is-ancestor "$stable" "$sha" || { echo "$NIGHTLY ($sha) does not contain stable's head $stable; merge stable into main first" >&2; exit 1; }
+            # 3. No open regression. A hotfix skips this: fixing one is what a hotfix is for, and
+            # a pull request into stable never closes its issue.
+            open=$(gh issue list -R "$REPO" --label regression --state open --json number -q length)
+            [ "$open" = 0 ] || { echo "$open open regression issue(s); fix them first" >&2; exit 1; }
+          fi
+
+          tag="v$version"
+          if git rev-parse -q --verify "refs/tags/$tag" > /dev/null; then
+            # Only a re-run of the same promotion may find its tag.
+            [ "$(git rev-parse "$tag^{commit}")" = "$sha" ] || { echo "$tag already exists on another commit" >&2; exit 1; }
+            if gh release view "$tag" -R "$REPO" --json isDraft -q .isDraft 2>/dev/null | grep -qx false; then
+              echo "$tag is already released" >&2; exit 1
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          {
+            echo "### $tag from $sha"
+            echo "The Windows and Linux bundles build into a draft. Then, on the release Mac:"
+            echo '```'
+            echo "git fetch origin && git checkout --detach $sha && scripts/release-stable.sh $version \"<release notes>\""
+            echo '```'
+            echo "After it is published, bump main's base version (docs/channels.md)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    needs: promote
+    uses: ./.github/workflows/channel-build.yml
+    with:
+      channel: stable
+      version: ${{ needs.promote.outputs.version }}
+      ref: ${{ needs.promote.outputs.sha }}
+    # No secrets: no CI key may sign a stable update.

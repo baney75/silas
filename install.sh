@@ -3,8 +3,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | sh
 # Remove it (your dictionary and history stay):
 #   curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | sh -s -- --uninstall
-# macOS gets the stable channel (SILAS_CHANNEL=nightly for nightly); Linux gets nightly,
-# the only Linux channel. Other knobs: SILAS_INSTALL_DIR (macOS, default /Applications),
+# macOS gets the stable channel (SILAS_CHANNEL=nightly for nightly); Linux gets nightly
+# until a stable release carries Linux (docs/channels.md). Other knobs: SILAS_INSTALL_DIR (macOS, default /Applications),
 # SILAS_LINUX_FORMAT=appimage (skip the .deb/.rpm), SILAS_NO_OPEN=1 (don't launch Silas),
 # SILAS_ALLOW_NEW_SIGNATURE=1 (macOS: replace a Silas signed with a different certificate).
 set -eu
@@ -374,7 +374,9 @@ linux_install() {
     curl -fL# "$url" -o "$tmp/silas.$format" || die "Could not download $url."
     stop_linux_silas
     if [ "$format" = deb ]; then
-      as_root apt-get install -y "$tmp/silas.deb"
+      # A stale package list names dependency versions the mirror has since dropped (404).
+      as_root apt-get install -y "$tmp/silas.deb" ||
+        { as_root apt-get update && as_root apt-get install -y "$tmp/silas.deb"; }
     elif command -v dnf >/dev/null 2>&1; then
       as_root dnf install -y "$tmp/silas.rpm"
     else

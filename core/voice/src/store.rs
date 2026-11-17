@@ -167,25 +167,35 @@ impl Default for Settings {
             launch_at_login: true,
             microphone: None,
             onboarded: false,
-            update_channel: if cfg!(target_os = "macos") {
-                "stable"
-            } else {
-                "nightly"
-            }
-            .into(),
+            update_channel: "stable".into(),
             auto_update: true,
         }
     }
 }
 
+/// The update channels, as the Settings picker lists them (docs/channels.md).
+pub const CHANNELS: [&str; 3] = ["stable", "nightly", "dev"];
+
 impl Settings {
-    /// Only macOS has a tested stable channel; everyone else follows nightly.
+    /// The channel Silas checks for updates: the saved one on every OS, or stable when the saved
+    /// value is not a channel. Stable on Windows and Linux follows nightly until a stable release
+    /// carries those platforms (`updates.rs` falls back when the stable feed has no entry for this
+    /// one), so those installs never go without updates.
     pub fn effective_channel(&self) -> &str {
-        if cfg!(target_os = "macos") && self.update_channel == "stable" {
-            "stable"
-        } else {
-            "nightly"
-        }
+        CHANNELS
+            .into_iter()
+            .find(|c| *c == self.update_channel)
+            .unwrap_or("stable")
+    }
+}
+
+/// The channel a build came from, by the pre-release part of its version: `0.2.1-nightly.…` is
+/// nightly, `0.2.1-dev.…` dev, and a plain `0.2.0` stable. A fresh install starts on its own channel.
+pub fn build_channel(pre: &str) -> &'static str {
+    match pre.split('.').next() {
+        Some("nightly") => "nightly",
+        Some("dev") => "dev",
+        _ => "stable",
     }
 }
 
@@ -279,6 +289,36 @@ pub struct Stats {
 #[cfg(test)]
 mod migrate_tests {
     use super::*;
+
+    fn on(channel: &str) -> Settings {
+        Settings { update_channel: channel.into(), ..Settings::default() }
+    }
+
+    #[test]
+    fn every_channel_is_offered_on_every_os() {
+        for c in CHANNELS {
+            assert_eq!(on(c).effective_channel(), c);
+        }
+        assert_eq!(Settings::default().effective_channel(), "stable");
+    }
+
+    #[test]
+    fn a_saved_value_that_is_not_a_channel_means_stable() {
+        for bad in ["", "beta", "Nightly", "preview"] {
+            assert_eq!(on(bad).effective_channel(), "stable", "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_build_names_its_channel_by_its_version() {
+        assert_eq!(build_channel(""), "stable");
+        assert_eq!(build_channel("nightly.20261117070000"), "nightly");
+        // The nightlies published before seconds were added.
+        assert_eq!(build_channel("nightly.202611081355"), "nightly");
+        assert_eq!(build_channel("dev.20261117131042"), "dev");
+        assert_eq!(build_channel("rc.1"), "stable");
+        assert_eq!(build_channel("nightlyish.1"), "stable");
+    }
 
     #[test]
     fn a_saved_old_default_moves_only_where_the_microphone_key_is_the_default() {

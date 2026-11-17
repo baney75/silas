@@ -39,6 +39,9 @@ jobs:
       - name: Release requirement pin
         if: runner.os == 'Linux'
         run: scripts/check-requirement.sh --pin && scripts/check-requirement-test.sh && bash scripts/signing-identity-test.sh && bash scripts/install-requirement-test.sh
+      - name: Release channel rules
+        if: runner.os == 'Linux'
+        run: scripts/check-channels.sh && scripts/check-channels-test.sh && scripts/channel-version-test.sh && scripts/release-draft-test.sh
       - run: bun install --frozen-lockfile
       - run: bun run build
       - run: bun run check:theme
