@@ -3,19 +3,38 @@
   "manifest": "bench/manifest.jsonl",
   "subset": "bench/subsets/ratchet.txt",
   "set": "~/.cache/silas-bench/bench-set-v1",
-  "metrics": {
-    "wer": {
-      "accent": 0.295082,
-      "clean": 0.022222,
-      "code": 0.210526,
-      "dictation": 0.08871,
-      "longform": 0.012953,
-      "noise": 0.068493
+  "baselines": {
+    "local": {
+      "wer": {
+        "accent": 0.295082,
+        "clean": 0.022222,
+        "code": 0.210526,
+        "dictation": 0.08871,
+        "longform": 0.012953,
+        "noise": 0.068493
+      },
+      "formatted_error": 0.198113,
+      "t_final_ms_median": 974.1,
+      "peak_rss_mb": 1569.9,
+      "timing": "fast",
+      "cpu": "AMD Ryzen 5 3600 6-Core Processor",
+      "updated": "2026-11-17"
     },
-    "formatted_error": 0.198113,
-    "t_final_ms_median": 974.1,
-    "peak_rss_mb": 1569.9,
-    "timing": "fast"
-  },
-  "updated": "2026-11-17"
+    "ci": {
+      "wer": {
+        "accent": 0.295082,
+        "clean": 0.011111,
+        "code": 0.245614,
+        "dictation": 0.08871,
+        "longform": 0.012953,
+        "noise": 0.075342
+      },
+      "formatted_error": 0.201651,
+      "t_final_ms_median": 709.0,
+      "peak_rss_mb": 1229.4,
+      "timing": "fast",
+      "cpu": null,
+      "updated": "2026-11-17"
+    }
+  }
 }

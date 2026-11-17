@@ -96,12 +96,21 @@ class EndToEnd(unittest.TestCase):
 
     def test_round_trip(self):
         self.assertEqual(self.main("--results", str(self.good), "--update"), 0)
-        recorded = json.loads(self.cfg.read_text())["metrics"]
+        recorded = json.loads(self.cfg.read_text())["baselines"]["local"]
         self.assertEqual(recorded["wer"], {"clean": 0.0})
         self.assertEqual(self.main("--results", str(self.good)), 0)
         self.assertEqual(self.main("--results", str(self.bad)), 1)
         self.assertEqual(self.main("--results", str(self.bad), "--update"), 1)
-        self.assertEqual(json.loads(self.cfg.read_text())["metrics"], recorded)
+        self.assertEqual(json.loads(self.cfg.read_text())["baselines"]["local"], recorded)
+
+    def test_each_machine_has_its_own_baseline(self):
+        self.assertEqual(self.main("--results", str(self.good), "--update"), 0)
+        self.assertEqual(self.main("--results", str(self.good), "--baseline", "ci"), 1)  # none recorded yet
+        self.assertEqual(self.main("--results", str(self.bad), "--baseline", "ci", "--cpu", "Runner CPU", "--update"), 0)
+        baselines = json.loads(self.cfg.read_text())["baselines"]
+        self.assertEqual(baselines["ci"]["cpu"], "Runner CPU")
+        self.assertEqual(self.main("--results", str(self.bad), "--baseline", "ci"), 0)
+        self.assertEqual(self.main("--results", str(self.bad)), 1)
 
 
 class Scoring(unittest.TestCase):

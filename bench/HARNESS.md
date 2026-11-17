@@ -97,13 +97,20 @@ simulated clock the way nerd-dictation does and reports when the text was ready.
 formatted error, median `t_final_ms`, peak memory. `bench/ratchet.py` fails when a category's WER or the
 formatted error rises more than 0.5 points, median `t_final_ms` more than 15%, or peak memory more than 10%.
 Latency is compared only between runs with the same timing mode. `--update` writes new numbers only when every
-one is equal or better. CI (`.github/workflows/bench-ratchet.yml`) runs it with `--gate accuracy` on PRs
+one is equal or better. CI (`.github/workflows/bench-ratchet.yml`) runs it with `--baseline ci --gate accuracy` on PRs
 touching `core/voice/**` or `bench/**`; run the full gate locally.
 
 The ratchet runs `silas-bench run --fast`, because it repeats word for word and real time does not. Parakeet's
 text shifts a little with how much silence trails the clip. In real time that tail is the 200 ms the app waits
 plus a few milliseconds of thread timing, and on abbey1 six of the 40 clips came out a word different between a
 real-time run and a `--fast` run; two `--fast` runs matched on all 40. `--real-time` runs it paced anyway.
+
+The same model gives slightly different text on a different CPU, because onnxruntime picks different kernels:
+10 of the 40 clips differed by a word or a comma between abbey1 (AMD Ryzen 5 3600) and GitHub's runner, which
+moved the code category by 3.5 points. So `ratchet.json` keeps one baseline per machine, each with its CPU:
+`local` (abbey1, the default) and `ci` (the runner; the workflow passes `--baseline ci`). A run on a CPU other than
+its baseline's prints a note saying so. To record the runner's numbers, download the `bench-ratchet` artifact
+from a CI run and pass it with `--results <file> --baseline ci --cpu "<runner CPU>" --update`.
 
 One limit remains: under `--fast` the pieces worker still waits on the model's real speed, so on a much slower or
 faster machine a long clip can be cut at different pauses and its text can change by a word or two. Only the one
