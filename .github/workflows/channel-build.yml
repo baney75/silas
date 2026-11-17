@@ -60,6 +60,10 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
+          # Nightly and dev publish only main: a nightly is what promote.yml can put on stable.
+          if [ "$CHANNEL" != stable ] && [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "$CHANNEL builds only from main, not $GITHUB_REF" >&2; exit 1
+          fi
           sha=$(git rev-parse HEAD)
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           mac='{"os":"macos-15","args":"--target aarch64-apple-darwin --bundles app,dmg"}'
@@ -298,8 +302,14 @@ jobs:
           gh api -X PATCH "repos/$REPO/releases/$id" -f tag_name="$CHANNEL" -f target_commitish="$SHA" \
             -F draft=false -F prerelease=true -f make_latest=false -f name="Silas $title $VERSION" \
             -f body="Built from $SHA. $notes" > /dev/null
+
+  # Its own job: cleanup keys on publish, and a failed prune must not delete the release just swapped in.
+  prune:
+    needs: publish
+    if: inputs.channel == 'nightly'
+    runs-on: ubuntu-latest
+    steps:
       - name: Drop nightlies older than 14 days
-        if: inputs.channel == 'nightly'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

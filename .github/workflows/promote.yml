@@ -67,6 +67,8 @@ jobs:
             # 1. Published at least 72 hours ago.
             age=$(( $(date -u +%s) - $(date -u -d "$published" +%s) ))
             [ "$age" -ge $((72 * 3600)) ] || { echo "$NIGHTLY was published $((age / 3600)) hours ago; stable needs 72" >&2; exit 1; }
+            # It was built from main (channel-build.yml refuses other refs; this checks the commit).
+            git merge-base --is-ancestor "$sha" origin/main || { echo "$NIGHTLY ($sha) is not on main" >&2; exit 1; }
             # 2. It carries every hotfix on stable, so moving stable to it is a fast-forward.
             git merge-base --is-ancestor "$stable" "$sha" || { echo "$NIGHTLY ($sha) does not contain stable's head $stable; merge stable into main first" >&2; exit 1; }
             # 3. No open regression. A hotfix skips this: fixing one is what a hotfix is for, and
