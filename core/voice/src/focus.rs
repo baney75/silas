@@ -164,14 +164,17 @@ mod hypr {
         Some(window(&v))
     }
 
-    /// The window's address and class as one id. An address alone can come back for a later
-    /// window once the first one closes; the class makes that much less likely to pass. None when
-    /// no window has the keyboard (`{}`) or the reply isn't JSON. The overlay is known by its
-    /// title (`tauri.conf.json`), which holds inside a Flatpak too, where pids don't match.
+    /// The window in a reply, or None when no window has the keyboard (`{}`) or the reply isn't
+    /// JSON.
+    #[cfg(test)]
     pub fn parse(json: &str) -> Option<Window> {
         answer(json).flatten()
     }
 
+    /// The window's address and class as one id. An address alone can come back for a later
+    /// window once the first one closes; the class makes that much less likely to pass. The
+    /// overlay is known by its title (`tauri.conf.json`), which holds inside a Flatpak too, where
+    /// pids don't match.
     fn window(v: &serde_json::Value) -> Option<Window> {
         let addr = v.get("address")?.as_str()?.trim();
         let address = u64::from_str_radix(addr.trim_start_matches("0x"), 16).ok().filter(|a| *a != 0)?;
