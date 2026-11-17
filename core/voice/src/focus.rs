@@ -57,6 +57,8 @@ pub fn secure_input() -> bool {
 /// is tested on every platform; only Linux calls it.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod hypr {
+    pub const OVERLAY_TITLE: &str = "Silas Overlay";
+
     /// One window as Hyprland reports it.
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub struct Window {
@@ -64,9 +66,9 @@ mod hypr {
         pub id: u64,
         /// What `hyprctl dispatch focuswindow` needs to give it the keyboard back.
         pub address: u64,
-        /// One of Silas's own windows. The overlay can take the keyboard as it opens, even
-        /// though it asks not to.
-        pub ours: bool,
+        /// Silas's recording overlay, which can take the keyboard as it opens even though it
+        /// asks not to. Its other windows count as any app's: a click there is a choice.
+        pub overlay: bool,
     }
 
     /// Running under Hyprland, with `hyprctl` on the PATH.
@@ -87,23 +89,28 @@ mod hypr {
         if !out.status.success() {
             return None;
         }
-        parse(&String::from_utf8_lossy(&out.stdout), std::process::id())
+        parse(&String::from_utf8_lossy(&out.stdout))
     }
 
     /// Gives the keyboard to the window at `address`. False when Hyprland refused.
     pub fn focus(address: u64) -> bool {
         available()
             && std::process::Command::new("hyprctl")
-                .args(["dispatch", "focuswindow", &format!("address:0x{address:x}")])
+                .args(["dispatch", "focuswindow", &window_arg(address)])
                 .output()
                 .is_ok_and(|o| o.status.success())
     }
 
+    /// How `hyprctl dispatch` names a window: the address as `activewindow -j` prints it.
+    pub fn window_arg(address: u64) -> String {
+        format!("address:0x{address:x}")
+    }
+
     /// The window's address and class as one id. An address alone can come back for a later
     /// window once the first one closes; the class makes that much less likely to pass. None when
-    /// no window has the keyboard (`{}`) or the reply isn't JSON. `own_pid`: Silas's process, to
-    /// tell its own windows apart.
-    pub fn parse(json: &str, own_pid: u32) -> Option<Window> {
+    /// no window has the keyboard (`{}`) or the reply isn't JSON. The overlay is known by its
+    /// title (`tauri.conf.json`), which holds inside a Flatpak too, where pids don't match.
+    pub fn parse(json: &str) -> Option<Window> {
         let v: serde_json::Value = serde_json::from_str(json).ok()?;
         let addr = v.get("address")?.as_str()?.trim();
         let address = u64::from_str_radix(addr.trim_start_matches("0x"), 16).ok().filter(|a| *a != 0)?;
@@ -114,8 +121,8 @@ mod hypr {
             h ^= u64::from(b);
             h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }
-        let ours = v.get("pid").and_then(|p| p.as_u64()) == Some(u64::from(own_pid));
-        Some(Window { id: h, address, ours })
+        let overlay = v.get("title").and_then(|t| t.as_str()) == Some(OVERLAY_TITLE);
+        Some(Window { id: h, address, overlay })
     }
 }
 
@@ -136,7 +143,7 @@ pub struct Target {
 
 /// Where the Linux target stands, from the window that had the keyboard and the one that has it
 /// now. None now: Hyprland didn't answer, so nothing is known and typing goes ahead. When
-/// Silas's own overlay took the keyboard, `refocus` hands it back to the target and reports
+/// Silas's overlay took the keyboard, `refocus` hands it back to the target and reports
 /// the window that has it after.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn linux_restore(
@@ -146,8 +153,8 @@ fn linux_restore(
 ) -> Restore {
     match now {
         Some(w) if w.id == then.id => Restore::InPlace,
-        // Silas's own window took it; nobody chose that, so put the keyboard back.
-        Some(w) if w.ours && !then.ours => match refocus(then.address) {
+        // Silas's overlay took it; nobody chose that, so put the keyboard back.
+        Some(w) if w.overlay && !then.overlay => match refocus(then.address) {
             Some(w) if w.id == then.id => Restore::Restored,
             _ => Restore::Failed,
         },
@@ -947,21 +954,19 @@ mod hypr_tests {
     /// replaced).
     const RECORDED: &str = include_str!("testdata/hyprctl-activewindow.json");
 
-    const SILAS: u32 = 4242;
-
     fn id(json: &str) -> Option<u64> {
-        hypr::parse(json, SILAS).map(|w| w.id)
+        hypr::parse(json).map(|w| w.id)
     }
 
-    fn window(id: u64, ours: bool) -> hypr::Window {
-        hypr::Window { id, address: id * 16, ours }
+    fn window(id: u64, overlay: bool) -> hypr::Window {
+        hypr::Window { id, address: id * 16, overlay }
     }
 
     #[test]
     fn hyprland_names_the_window_by_address_and_class() {
-        let w = hypr::parse(RECORDED, SILAS).expect("a window");
+        let w = hypr::parse(RECORDED).expect("a window");
         assert_eq!(w.address, 0x55ef19943100);
-        assert!(!w.ours);
+        assert!(!w.overlay);
         let id = w.id;
         // Same address and class: the same id, whatever else changed.
         let moved = RECORDED.replace("\"floating\": true", "\"floating\": false");
@@ -972,10 +977,24 @@ mod hypr_tests {
     }
 
     #[test]
-    fn hyprland_knows_silas_own_windows_by_pid() {
-        let ours = RECORDED.replace("\"pid\": 897868", &format!("\"pid\": {SILAS}"));
-        assert!(hypr::parse(&ours, SILAS).expect("a window").ours);
-        assert!(!hypr::parse(RECORDED, SILAS).expect("a window").ours);
+    fn the_hand_back_names_the_window_as_hyprland_printed_it() {
+        let w = hypr::parse(RECORDED).expect("a window");
+        assert_eq!(hypr::window_arg(w.address), "address:0x55ef19943100");
+    }
+
+    #[test]
+    fn hyprland_knows_the_overlay_by_its_title() {
+        let titled = |t: &str| RECORDED.replacen("\"title\": \"(scrubbed)\"", &format!("\"title\": \"{t}\""), 1);
+        assert!(hypr::parse(&titled(hypr::OVERLAY_TITLE)).expect("a window").overlay);
+        // Silas's main window is a window like any other.
+        assert!(!hypr::parse(&titled("Silas")).expect("a window").overlay);
+        assert!(!hypr::parse(RECORDED).expect("a window").overlay);
+    }
+
+    #[test]
+    fn the_overlay_title_matches_the_window_config() {
+        let conf = include_str!("../../../src-tauri/tauri.conf.json");
+        assert!(conf.contains(&format!("\"title\": \"{}\"", hypr::OVERLAY_TITLE)));
     }
 
     #[test]
@@ -989,7 +1008,7 @@ mod hypr_tests {
 
     #[test]
     fn the_linux_target_types_only_into_the_window_it_started_in() {
-        let never = |_| -> Option<hypr::Window> { panic!("only Silas's own window is moved off") };
+        let never = |_| -> Option<hypr::Window> { panic!("only the overlay is moved off") };
         assert_eq!(linux_restore(&window(7, false), Some(window(7, false)), never), Restore::InPlace);
         assert_eq!(linux_restore(&window(7, false), Some(window(8, false)), never), Restore::Failed);
         // Hyprland didn't answer: as before, nothing stops the typing.
@@ -1011,8 +1030,5 @@ mod hypr_tests {
         // Hyprland refused, or something else has it after: still not safe to type.
         assert_eq!(linux_restore(&target, Some(window(9, true)), |_| None), Restore::Failed);
         assert_eq!(linux_restore(&target, Some(window(9, true)), |_| Some(window(8, false))), Restore::Failed);
-        // Dictating into Silas's own window: another of its windows is not handed back.
-        let never = |_| -> Option<hypr::Window> { panic!("not moved") };
-        assert_eq!(linux_restore(&window(7, true), Some(window(9, true)), never), Restore::Failed);
     }
 }
