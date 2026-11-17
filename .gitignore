@@ -8,6 +8,6 @@ migration/
 *.part
 .DS_Store
 __pycache__/
-.build/
-.swiftpm/
-Package.resolved
+/.build/
+/.swiftpm/
+/Package.resolved
