@@ -89,8 +89,12 @@ impl TauriHost {
     }
 }
 
-/// Bottom center of the primary display.
+/// Bottom center of the primary display. A layer surface is anchored there already.
 fn position_overlay(w: &tauri::WebviewWindow) {
+    #[cfg(target_os = "linux")]
+    if crate::layer::mode() != crate::layer::Overlay::Plain {
+        return;
+    }
     if let Ok(Some(monitor)) = w.primary_monitor().or_else(|_| w.current_monitor()) {
         let size = monitor.size();
         let pos = monitor.position();
@@ -117,6 +121,9 @@ fn place_overlay(app: &AppHandle, w: tauri::WebviewWindow) {
     let _ = w.clone().run_on_main_thread(move || {
         // Only the status lock, held for a copy: no thread holds it while waiting on this one.
         let show = app.try_state::<Shared>().is_some_and(|c| shown(c.status().0));
+        // A tiling Wayland compositor without layer-shell would hand a shown window the keyboard.
+        #[cfg(target_os = "linux")]
+        let show = show && crate::layer::mode() != crate::layer::Overlay::Hidden;
         #[cfg(target_os = "macos")]
         order_overlay(&w, show);
         #[cfg(not(target_os = "macos"))]

@@ -30,6 +30,29 @@ irm https://raw.githubusercontent.com/baney75/silas/main/install.ps1 | iex
 installs the `.deb` on Debian and Ubuntu, the `.rpm` on Fedora and openSUSE Tumbleweed, and otherwise an
 AppImage with a launcher entry and a udev rule so Silas can read the hold-to-talk key.
 
+**Arch Linux and Omarchy**: the same line builds the native `silas-git` package from source (a few
+minutes), which installs `/usr/bin/silas` and `silas-ctl`, the udev rule for the hold-to-talk key, and
+Hyprland keybindings. By hand:
+
+```sh
+git clone https://github.com/baney75/silas && cd silas/packaging/arch && makepkg -si
+```
+
+Then put Silas on Omarchy's dictation keys (hold **F9** to talk, **Super + Ctrl + X** for
+hands-free) by adding this to `~/.config/hypr/bindings.lua`:
+
+```lua
+local silas = dofile("/usr/share/silas/hyprland.lua")
+silas.hold("SUPER + SHIFT + code:201") -- optional: the Copilot key
+```
+
+The bindings run `silas-ctl press` and `silas-ctl release`. Hyprland swallows the keys, so
+apps never see them. Silas types through Wayland's virtual-keyboard protocol, floats its
+overlay as a layer surface that never takes the keyboard, and on Hyprland puts the text back
+in the window where you started. pacman updates the package, so Silas doesn't update itself.
+If you used voxtype, stop it so two apps don't share the keys:
+`systemctl --user disable --now voxtype`.
+
 Run the same line again to update by hand. Silas also updates itself.
 
 <details>
@@ -128,7 +151,7 @@ asks for Accessibility again after each nightly update. See [docs/signing.md](do
 | --- | --- |
 | Holding the key does nothing (macOS) | Click Fix Permission on the Silas home screen, then allow Silas when macOS asks. By hand: System Settings › Privacy & Security › Accessibility, select Silas, click the minus button, click plus and add Silas from Applications, then turn on its switch. Turning the switch off and on doesn't help. |
 | Words are typed into the wrong place | Silas types where the dictation started. Click into the field before you hold the key. |
-| Nothing is typed into a Wayland app (Linux) | Install `wtype`. |
+| Nothing is typed into a Wayland app (Linux) | Hyprland and Sway work as they are. On GNOME or KDE, install `ydotool`. |
 | The AppImage won't start (Linux) | Install your distro's FUSE 2 package (`libfuse2` or `fuse2`). |
 
 Still stuck? [Open an issue](https://github.com/baney75/silas/issues/new) with your OS and
@@ -162,7 +185,8 @@ bunx tauri build                    # package
 The voice engine lives in `core/voice` (the `polycarp-voice` crate); the Tauri app in `src-tauri`
 uses it by path, so this repo builds on its own.
 
-Linux needs `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev libudev-dev libxdo-dev`.
+Linux needs `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev libudev-dev libxdo-dev`,
+plus `libgtk-layer-shell0` at run time for the overlay on Wayland.
 
 ## Privacy
 
