@@ -90,8 +90,38 @@ pub fn is_silence(audio: &[f32]) -> bool {
             .all(|f| (f.iter().map(|s| s * s).sum::<f32>() / f.len() as f32).sqrt() < SILENCE_RMS)
 }
 
-/// Adds a piece's text to what's already there. The model capitalizes the start of every piece, which is wrong when the
-/// one before stopped without ending its sentence.
+/// Words that carry a sentence on after a pause far more often than they name anything: the
+/// small words that hold a sentence together. "I" and words that are also names ("Will",
+/// "May", "Grace") are left out.
+const JOINING_WORDS: &[&str] = &[
+    "a", "about", "above", "after", "again", "against", "all", "almost", "along", "also",
+    "although", "always", "am", "an", "and", "another", "any", "anyway", "are", "around", "as",
+    "at", "be", "because", "been", "before", "behind", "being", "below", "between", "both",
+    "but", "by", "can", "could", "did", "do", "does", "down", "each", "either", "else", "even",
+    "ever", "every", "few", "for", "from", "had", "has", "have", "he", "her", "here", "hers",
+    "him", "his", "how", "however", "if", "in", "into", "is", "it", "it's", "its", "just",
+    "less", "like", "maybe", "me", "might", "more", "most", "much", "must", "my", "neither",
+    "never", "no", "nor", "not", "now", "of", "off", "often", "on", "once", "only", "or",
+    "other", "our", "ours", "out", "over", "perhaps", "quite", "rather", "really", "she",
+    "should", "since", "so", "some", "still", "such", "than", "that", "that's", "the", "their",
+    "them", "then", "there", "there's", "these", "they", "this", "those", "though", "through",
+    "to", "too", "toward", "under", "unless", "until", "up", "upon", "us", "very", "was", "we",
+    "were", "what", "whatever", "when", "where", "whether", "which", "while", "who", "whom",
+    "whose", "why", "with", "within", "without", "would", "yet", "you", "your", "yours",
+];
+
+/// Whether a capital on this word, at the start of a piece, is only the model starting a new
+/// piece. Names and other words that keep their capital mid-sentence say no.
+fn only_starts_a_piece(word: &str) -> bool {
+    let word = word.to_lowercase();
+    JOINING_WORDS.contains(&word.as_str())
+        || (word.len() > 5 && word.ends_with("ing") && crate::dictionary::is_everyday(&word))
+}
+
+/// Adds a piece's text to what's already there. The model capitalizes the start of every piece,
+/// which is wrong when the one before stopped without ending its sentence; then a capital on a
+/// joining word or an everyday "-ing" word comes off. Any other capital stays, since it may be
+/// a name ("Donovan", "Paris") and a wrong capital reads better than a lowercased name.
 pub fn join(text: &mut String, piece: &str) {
     let piece = piece.trim();
     if piece.is_empty() {
@@ -101,10 +131,14 @@ pub fn join(text: &mut String, piece: &str) {
     if !text.is_empty() {
         text.push(' ');
     }
+    let first_word: String = piece.chars().take_while(|c| c.is_alphabetic() || *c == '\'').collect();
     let mut letters = piece.chars();
     match (letters.next(), letters.next()) {
         (Some(first), Some(second))
-            if inside_a_sentence && first.is_uppercase() && second.is_lowercase() =>
+            if inside_a_sentence
+                && first.is_uppercase()
+                && second.is_lowercase()
+                && only_starts_a_piece(&first_word) =>
         {
             text.extend(first.to_lowercase());
             text.push_str(&piece[first.len_utf8()..]);
@@ -279,6 +313,23 @@ mod tests {
         let mut names = String::from("We went to Paris,");
         join(&mut names, "I said.");
         assert_eq!(names, "We went to Paris, I said.");
+    }
+
+    /// Review sol-sol-F3 on #23: a name after a pause lost its capital ("donovan").
+    #[test]
+    fn joining_keeps_the_capital_on_a_name() {
+        let mut text = String::from("I talked with");
+        join(&mut text, "Donovan about it and");
+        join(&mut text, "Paris was lovely");
+        join(&mut text, "John and Grace came,");
+        join(&mut text, "Will said.");
+        assert_eq!(text, "I talked with Donovan about it and Paris was lovely John and Grace came, Will said.");
+        let mut small = String::from("We waited");
+        join(&mut small, "And then it's");
+        join(&mut small, "The best part,");
+        join(&mut small, "It's fine");
+        join(&mut small, "Thinking about it.");
+        assert_eq!(small, "We waited and then it's the best part, it's fine thinking about it.");
     }
 
     #[test]

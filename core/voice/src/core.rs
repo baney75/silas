@@ -1193,18 +1193,29 @@ impl Core {
             self.fail(mic_message(&p, self.host.permission_place().as_deref(), grant));
             return;
         }
+        // Note where the keyboard is now, at key-down. On Hyprland the overlay can take the
+        // keyboard as it opens, so the target is noted before it shows (asking Hyprland takes a
+        // few milliseconds); elsewhere the mic doesn't wait for it.
+        #[cfg(target_os = "linux")]
+        let capture = {
+            let target = crate::focus::Target::capture();
+            move || target
+        };
+        #[cfg(not(target_os = "linux"))]
+        let capture = {
+            let thread = std::thread::spawn(crate::focus::Target::capture);
+            move || thread.join().ok().flatten()
+        };
         // The overlay comes up now, before the microphone is open (that can take a moment with
         // a Bluetooth headset); its dot fills in when the first sound arrives.
         self.set_status(Status::Recording, None);
-        // Note where the keyboard is now, at key-down, without making the mic wait for it.
-        let capture = std::thread::spawn(crate::focus::Target::capture);
         let device = self.settings.lock().microphone.clone();
         let host = self.host.clone();
         match Recording::start(device.as_deref(), move |lvl| host.level(lvl)) {
             Ok(r) => {
                 // The mic is already running; publish the target before the recording, so a
                 // release can never find a recording without its target.
-                *self.target.lock() = capture.join().ok().flatten();
+                *self.target.lock() = capture();
                 self.dictations.fetch_add(1, Ordering::AcqRel);
                 let (raw, rate) = r.tap();
                 let me = self.clone();
@@ -1231,7 +1242,7 @@ impl Core {
                 });
             }
             Err(e) => {
-                let _ = capture.join();
+                let _ = capture();
                 self.machine.lock().reset();
                 self.fail(format!("Microphone: {e}"));
             }
