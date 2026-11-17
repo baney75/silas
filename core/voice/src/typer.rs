@@ -91,8 +91,8 @@ fn chunks(text: &str, size: usize) -> Vec<String> {
 /// is a handful of processes.
 const WHOLE_BATCH: usize = 24;
 
-/// The key events for one run of text. A tool that types a whole string per call (wtype,
-/// ydotool) gets batches of about `WHOLE_BATCH` characters: starting a process per character made
+/// The key events for one run of text. A tool that types a whole string per call
+/// (ydotool) gets batches of about `WHOLE_BATCH` characters: starting a process per character made
 /// a sentence take seconds, and one process for the whole run kept typing a long paragraph into
 /// whatever window took focus, with no check until it finished. It paces itself, and the
 /// double-space shortcut `chunks` guards against is macOS's.
@@ -114,8 +114,9 @@ pub fn type_text(
     still_here: &dyn Fn(bool) -> bool,
 ) -> anyhow::Result<bool> {
     let mut k = Keyboard::new()?;
-    // One keymap for the whole text when it fits; otherwise each event brings its own.
-    k.prepare(text)?;
+    // One keymap for the whole text when it fits. When it doesn't (more unusual characters than
+    // spare keys, review r2 on #6), each event brings its own, so this can't fail the dictation.
+    let _ = k.prepare(text);
     // A Tab or Return may move focus to the next field on purpose.
     let mut after_focus_key = false;
     for piece in pieces(text) {
