@@ -445,7 +445,7 @@ def score(manifest_path, result_paths, whisper_norm=False):
     notes = [
         "WER is on each engine's raw model text against ref_verbatim. Normalization: " + (
             "Whisper-style English (numbers, spellings, fillers) on top of benchmark.rs normalize with accents folded"
-            if whisper_norm else "benchmark.rs normalize with accents folded, then the numbers rule (10 and above in digits, zero to nine in words) on reference and hypothesis alike (the default; --whisper-norm uses Whisper-style English normalization)"),
+            if whisper_norm else "written symbols read as spoken ($389 as 389 dollars, 3.2 as 3 point 2), benchmark.rs normalize with accents folded, then the numbers rule (10 and above in digits, zero to nine in words), on reference and hypothesis alike (the default; --whisper-norm uses Whisper-style English normalization)"),
         "Latency figures carry the machine's 1-minute load (load1) when each clip ran; compare them only at similar load.",
         "Formatted error compares the text as typed, token by token; case and punctuation count.",
         "Batch engines see the whole clip after key up: t_first = t_final = decode time. Model load is reported apart as load_ms.",

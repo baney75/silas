@@ -69,12 +69,19 @@ simulated clock the way nerd-dictation does and reports when the text was ready.
 ## Scoring
 
 - **WER** on `ref_verbatim`, pooled over clips, scored on the model's own text (`hypothesis_raw`, before the
-  dictionary drops the fillers `ref_verbatim` keeps). The default normalization is `benchmark.rs`'s `normalize`
-  (lowercase, accents folded, hyphens to spaces, letters, digits and apostrophes kept), then README.md's numbers
-  rule on both sides: 10 and above in digits, zero to nine in words. LibriSpeech books spell "a girl of
-  sixteen"; an app that types "a girl of 16" is not wrong, and every engine is scored the same way.
+  dictionary drops the fillers `ref_verbatim` keeps). The default normalization, applied to the reference and
+  every engine alike:
+  1. Written symbols become the words spoken for them, since `ref_verbatim` spells out what was said: `$389`
+     is "389 dollars", `3.2` "3 point 2", `12%` "12 percent", `silas.app/download` "silas dot app slash
+     download", `a.m.` "am".
+  2. `benchmark.rs`'s `normalize`: lowercase, accents folded, hyphens to spaces, letters, digits and
+     apostrophes kept. Quote marks come off the ends of words.
+  3. README.md's numbers rule: 10 and above in digits, zero to nine in words. LibriSpeech books spell "a girl
+     of sixteen"; an app that types "a girl of 16" is not wrong. Spoken pairs count: "one twenty five" is 125,
+     "two forty" is 240, "nineteen ninety" is 1990.
+
   `--whisper-norm` uses Whisper-style English normalization instead: every number in digits, British
-  spellings, fillers, `$` and `%`.
+  spellings, fillers dropped, `$` and `%`.
 - **Formatted error** on `ref_formatted`: token errors with case, punctuation and line breaks counted, numbers
   under the same rule ("sixteen," and "16," match; "twenty-five" and "25" match).
 - **Command accuracy**: the hypothesis must parse as JSON and equal the action list. An engine that
