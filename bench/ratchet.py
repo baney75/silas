@@ -1,10 +1,14 @@
 """Fails when Silas gets worse on the ratchet subset; locks in gains with --update.
 
-  python3 -I bench/ratchet.py                 run Silas on the subset in real time and compare
-  python3 -I bench/ratchet.py --fast          simulated waiting (see `silas-bench run --fast`)
+  python3 -I bench/ratchet.py                 run Silas on the subset (`silas-bench run --fast`) and compare
+  python3 -I bench/ratchet.py --real-time     pace each clip in real time instead
   python3 -I bench/ratchet.py --gate accuracy WER and formatted error only (CI: shared runners make timing noise)
   python3 -I bench/ratchet.py --results x.jsonl   compare existing results instead of running
   python3 -I bench/ratchet.py --update        rewrite bench/ratchet.json, only if every metric is equal or better
+
+The ratchet runs --fast by default because it repeats word for word: the model's text depends a little on how
+much silence trails the clip, and in real time that tail varies by a few milliseconds of thread timing, enough
+to change a word on a handful of clips between two runs. --fast pads exactly the app's 200 ms tail every time.
 
 Fails (exit 1) when any category's WER or the formatted error rises more than 0.5 points absolute, the median
 t_final_ms rises more than 15%, or peak memory rises more than 10%. Latency is compared only between runs with
@@ -91,7 +95,7 @@ def run_silas(cfg, binary, fast, out):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--fast", action="store_true")
+    p.add_argument("--real-time", action="store_true", help="pace clips in real time (repeats less exactly)")
     p.add_argument("--gate", choices=["all", "accuracy"], default="all")
     p.add_argument("--results", type=Path, help="score these results instead of running Silas")
     p.add_argument("--update", action="store_true")
@@ -109,7 +113,7 @@ def main(argv=None):
         binary = a.bin or str(ROOT / "core/voice/target/release/silas-bench")
         results = HERE / "out" / "ratchet-silas.jsonl"
         results.parent.mkdir(exist_ok=True)
-        run_silas(cfg, binary, a.fast, results)
+        run_silas(cfg, binary, not a.real_time, results)
     rows = [json.loads(l) for l in results.read_text().splitlines() if l.strip()]
     new = metrics(rows, manifest)
     base = cfg.get("metrics")

@@ -48,7 +48,7 @@ jobs:
         working-directory: core/voice
         run: cargo build --release --features bench --bin silas-bench
       - name: Ratchet
-        run: python3 -I bench/ratchet.py --fast --gate accuracy --bin core/voice/target/release/silas-bench
+        run: python3 -I bench/ratchet.py --gate accuracy --bin core/voice/target/release/silas-bench
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

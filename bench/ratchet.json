@@ -5,17 +5,17 @@
   "set": "~/.cache/silas-bench/bench-set-v1",
   "metrics": {
     "wer": {
-      "accent": 0.286885,
-      "clean": 0.011111,
-      "code": 0.263158,
+      "accent": 0.295082,
+      "clean": 0.022222,
+      "code": 0.245614,
       "dictation": 0.1875,
       "longform": 0.028497,
       "noise": 0.068493
     },
-    "formatted_error": 0.193396,
-    "t_final_ms_median": 963.1,
-    "peak_rss_mb": 1497.1,
-    "timing": "real time"
+    "formatted_error": 0.198113,
+    "t_final_ms_median": 974.1,
+    "peak_rss_mb": 1569.9,
+    "timing": "fast"
   },
   "updated": "2026-11-17"
 }
