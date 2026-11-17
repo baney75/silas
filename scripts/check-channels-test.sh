@@ -65,6 +65,16 @@ jobs:
       - run: gh api -X PATCH "repos/x/releases/1" -F draft=false
       - run: git push origin "$sha:refs/heads/stable"
 EOF
+cat > "$bad/.github/workflows/anypush.yml" <<'EOF'
+on:
+  push:
+    paths: [src/**]
+jobs: {}
+EOF
+cat > "$bad/.github/workflows/inlinepush.yml" <<'EOF'
+on: [push, pull_request]
+jobs: {}
+EOF
 cat > "$bad/scripts/models.sh" <<'EOF'
 gh release create models-1 --notes "bench set"
 gh release edit v1 --draft=false
@@ -77,6 +87,8 @@ for want in \
   "stable.yml uses the stable environment but also runs on push" \
   "stable.yml names a stable signing secret" \
   "promote.yml runs on schedule" \
+  "anypush.yml runs on every push" \
+  "inlinepush.yml runs on every push" \
   "promote.yml does not check that it runs on main" \
   "promote.yml pushes a branch or tag" \
   "promote.yml publishes a release without make_latest" \

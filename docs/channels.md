@@ -57,7 +57,9 @@ commit, then `gh workflow run promote.yml --ref main -f hotfix=true`, which buil
 head as the next patch, then step 2 (`stable` is already at the commit, so only the tag moves).
 The hotfix path skips the open-regression check, since fixing one is the usual reason for a
 hotfix and a pull request into `stable` never closes its issue. Merge `stable` back into `main`
-with a merge commit the same day.
+with a merge commit the same day. If the last release changed the signing requirement
+(`ALLOW_NEW_REQUIREMENT=1`), the hotfix pull request also carries that release's
+`scripts/release-requirement.txt`, or `release-stable.sh` checks the hotfix against the old pin.
 
 The `stable` branch and its rulesets are set up by hand once. The branch starts at the commit
 that merged this scheme into `main` (it contains v0.1.6, and every later nightly descends from

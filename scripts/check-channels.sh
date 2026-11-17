@@ -17,6 +17,14 @@ for wf in "$root"/.github/workflows/*.yml "$root"/.github/workflows/*.yaml; do
   if awk '/^on:/{on=1;next} on&&/^[^ #]/{on=0} on&&/^  push:/{p=1;next} on&&/^  [a-z_]+:/{p=0} on&&p&&/^    tags:/{f=1} END{exit !f}' "$wf"; then
     err "$name starts on a pushed tag; stable builds start only from promote.yml"
   fi
+  # A push trigger with no branch filter also runs on every pushed tag.
+  if grep -qE '^on: *(push|\[[^]]*push)' "$wf" ||
+    awk '/^on:/{on=1;next} on&&/^[^ #]/{on=0}
+      on&&/^  push:/{seen=1; p=1; v=$0; sub(/^  push: */,"",v); if (v!="" && v!~/^#/) bad=1; next}
+      on&&p&&/^    branches(-ignore)?:/{br=1} on&&/^  [a-z_]+:/{p=0}
+      END{exit !(bad || (seen && !br))}' "$wf"; then
+    err "$name runs on every push, pushed tags included; give push a branches filter"
+  fi
   if awk '/^ +environment: *["'"'"']?stable["'"'"']? *$/{f=1} /^ +environment: *$/{e=1;next} e&&/^ +name: *["'"'"']?stable["'"'"']? *$/{f=1} {e=0} END{exit !f}' "$wf"; then
     for t in $(triggers "$wf"); do
       case $t in workflow_call|workflow_dispatch) ;; *) err "$name uses the stable environment but also runs on $t" ;; esac

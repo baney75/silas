@@ -60,9 +60,11 @@ jobs:
             fi
           else
             [[ "$NIGHTLY" =~ ^nightly(-[0-9]{12,14})?$ ]] || { echo "nightly must be nightly or nightly-YYYYMMDDHHMMSS, not '$NIGHTLY'" >&2; exit 1; }
-            release=$(gh api "repos/$REPO/releases/tags/$NIGHTLY" -q '[.name, .published_at] | @tsv') || { echo "no release $NIGHTLY" >&2; exit 1; }
-            IFS=$'\t' read -r name published <<< "$release"
-            sha=$(gh api "repos/$REPO/git/ref/tags/$NIGHTLY" -q .object.sha)
+            # One read gives the name, the age and the commit together, so a nightly swapped in
+            # meanwhile can't lend its commit another release's age.
+            release=$(gh api "repos/$REPO/releases/tags/$NIGHTLY" -q '[.name, .published_at, .target_commitish] | @tsv') || { echo "no release $NIGHTLY" >&2; exit 1; }
+            IFS=$'\t' read -r name published sha <<< "$release"
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "$NIGHTLY targets '$sha', not a commit; promote a nightly built by channel-build.yml" >&2; exit 1; }
             version=$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+-nightly' <<< "$name" | sed 's/-nightly$//') || { echo "can't read a version from '$name'" >&2; exit 1; }
             # 1. Published at least 72 hours ago.
             age=$(( $(date -u +%s) - $(date -u -d "$published" +%s) ))

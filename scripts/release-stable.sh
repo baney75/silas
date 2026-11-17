@@ -35,9 +35,16 @@ find_identity() { security find-identity -v -p codesigning | awk -F'"' -v kind="
 [ -f "$key" ] || { echo "missing stable updater key $key" >&2; exit 1; }
 [ -z "$(git status --porcelain)" ] || { echo "commit your changes first" >&2; exit 1; }
 git fetch -q origin stable --tags
-[ "$(gh release view "$tag" -R "$REPO" --json isDraft -q .isDraft 2>/dev/null)" = true ] ||
-  { echo "no draft release for $tag; promote.yml makes it (or $tag is already published)" >&2; exit 1; }
-sha=$(gh release view "$tag" -R "$REPO" --json targetCommitish -q .targetCommitish)
+# Pin the draft by id: a promotion re-run could replace it, and the files signed here must be the
+# ones built from the commit this Mac builds.
+drafts=$(gh api "repos/$REPO/releases" --paginate -q ".[] | select(.draft and .tag_name == \"$tag\") | [.id, .target_commitish] | @tsv")
+[ -n "$drafts" ] || { echo "no draft release for $tag; promote.yml makes it (or $tag is already published)" >&2; exit 1; }
+[ "$(wc -l <<<"$drafts" | tr -d ' ')" = 1 ] || { echo "more than one draft for $tag; delete the stale ones" >&2; exit 1; }
+IFS=$'\t' read -r draft sha <<<"$drafts"
+same_draft() { # the draft is still there, still a draft, still for this tag and commit
+  [ "$(gh api "repos/$REPO/releases/$draft" -q '[.draft, .tag_name, .target_commitish] | @tsv' 2>/dev/null)" = "$(printf 'true\t%s\t%s' "$tag" "$sha")" ] ||
+    { echo "the $tag draft ($draft) changed or went away (promote.yml re-run?); start again" >&2; exit 1; }
+}
 [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "the $tag draft targets '$sha', not a commit; re-run promote.yml" >&2; exit 1; }
 [ "$(git rev-parse HEAD)" = "$sha" ] || { echo "check out the promoted commit first: git checkout --detach $sha" >&2; exit 1; }
 # A promotion fast-forwards stable; a hotfix is already stable's head.
@@ -100,6 +107,7 @@ hdiutil create -quiet -volname Silas -srcfolder "$dir/dmg" -ov -format UDZO "$di
 # The Windows and Linux bundles CI built from the same tag. Each installer is its own updater
 # bundle; sign it here with the stable key.
 mkdir -p "$dir/ci"
+same_draft
 gh release download "$tag" -R "$REPO" --dir "$dir/ci" --pattern '*.AppImage' --pattern '*.deb' --pattern '*.rpm' --pattern '*-setup.exe'
 for pattern in '*.AppImage' '*.deb' '*.rpm' '*-setup.exe'; do
   [ "$(find "$dir/ci" -name "$pattern" | wc -l | tr -d ' ')" = 1 ] || { echo "the $tag draft needs exactly one $pattern; re-run promote.yml's build" >&2; exit 1; }
@@ -130,6 +138,7 @@ jq -n --arg v "$version" --arg n "$notes" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ
 
 # Upload into the draft, retrying slow uploads, and publish only once every file is there, so the
 # update feed never points at a missing file.
+same_draft
 gh release edit "$tag" -R "$REPO" --title "Silas $version" --notes "$notes" >/dev/null
 for f in "$dir"/Silas_aarch64.dmg "$dir"/Silas_aarch64.app.tar.gz "$dir"/Silas_aarch64.app.tar.gz.sig "$dir"/ci/*.sig "$dir"/latest.json; do
   for attempt in 1 2 3 4 5; do
@@ -138,6 +147,11 @@ for f in "$dir"/Silas_aarch64.dmg "$dir"/Silas_aarch64.app.tar.gz "$dir"/Silas_a
     sleep $((attempt * 5))
   done
 done
+same_draft
+have=$(gh api "repos/$REPO/releases/$draft" -q '.assets[].name')
+for name in $(jq -r '.platforms[].url | split("/") | last' "$dir/latest.json") latest.json; do
+  grep -qxF "$name" <<<"$have" || { echo "the $tag draft lacks $name, which latest.json needs" >&2; exit 1; }
+done
 # Move stable and tag it only now, with every file in the draft. A plain push refuses anything but
 # a fast-forward, and a re-run finds both already there.
 git push origin "$sha:refs/heads/stable"
@@ -145,7 +159,7 @@ git rev-parse -q --verify "refs/tags/$tag" >/dev/null || git tag "$tag" "$sha"
 git push origin "refs/tags/$tag"
 git fetch -q origin stable --tags --force
 [ "$(git rev-parse "$tag^{commit}")" = "$(git rev-parse origin/stable)" ] || { echo "$tag is not stable's head; the draft is unpublished" >&2; exit 1; }
-gh release edit "$tag" -R "$REPO" --draft=false --latest >/dev/null
+gh api -X PATCH "repos/$REPO/releases/$draft" -F draft=false -f make_latest=true >/dev/null
 echo "Released Silas $version (stable: macOS, Windows, Linux)."
 echo "Next: bump main's base version in a pull request (docs/channels.md)."
 git diff --quiet -- scripts/release-requirement.txt ||

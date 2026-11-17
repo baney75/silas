@@ -250,8 +250,9 @@ requirement one time. Every guard above refuses that change by design, so plan i
 
 1. Release with `ALLOW_NEW_REQUIREMENT=1 scripts/release-stable.sh ...`. It leaves the new line
    in `scripts/release-requirement.txt` in the working tree, captured from the real build by
-   `codesign`; land that change on `main` in a pull request right away, or signed nightlies keep
-   failing the requirement check. Never write that line by hand.
+   `codesign`; land that change on `main` in a pull request before the next promotion, or signed
+   nightlies keep failing the requirement check, and carry it into any hotfix for this release
+   (docs/channels.md). Never write that line by hand.
 2. The in-app updater on existing installs refuses this release ("signed differently from your
    install"). Existing users move with
    `curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | SILAS_ALLOW_NEW_SIGNATURE=1 sh`

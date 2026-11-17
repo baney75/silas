@@ -90,8 +90,13 @@ jobs:
           echo "skip=false" >> "$GITHUB_OUTPUT"
           if [ "$CHANNEL" = stable ]; then
             # A failed earlier run may have left a draft for this tag; release-stable.sh must find one.
-            gh api "repos/$REPO/releases" --paginate -q ".[] | select(.draft and .tag_name == \"v$version\") | .id" |
-              while read -r old; do gh api -X DELETE "repos/$REPO/releases/$old"; done
+            # A draft holding the Mac's files is being finished by release-stable.sh: never replace it.
+            old=$(gh api "repos/$REPO/releases" --paginate -q ".[] | select(.draft and .tag_name == \"v$version\") | [.id, ([.assets[].name | select(startswith(\"Silas_aarch64\") or . == \"latest.json\")] | length)] | @tsv")
+            while IFS=$'\t' read -r old_id mac; do
+              [ -n "$old_id" ] || continue
+              [ "$mac" = 0 ] || { echo "the v$version draft ($old_id) already holds the Mac's files; release-stable.sh is finishing it" >&2; exit 1; }
+              gh api -X DELETE "repos/$REPO/releases/$old_id"
+            done <<< "$old"
             id=$(gh api "repos/$REPO/releases" -f tag_name="v$version" -f target_commitish="$sha" \
               -f name="Silas $version" -F draft=true -F prerelease=false \
               -f body="Windows and Linux built by CI from $sha. scripts/release-stable.sh adds macOS, signs the updates and publishes." -q .id)
