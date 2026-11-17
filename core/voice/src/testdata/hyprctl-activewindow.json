@@ -1,0 +1,45 @@
+{
+    "address": "0x55ef19943100",
+    "mapped": true,
+    "hidden": false,
+    "visible": true,
+    "acceptsInput": true,
+    "at": [
+        0,
+        0
+    ],
+    "size": [
+        1600,
+        1000
+    ],
+    "workspace": {
+        "id": 1,
+        "name": "1"
+    },
+    "floating": true,
+    "monitor": 0,
+    "class": "org.omarchy.screensaver",
+    "title": "(scrubbed)",
+    "initialClass": "org.omarchy.screensaver",
+    "initialTitle": "(scrubbed)",
+    "pid": 897868,
+    "xwayland": false,
+    "pinned": false,
+    "pinFullscreened": false,
+    "fullscreen": 2,
+    "fullscreenClient": 2,
+    "fullscreenHandler": "default",
+    "allowedOverFullscreen": true,
+    "grouped": [],
+    "tags": [
+        "terminal*"
+    ],
+    "swallowing": "0x0",
+    "focusHistoryID": 0,
+    "inhibitingIdle": false,
+    "xdgTag": "",
+    "xdgDescription": "",
+    "contentType": "none",
+    "tearingHint": false,
+    "stableId": "1800088a"
+}
