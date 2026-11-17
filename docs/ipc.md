@@ -148,12 +148,13 @@ interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string
 | `open_permission` | `{ kind: "microphone" \| "accessibility" \| "input" }` | `null`. Reads first; shows the system prompt at most once per run and never when already granted, otherwise opens the OS settings pane |
 | `reset_accessibility` | | `null`. macOS onboarding: when not trusted, clears Silas's Accessibility entry, asks at most once per run, opens Settings |
 | `fix_accessibility` | | `null`. macOS Fix Permission: when not trusted, clears Silas's Accessibility entry and reopens Silas, which asks once and opens Settings. No-op when trusted or off macOS |
-| `list_microphones` | | `string[]` |
+| `list_microphones` | | `string[]`. Runs off the main thread (Linux opens every ALSA device to list them); the UI reads it at launch and on focus, never when Settings opens |
 | `show_main` | | `null` |
 | `get_benchmark` | | `Report \| null` (saved `benchmark.json`) |
 | `run_benchmark` | `{ all }` | `null` when the run ends. Measures the active model, and with `all` every other installed one. Errors at once if a benchmark is already running or no model is loaded. Results of models not run this time are kept in the report |
 | `share_benchmark` | | `null` opens a prefilled GitHub issue (`report_url`) in the default browser; the user reviews and submits it |
 | `get_device` | | `Device` |
+| `get_theme` | | `Theme \| null`. The Polycarp theme for Silas (see Theme below). `null` when the file is missing or invalid; never an error |
 
 ## Events (`listen(name, cb)`)
 
@@ -166,7 +167,44 @@ interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string
 | `benchmark-progress` | `{ model, clip, clips }` clips finished so far for `model` (0 when it starts) |
 | `benchmark-done` | `Report` just saved |
 | `benchmark-error` | `{ message }` |
+| `theme_changed` | `Theme \| null` the theme file appeared, changed or went away (checked once a second; `null` means use the built-in look). Sent to every window |
 | `model-progress` | `{ id, downloaded, total, stage: "downloading" \| "unpacking" \| "loading" \| "done" \| "error", message? }` |
+
+## Theme
+
+`polycarp theme` writes `<config>/current/theme.json`. Silas reads `surfaces.voice` and the top-level
+`mode`. `<config>` is `POLYCARP_CONFIG_DIR` if set and absolute (a relative one is refused, as
+the command does), else `$XDG_CONFIG_HOME/polycarp` if absolute, else `~/.config/polycarp`; on
+Windows `%APPDATA%\Polycarp`. Rust (`src-tauri/src/theme.rs`) checks the file and sends only what passed.
+Any colour that is not `#rrggbb`, any number out of range, and any font list with CSS punctuation
+makes the whole file invalid: it logs one line and sends `null`.
+
+A Mac app opened from Finder or the Dock does not see variables exported in a shell profile. So
+`XDG_CONFIG_HOME` may be set for `polycarp` in a terminal and missing for Silas, and then Silas reads
+the default `~/.config/polycarp` while the command wrote somewhere else. Silas reads the default path
+unless the variable reaches it (set it for the app with `launchctl setenv`, or leave it unset for both).
+`polycarp theme current` prints `folder:`, the folder the command writes; Silas reads
+`<folder>/current/theme.json`.
+
+```ts
+interface Theme {               // snake_case, like the file
+  name: string;
+  mode: "auto" | "light" | "dark";
+  light: Colors; dark: Colors;
+  shape: { blur: number; border_width: number; radius_small: number; radius: number; radius_large: number;
+           shadow: number; density: "compact" | "regular" | "spacious"; indicator: "dot" | "bar" | "number-block" };
+  type: { display: string; ui: string; mono: string; size: number; weight: number; line_height: number };
+  motion: { fast: number; normal: number; slow: number; easing: string; scale_from: number; reduced: boolean };
+}
+interface Colors { accent; background; border; done; foreground; muted; on_accent; selection; strong; sunken; surface; urgent; working: string } // "#rrggbb"
+```
+
+Not used yet: `motion.scale_from`, and any `motion.easing` beyond the single `--ease` variable
+(every transition shares it). They are checked and sent, but nothing reads them.
+
+A background thread stats the file once a second and emits `theme_changed` when its modified time
+or size changes, or when it appears or disappears. The UI (`src/theme.ts`) sets CSS variables on
+`<html>`; `null` removes every one it set. The main window and the overlay both use it.
 
 ## Choosing a model for this computer
 
@@ -176,7 +214,7 @@ cached as `registry.json`) and looks up the device key.
 - A hit while `modelSource` is `"default"` sets `model` and `modelSource = "registry"`, with no benchmark.
   It switches only if that model is installed, or if no model is installed yet.
 - A miss with no `benchmark.json`: once a model is loaded, the core runs the bundled LibriSpeech set
-  (`src-tauri/bench/`) clip by clip, waiting while a dictation is happening. An automatic run
+  (`core/voice/bench/`) clip by clip, waiting while a dictation is happening. An automatic run
   measures the active model and then every other installed model (nothing is downloaded). It saves the
   `Report` and, unless `modelSource` is `"user"`, switches to the pick only if it is installed and
   passes both bars (`modelSource = "benchmark"`); a pick that misses a bar is shown, never switched to.

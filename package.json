@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "check:theme": "node scripts/check-theme.mjs",
+    "test": "bun test",
     "tauri": "tauri"
   },
   "devDependencies": {

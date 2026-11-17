@@ -6,10 +6,12 @@ import { mountHome } from "./home";
 import { mountModels } from "./models";
 import { mountOnboarding, needsAccess } from "./onboarding";
 import { mountSettings } from "./settings";
+import { initTheme } from "./theme";
 import {
   HISTORY_LIMIT,
   notify,
   refreshDict,
+  refreshMicrophones,
   refreshModels,
   refreshState,
   refreshStats,
@@ -54,6 +56,7 @@ async function boot() {
   document.documentElement.dataset.platform = store.state.platform;
   if (!inTauri) document.documentElement.dataset.preview = "true";
   wireEvents();
+  void refreshMicrophones();
   if (!store.settings.onboarded) onboarding();
   else if (needsAccess()) onboarding("permissions");
   else shell();
@@ -119,7 +122,10 @@ function wireEvents() {
     notify("update");
   });
   // Pick up permission or model changes made while the window was hidden.
-  window.addEventListener("focus", () => void refreshState());
+  window.addEventListener("focus", () => {
+    void refreshState();
+    void refreshMicrophones();
+  });
 }
 
 function onboarding(start?: "permissions") {
@@ -211,4 +217,5 @@ function shell() {
   go(store.state.status === "needs_model" ? "model" : current);
 }
 
+void initTheme();
 void boot();

@@ -20,7 +20,7 @@ import {
 } from "./api";
 import { toast } from "./ui";
 
-export type Topic = "state" | "settings" | "models" | "history" | "dict" | "stats" | "progress" | "update" | "benchmark";
+export type Topic = "state" | "settings" | "models" | "history" | "dict" | "stats" | "progress" | "update" | "benchmark" | "microphones";
 
 export const store = {
   state: null as unknown as AppState,
@@ -84,6 +84,16 @@ export async function refreshDict() {
 export async function refreshStats() {
   store.stats = await api.getStats();
   notify("stats");
+}
+
+/** Read in the background at launch and when the window comes back, so Settings opens with the list ready. */
+export async function refreshMicrophones() {
+  try {
+    store.microphones = await api.listMicrophones();
+  } catch {
+    return;
+  }
+  notify("microphones");
 }
 
 export async function refreshBenchmark() {

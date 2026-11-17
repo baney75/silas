@@ -60,7 +60,7 @@ for your key.
 
 | Do this | And Silas |
 | --- | --- |
-| Hold **Right ⌘** (Mac) or **Right Ctrl** (Windows, Linux), speak, release | types what you said |
+| Hold the **microphone key** (Apple silicon Macs), **Right ⌘** (Intel Macs) or **Right Ctrl** (Windows, Linux), speak, release | types what you said |
 | Tap the key once | listens hands-free until you tap it again |
 | Press **Esc** while it listens | cancels |
 | Press the key with another key (Right ⌘ + C) | does nothing; your shortcut still works |
@@ -155,9 +155,12 @@ folders (window and web caches) in `~/Library/Application Support` and `~/Librar
 ```sh
 bun install
 bunx tauri dev                      # run
-(cd src-tauri && cargo test --lib)  # tests
+bun test && (cd core/voice && cargo test) && (cd src-tauri && cargo test --lib)  # tests
 bunx tauri build                    # package
 ```
+
+The voice engine lives in `core/voice` (the `polycarp-voice` crate); the Tauri app in `src-tauri`
+uses it by path, so this repo builds on its own.
 
 Linux needs `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev libudev-dev libxdo-dev`.
 

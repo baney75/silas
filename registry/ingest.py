@@ -31,7 +31,7 @@ TIE_WER = 0.005
 # Models Silas can install. Add new ids here when the catalog in models.rs grows.
 KNOWN_MODELS = {"parakeet-v3", "cohere-int4"}
 MAX_BODY = 20_000
-# The bundled set in src-tauri/bench (manifest.json), named by benchmark::SUITE_ID in Silas.
+# The bundled set in core/voice/bench (manifest.json), named by benchmark::SUITE_ID in Silas.
 # Every honest report measured exactly this much audio. When the set changes, give it a new id
 # here and in Silas: stored reports from the old set are then skipped, not fatal.
 SUITE_ID = "librispeech-test-clean-9clips-v1"

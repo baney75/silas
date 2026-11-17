@@ -6,7 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use handy_keys::{Key, KeyEvent, Modifiers};
+use handy_keys::{Hotkey, Key, KeyEvent, Modifiers};
 
 /// Holding shorter than this is a tap.
 pub const TAP: Duration = Duration::from_millis(280);
@@ -52,6 +52,78 @@ pub fn describe(ev: &KeyEvent) -> Option<String> {
         .map(|k| k.to_string())
 }
 
+/// What a key pressed while picking the dictation key does.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Picked {
+    /// This key, by its settings name.
+    Key(String),
+    /// Escape: stop picking and keep the key there was.
+    Cancelled,
+    /// A key that types text or edits it can't start dictation; why, in a sentence.
+    Refused(String),
+}
+
+impl Picked {
+    /// The shape `Core::capture` carries.
+    pub fn into_result(self) -> Result<String, String> {
+        match self {
+            Picked::Key(k) => Ok(k),
+            Picked::Cancelled => Err(crate::core::CANCELLED.to_string()),
+            Picked::Refused(why) => Err(why),
+        }
+    }
+}
+
+/// Decide a key pressed while picking the dictation key. None: not a press to act on (a release,
+/// a mouse button). Letters, digits, Space, Return, Tab and Delete are refused: holding one to
+/// dictate would also type it, and every app needs them. So are punctuation keys, for the same
+/// reason.
+pub fn pick(ev: &KeyEvent) -> Option<Picked> {
+    if ev.is_key_down && ev.key == Some(Key::Escape) {
+        return Some(Picked::Cancelled);
+    }
+    let name = describe(ev)?;
+    let typing = ev.key.and_then(|k| match k {
+        Key::Space => Some("Space".to_string()),
+        Key::Return | Key::KeypadEnter => Some("Return".to_string()),
+        Key::Tab => Some("Tab".to_string()),
+        Key::Delete | Key::ForwardDelete => Some("Delete".to_string()),
+        // Letters, digits and punctuation: whatever the edit watcher reads as a character.
+        _ => char_for(k, false).map(|c| format!("The {} key", c.to_ascii_uppercase())),
+    });
+    Some(match typing {
+        Some(what) => Picked::Refused(format!(
+            "{what} types text, so it can't be the dictation key. Try Right \u{2318}, Right \u{2325} or F13."
+        )),
+        None => Picked::Key(name),
+    })
+}
+
+/// The combinations to swallow so the system does not act on the same press. Only the microphone
+/// key: pressed for Polycarp, it must not also start Apple's dictation. Every other trigger keeps
+/// reaching apps, so Right ⌘ + C still copies. Hardware presses carry fn in their flags; a Globe
+/// key or a remapped keyboard may not. The listener matches modifiers exactly, and a press with
+/// Shift or ⌘ held still starts Silas, so every combination is listed.
+pub fn blocked_hotkeys(trigger: &Trigger) -> Vec<Hotkey> {
+    if *trigger != Trigger::Key(Key::Dictation) {
+        return Vec::new();
+    }
+    let groups = [Modifiers::CMD, Modifiers::SHIFT, Modifiers::CTRL, Modifiers::OPT];
+    let mut out = Vec::new();
+    for mask in 0..(1u8 << groups.len()) {
+        let mut held = Modifiers::empty();
+        for (i, group) in groups.iter().enumerate() {
+            if mask & (1 << i) != 0 {
+                held |= *group;
+            }
+        }
+        for mods in [held, held | Modifiers::FN] {
+            out.extend(Hotkey::new(mods, Key::Dictation));
+        }
+    }
+    out
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Out {
     Nothing,
@@ -75,6 +147,8 @@ enum State {
 
 pub struct Machine {
     pub trigger: Trigger,
+    /// A second key that does the same, until the microphone key is first seen (`Settings::hotkey_fallback`).
+    pub fallback: Option<Trigger>,
     pub tap_to_toggle: bool,
     state: State,
 }
@@ -83,9 +157,15 @@ impl Machine {
     pub fn new(trigger: Trigger, tap_to_toggle: bool) -> Self {
         Self {
             trigger,
+            fallback: None,
             tap_to_toggle,
             state: State::Idle,
         }
+    }
+
+    /// A press (not a release, not a repeat check) of the dictation key or its second key.
+    pub fn is_trigger_press(&self, ev: &KeyEvent) -> bool {
+        self.trigger.matches(ev).or_else(|| self.fallback.and_then(|f| f.matches(ev))) == Some(true)
     }
 
     pub fn is_active(&self) -> bool {
@@ -112,7 +192,7 @@ impl Machine {
     }
 
     pub fn on_event(&mut self, ev: &KeyEvent, now: Instant) -> Out {
-        let mine = self.trigger.matches(ev);
+        let mine = self.trigger.matches(ev).or_else(|| self.fallback.and_then(|f| f.matches(ev)));
         let is_mouse = matches!(
             ev.key,
             Some(Key::MouseLeft | Key::MouseRight | Key::MouseMiddle | Key::MouseX1 | Key::MouseX2)
@@ -344,6 +424,114 @@ mod tests {
             is_key_down: true,
             changed_modifier: None,
         }
+    }
+
+    #[test]
+    fn the_microphone_key_holds_and_taps_like_any_other_key() {
+        let t0 = Instant::now();
+        let mut m = Machine::new(Trigger::parse("Dictation").unwrap(), true);
+        // Hardware presses carry fn in their flags.
+        let mut press = key(Key::Dictation, Modifiers::FN);
+        press.is_key_down = true;
+        let mut release = press;
+        release.is_key_down = false;
+        assert_eq!(m.on_event(&press, t0), Out::Start);
+        assert_eq!(m.on_event(&press, t0 + Duration::from_millis(50)), Out::Nothing, "key repeat");
+        assert_eq!(m.on_event(&release, t0 + Duration::from_secs(2)), Out::Finish);
+        // A tap starts hands-free, and the next press finishes it.
+        assert_eq!(m.on_event(&press, t0 + Duration::from_secs(3)), Out::Start);
+        m.on_event(&release, t0 + Duration::from_millis(3100));
+        assert!(m.is_active());
+        assert_eq!(m.on_event(&press, t0 + Duration::from_secs(9)), Out::Finish);
+        // Holding that press sends repeats (seen on a real Mac, 2026-11-06); they start nothing.
+        assert_eq!(m.on_event(&press, t0 + Duration::from_millis(9100)), Out::Nothing);
+        m.on_event(&release, t0 + Duration::from_millis(9200));
+        assert!(!m.is_active());
+    }
+
+    #[test]
+    fn the_second_key_works_beside_the_microphone_key() {
+        let t0 = Instant::now();
+        let mut m = Machine::new(Trigger::parse("Dictation").unwrap(), true);
+        assert_eq!(m.on_event(&modifier(Modifiers::CMD_RIGHT, true), t0), Out::Nothing);
+        m.fallback = Trigger::parse("CmdRight");
+        assert_eq!(m.on_event(&modifier(Modifiers::CMD_RIGHT, true), t0), Out::Start);
+        assert_eq!(m.on_event(&modifier(Modifiers::CMD_RIGHT, false), t0 + Duration::from_secs(2)), Out::Finish);
+    }
+
+    #[test]
+    fn only_the_microphone_key_is_ever_swallowed() {
+        let blocked = blocked_hotkeys(&Trigger::parse("Dictation").unwrap());
+        assert!(blocked.iter().any(|h| h.modifiers == Modifiers::FN && h.key == Some(Key::Dictation)));
+        assert!(blocked.iter().any(|h| h.modifiers.is_empty() && h.key == Some(Key::Dictation)));
+        // A press with Shift held starts Silas too, so Apple's dictation must not start beside it.
+        for held in [Modifiers::SHIFT_LEFT | Modifiers::FN, Modifiers::CMD_RIGHT, Modifiers::OPT_LEFT | Modifiers::CTRL_RIGHT | Modifiers::FN] {
+            assert!(blocked.iter().any(|h| h.modifiers.matches(held)), "{held:?}");
+        }
+        for other in ["CmdRight", "OptRight", "Fn", "F13"] {
+            assert!(blocked_hotkeys(&Trigger::parse(other).unwrap()).is_empty(), "{other}");
+        }
+    }
+
+    #[test]
+    fn picking_a_key_refuses_typing_keys_and_escape_cancels() {
+        assert_eq!(pick(&key(Key::Escape, Modifiers::empty())), Some(Picked::Cancelled));
+        for (k, what) in [
+            (Key::A, "The A key"),
+            (Key::Z, "The Z key"),
+            (Key::Num1, "The 1 key"),
+            (Key::Space, "Space"),
+            (Key::Return, "Return"),
+            (Key::Tab, "Tab"),
+            (Key::Delete, "Delete"),
+            (Key::Comma, "The , key"),
+        ] {
+            match pick(&key(k, Modifiers::empty())) {
+                Some(Picked::Refused(m)) => assert!(m.starts_with(what) && m.contains("can't be the dictation key"), "{m}"),
+                other => panic!("{k:?}: {other:?}"),
+            }
+        }
+        assert_eq!(pick(&modifier(Modifiers::CMD_RIGHT, true)), Some(Picked::Key("CmdRight".into())));
+        assert_eq!(pick(&key(Key::F13, Modifiers::empty())), Some(Picked::Key("F13".into())));
+        assert_eq!(pick(&key(Key::Dictation, Modifiers::FN)), Some(Picked::Key("Dictation".into())));
+        // A release or a mouse button waits for a real press.
+        assert_eq!(pick(&modifier(Modifiers::CMD_RIGHT, false)), None);
+        assert_eq!(pick(&key(Key::MouseLeft, Modifiers::empty())), None);
+    }
+
+    #[test]
+    fn escape_ends_hands_free_and_a_held_shortcut_but_never_starts_anything() {
+        let t0 = Instant::now();
+        let mut m = Machine::new(Trigger::parse("CmdRight").unwrap(), true);
+        let esc = key(Key::Escape, Modifiers::empty());
+        assert_eq!(m.on_event(&esc, t0), Out::Nothing, "idle: Escape is the app's");
+        // Held: Escape cancels, and the release that follows does nothing.
+        m.on_event(&modifier(Modifiers::CMD_RIGHT, true), t0);
+        assert_eq!(m.on_event(&esc, t0 + Duration::from_millis(500)), Out::Cancel);
+        assert_eq!(m.on_event(&modifier(Modifiers::CMD_RIGHT, false), t0 + Duration::from_secs(1)), Out::Nothing);
+        assert!(!m.is_active());
+        // Hands-free: Escape cancels it.
+        m.on_event(&modifier(Modifiers::CMD_RIGHT, true), t0);
+        m.on_event(&modifier(Modifiers::CMD_RIGHT, false), t0 + Duration::from_millis(100));
+        assert!(m.is_active());
+        assert_eq!(m.on_event(&esc, t0 + Duration::from_secs(3)), Out::Cancel);
+        assert!(!m.is_active());
+        // Escape's release changes nothing.
+        let mut up = esc;
+        up.is_key_down = false;
+        assert_eq!(m.on_event(&up, t0 + Duration::from_secs(4)), Out::Nothing);
+    }
+
+    #[test]
+    fn is_trigger_press_sees_only_the_press() {
+        let mut m = Machine::new(Trigger::parse("F13").unwrap(), true);
+        assert!(m.is_trigger_press(&key(Key::F13, Modifiers::empty())));
+        let mut up = key(Key::F13, Modifiers::empty());
+        up.is_key_down = false;
+        assert!(!m.is_trigger_press(&up));
+        assert!(!m.is_trigger_press(&key(Key::A, Modifiers::empty())));
+        m.fallback = Trigger::parse("CmdRight");
+        assert!(m.is_trigger_press(&modifier(Modifiers::CMD_RIGHT, true)));
     }
 
     #[test]

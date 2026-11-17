@@ -5,7 +5,8 @@
 //! the same app keeps focus (handy-keys reports no plain mouse clicks) and the layout maps
 //! keys the way `keys::char_for` expects.
 
-/// An id for the focused app or window, or None where the OS can't tell us (Linux).
+/// An id for the focused app or window, or None where the OS can't tell us (Linux outside
+/// Hyprland).
 #[cfg(target_os = "macos")]
 pub fn focused() -> Option<u64> {
     if let Some(pid) = mac::front_pid() {
@@ -28,9 +29,71 @@ pub fn focused() -> Option<u64> {
     (!hwnd.is_null()).then_some(hwnd as u64)
 }
 
+/// Hyprland says which window has the keyboard; other Linux desktops don't, so there this is
+/// None and nothing guards the typing or the edit learning, as before.
 #[cfg(target_os = "linux")]
 pub fn focused() -> Option<u64> {
-    None
+    hypr::active()
+}
+
+/// True while a password field has the keyboard (macOS secure input). macOS then hides every
+/// key from other apps, and anything typed would land in the password.
+#[cfg(target_os = "macos")]
+pub fn secure_input() -> bool {
+    #[link(name = "Carbon", kind = "framework")]
+    extern "C" {
+        fn IsSecureEventInputEnabled() -> u8;
+    }
+    unsafe { IsSecureEventInputEnabled() != 0 }
+}
+
+/// Other systems don't say.
+#[cfg(not(target_os = "macos"))]
+pub fn secure_input() -> bool {
+    false
+}
+
+/// Hyprland's focused window, through `hyprctl activewindow -j`. Built everywhere so the parsing
+/// is tested on every platform; only Linux calls it.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod hypr {
+    /// Running under Hyprland, with `hyprctl` on the PATH.
+    fn available() -> bool {
+        std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some()
+            && std::env::var_os("PATH")
+                .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("hyprctl").is_file()))
+    }
+
+    pub fn active() -> Option<u64> {
+        if !available() {
+            return None;
+        }
+        let out = std::process::Command::new("hyprctl")
+            .args(["activewindow", "-j"])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        parse(&String::from_utf8_lossy(&out.stdout))
+    }
+
+    /// The window's address and class as one id. An address alone can come back for a later
+    /// window once the first one closes; the class makes that much less likely to pass. None when
+    /// no window has the keyboard (`{}`) or the reply isn't JSON.
+    pub fn parse(json: &str) -> Option<u64> {
+        let v: serde_json::Value = serde_json::from_str(json).ok()?;
+        let addr = v.get("address")?.as_str()?.trim();
+        let addr = u64::from_str_radix(addr.trim_start_matches("0x"), 16).ok().filter(|a| *a != 0)?;
+        let class = v.get("class").and_then(|c| c.as_str()).unwrap_or("");
+        // FNV-1a over the class, seeded with the address.
+        let mut h = addr ^ 0xcbf2_9ce4_8422_2325;
+        for b in class.bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        Some(h)
+    }
 }
 
 /// Where a dictation's text goes: the text field that had the keyboard when the hotkey went
@@ -41,6 +104,23 @@ pub fn focused() -> Option<u64> {
 pub struct Target {
     #[cfg(target_os = "macos")]
     mac: mac::Target,
+    /// Hyprland: the window that had the keyboard, and the last check of it (`linux_here`).
+    #[cfg(target_os = "linux")]
+    window: u64,
+    #[cfg(target_os = "linux")]
+    checked: parking_lot::Mutex<Option<(std::time::Instant, bool)>>,
+}
+
+/// Where the Linux target stands, from the window that had the keyboard and the one that has it
+/// now. None now: Hyprland didn't answer, so nothing is known and typing goes ahead.
+pub fn linux_restore(then: u64, now: Option<u64>) -> Restore {
+    match now {
+        Some(w) if w == then => Restore::InPlace,
+        // Hyprland could move focus back, but a click there is the user's choice; keep the
+        // text in History rather than type into the wrong window.
+        Some(_) => Restore::Failed,
+        None => Restore::Elsewhere,
+    }
 }
 
 impl Target {
@@ -49,7 +129,12 @@ impl Target {
         mac::Target::capture().map(|mac| Self { mac })
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    pub fn capture() -> Option<Self> {
+        focused().map(|window| Self { window, checked: parking_lot::Mutex::new(None) })
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub fn capture() -> Option<Self> {
         None
     }
@@ -59,8 +144,25 @@ impl Target {
     pub fn restore(&self) -> Restore {
         #[cfg(target_os = "macos")]
         return self.mac.restore();
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        return linux_restore(self.window, focused());
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         Restore::Elsewhere
+    }
+
+    /// Asking Hyprland starts a process, so while typing one answer stands for 100 ms.
+    #[cfg(target_os = "linux")]
+    fn linux_here(&self) -> bool {
+        let now = std::time::Instant::now();
+        let mut checked = self.checked.lock();
+        if let Some((at, here)) = *checked {
+            if now.duration_since(at) < std::time::Duration::from_millis(100) {
+                return here;
+            }
+        }
+        let here = linux_restore(self.window, focused()) != Restore::Failed;
+        *checked = Some((now, here));
+        here
     }
 
     /// False once something else has clearly taken the keyboard from the captured window.
@@ -70,7 +172,13 @@ impl Target {
     pub fn still_here(&self, after_focus_key: bool) -> bool {
         #[cfg(target_os = "macos")]
         return self.mac.still_here(after_focus_key);
-        #[cfg(not(target_os = "macos"))]
+        // Window by window: a Tab or Return that moves to another field stays in the window.
+        #[cfg(target_os = "linux")]
+        {
+            let _ = after_focus_key;
+            self.linux_here()
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             let _ = after_focus_key;
             true
@@ -784,5 +892,42 @@ mod tests {
         std::thread::sleep(Duration::from_millis(300));
         assert!(target.still_here(false), "focus left again after the restore");
         assert!(target.mac.in_place());
+    }
+}
+
+#[cfg(test)]
+mod hypr_tests {
+    use super::*;
+
+    /// `hyprctl activewindow -j` from Hyprland 0.56.2 on Omarchy, recorded 2026-11-10 (titles
+    /// replaced).
+    const RECORDED: &str = include_str!("testdata/hyprctl-activewindow.json");
+
+    #[test]
+    fn hyprland_names_the_window_by_address_and_class() {
+        let id = hypr::parse(RECORDED).expect("a window");
+        // Same address and class: the same id, whatever else changed.
+        let moved = RECORDED.replace("\"floating\": true", "\"floating\": false");
+        assert_eq!(hypr::parse(&moved), Some(id));
+        // Another window, or the same address reused by another app: another id.
+        assert_ne!(hypr::parse(&RECORDED.replace("0x55ef19943100", "0x55ef19943200")), Some(id));
+        assert_ne!(hypr::parse(&RECORDED.replace("\"class\": \"org.omarchy.screensaver\"", "\"class\": \"foot\"")), Some(id));
+    }
+
+    #[test]
+    fn no_window_or_no_answer_is_none() {
+        assert_eq!(hypr::parse("{}"), None);
+        assert_eq!(hypr::parse("Invalid"), None);
+        assert_eq!(hypr::parse(""), None);
+        assert_eq!(hypr::parse(r#"{"address": "0x0", "class": "foot"}"#), None);
+        assert_eq!(hypr::parse(r#"{"address": "", "class": "foot"}"#), None);
+    }
+
+    #[test]
+    fn the_linux_target_types_only_into_the_window_it_started_in() {
+        assert_eq!(linux_restore(7, Some(7)), Restore::InPlace);
+        assert_eq!(linux_restore(7, Some(8)), Restore::Failed);
+        // Hyprland didn't answer: as before, nothing stops the typing.
+        assert_eq!(linux_restore(7, None), Restore::Elsewhere);
     }
 }
