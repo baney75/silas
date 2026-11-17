@@ -33,8 +33,12 @@ impl Host for TauriHost {
         let _ = self.app.emit(event, payload);
         if notice {
             // The overlay shows it even with the main window hidden, then hides once it runs out.
+            // The status isn't read here: the engine may emit while holding its lock.
             *NOTICE_UNTIL.lock() = Some(Instant::now() + NOTICE_FOR);
-            self.overlay(self.status());
+            if let Some(w) = self.app.get_webview_window("overlay") {
+                position_overlay(&w);
+                place_overlay(&self.app, w);
+            }
             let app = self.app.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(NOTICE_FOR + std::time::Duration::from_millis(50));
@@ -74,27 +78,27 @@ impl Host for TauriHost {
 }
 
 impl TauriHost {
-    /// The engine's status now. Only the status lock, held for a copy.
-    fn status(&self) -> Status {
-        self.app.try_state::<Shared>().map_or(Status::Ready, |c| c.status().0)
-    }
-
     fn overlay(&self, s: Status) {
         let Some(w) = self.app.get_webview_window("overlay") else {
             return;
         };
         if shown(s) {
-            if let Ok(Some(monitor)) = w.primary_monitor().or_else(|_| w.current_monitor()) {
-                let size = monitor.size();
-                let pos = monitor.position();
-                let scale = monitor.scale_factor();
-                let (ww, wh) = (260.0 * scale, 64.0 * scale);
-                let x = pos.x as f64 + (size.width as f64 - ww) / 2.0;
-                let y = pos.y as f64 + size.height as f64 - wh - 72.0 * scale;
-                let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
-            }
+            position_overlay(&w);
         }
         place_overlay(&self.app, w);
+    }
+}
+
+/// Bottom center of the primary display.
+fn position_overlay(w: &tauri::WebviewWindow) {
+    if let Ok(Some(monitor)) = w.primary_monitor().or_else(|_| w.current_monitor()) {
+        let size = monitor.size();
+        let pos = monitor.position();
+        let scale = monitor.scale_factor();
+        let (ww, wh) = (260.0 * scale, 64.0 * scale);
+        let x = pos.x as f64 + (size.width as f64 - ww) / 2.0;
+        let y = pos.y as f64 + size.height as f64 - wh - 72.0 * scale;
+        let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
     }
 }
 

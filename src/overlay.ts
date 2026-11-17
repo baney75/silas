@@ -79,11 +79,13 @@ function loop() {
 }
 
 function onStatus(status: Status) {
+  // A notice stays until it runs out (its timer comes back here) or a new dictation starts.
+  if (face === "notice" && status !== "recording") return;
   if (status === "recording") {
     if (face !== "recording") setFace("recording");
   } else if (status === "transcribing") setFace("writing");
   else if (status === "typing") setFace("typing");
-  else if (face !== "learned" && face !== "notice") setFace("idle");
+  else if (face !== "learned") setFace("idle");
 }
 
 void initTheme();
