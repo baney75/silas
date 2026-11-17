@@ -1,6 +1,7 @@
 node_modules/
 dist/
 src-tauri/target/
+core/voice/target/
 src-tauri/gen/
 .models/
 migration/

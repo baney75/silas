@@ -1,0 +1,243 @@
+{
+  "accent_dark": null,
+  "accent_light": null,
+  "description": "Warm paper with small corners and serif text everywhere.",
+  "mode": "auto",
+  "name": "parchment",
+  "schema": 1,
+  "surfaces": {
+    "browser": {
+      "dark": {
+        "accent": "#d9a66f",
+        "background": "#2e261c",
+        "border": "#51442f",
+        "done": "#8cc0ae",
+        "foreground": "#f3e9d2",
+        "muted": "#cdbf9f",
+        "on_accent": "#241a0f",
+        "selection": "#4a3c27",
+        "strong": "#fffbf0",
+        "sunken": "#251f16",
+        "surface": "#382f23",
+        "urgent": "#ea8e78",
+        "working": "#d2b26e"
+      },
+      "light": {
+        "accent": "#7a4b2a",
+        "background": "#f3e9d2",
+        "border": "#d3c19a",
+        "done": "#3d6359",
+        "foreground": "#3a2e20",
+        "muted": "#65563f",
+        "on_accent": "#fbf4e2",
+        "selection": "#e6d3a8",
+        "strong": "#251c12",
+        "sunken": "#e8dabb",
+        "surface": "#fbf4e2",
+        "urgent": "#a33a2a",
+        "working": "#80601f"
+      },
+      "motion": {
+        "easing": "cubic-bezier(0.2, 0, 0, 1)",
+        "fast": 120,
+        "normal": 200,
+        "reduced": false,
+        "scale_from": 0.98,
+        "slow": 320
+      },
+      "shape": {
+        "blur": 0,
+        "border_width": 1,
+        "density": "regular",
+        "indicator": "dot",
+        "radius": 4,
+        "radius_large": 6,
+        "radius_small": 2,
+        "shadow": 0.12
+      },
+      "type": {
+        "display": "Newsreader, \"Iowan Old Style\", Georgia, serif",
+        "line_height": 1.5,
+        "mono": "ui-monospace, \"SF Mono\", Menlo, Consolas, monospace",
+        "size": 16,
+        "ui": "Newsreader, \"Iowan Old Style\", Georgia, serif",
+        "weight": 400
+      }
+    },
+    "site": {
+      "dark": {
+        "accent": "#d9a66f",
+        "background": "#2e261c",
+        "border": "#51442f",
+        "done": "#8cc0ae",
+        "foreground": "#f3e9d2",
+        "muted": "#cdbf9f",
+        "on_accent": "#241a0f",
+        "selection": "#4a3c27",
+        "strong": "#fffbf0",
+        "sunken": "#251f16",
+        "surface": "#382f23",
+        "urgent": "#ea8e78",
+        "working": "#d2b26e"
+      },
+      "light": {
+        "accent": "#7a4b2a",
+        "background": "#f3e9d2",
+        "border": "#d3c19a",
+        "done": "#3d6359",
+        "foreground": "#3a2e20",
+        "muted": "#65563f",
+        "on_accent": "#fbf4e2",
+        "selection": "#e6d3a8",
+        "strong": "#251c12",
+        "sunken": "#e8dabb",
+        "surface": "#fbf4e2",
+        "urgent": "#a33a2a",
+        "working": "#80601f"
+      },
+      "motion": {
+        "easing": "cubic-bezier(0.2, 0, 0, 1)",
+        "fast": 120,
+        "normal": 200,
+        "reduced": false,
+        "scale_from": 0.98,
+        "slow": 320
+      },
+      "shape": {
+        "blur": 0,
+        "border_width": 1,
+        "density": "regular",
+        "indicator": "dot",
+        "radius": 4,
+        "radius_large": 6,
+        "radius_small": 2,
+        "shadow": 0.12
+      },
+      "type": {
+        "display": "Newsreader, \"Iowan Old Style\", Georgia, serif",
+        "line_height": 1.5,
+        "mono": "ui-monospace, \"SF Mono\", Menlo, Consolas, monospace",
+        "size": 16,
+        "ui": "Newsreader, \"Iowan Old Style\", Georgia, serif",
+        "weight": 400
+      }
+    },
+    "spaces": {
+      "dark": {
+        "accent": "#d9a66f",
+        "background": "#2e261c",
+        "border": "#51442f",
+        "done": "#8cc0ae",
+        "foreground": "#f3e9d2",
+        "muted": "#cdbf9f",
+        "on_accent": "#241a0f",
+        "selection": "#4a3c27",
+        "strong": "#fffbf0",
+        "sunken": "#251f16",
+        "surface": "#382f23",
+        "urgent": "#ea8e78",
+        "working": "#d2b26e"
+      },
+      "light": {
+        "accent": "#7a4b2a",
+        "background": "#f3e9d2",
+        "border": "#d3c19a",
+        "done": "#3d6359",
+        "foreground": "#3a2e20",
+        "muted": "#65563f",
+        "on_accent": "#fbf4e2",
+        "selection": "#e6d3a8",
+        "strong": "#251c12",
+        "sunken": "#e8dabb",
+        "surface": "#fbf4e2",
+        "urgent": "#a33a2a",
+        "working": "#80601f"
+      },
+      "motion": {
+        "easing": "cubic-bezier(0.2, 0, 0, 1)",
+        "fast": 120,
+        "normal": 200,
+        "reduced": false,
+        "scale_from": 0.98,
+        "slow": 320
+      },
+      "shape": {
+        "blur": 0,
+        "border_width": 1,
+        "density": "regular",
+        "indicator": "dot",
+        "radius": 4,
+        "radius_large": 6,
+        "radius_small": 2,
+        "shadow": 0.12
+      },
+      "type": {
+        "display": "Newsreader, \"Iowan Old Style\", Georgia, serif",
+        "line_height": 1.5,
+        "mono": "ui-monospace, \"SF Mono\", Menlo, Consolas, monospace",
+        "size": 16,
+        "ui": "Newsreader, \"Iowan Old Style\", Georgia, serif",
+        "weight": 400
+      }
+    },
+    "voice": {
+      "dark": {
+        "accent": "#d9a66f",
+        "background": "#2e261c",
+        "border": "#51442f",
+        "done": "#8cc0ae",
+        "foreground": "#f3e9d2",
+        "muted": "#cdbf9f",
+        "on_accent": "#241a0f",
+        "selection": "#4a3c27",
+        "strong": "#fffbf0",
+        "sunken": "#251f16",
+        "surface": "#382f23",
+        "urgent": "#ea8e78",
+        "working": "#d2b26e"
+      },
+      "light": {
+        "accent": "#7a4b2a",
+        "background": "#f3e9d2",
+        "border": "#d3c19a",
+        "done": "#3d6359",
+        "foreground": "#3a2e20",
+        "muted": "#65563f",
+        "on_accent": "#fbf4e2",
+        "selection": "#e6d3a8",
+        "strong": "#251c12",
+        "sunken": "#e8dabb",
+        "surface": "#fbf4e2",
+        "urgent": "#a33a2a",
+        "working": "#80601f"
+      },
+      "motion": {
+        "easing": "cubic-bezier(0.2, 0, 0, 1)",
+        "fast": 120,
+        "normal": 200,
+        "reduced": false,
+        "scale_from": 0.98,
+        "slow": 320
+      },
+      "shape": {
+        "blur": 0,
+        "border_width": 1,
+        "density": "regular",
+        "indicator": "dot",
+        "radius": 4,
+        "radius_large": 6,
+        "radius_small": 2,
+        "shadow": 0.12
+      },
+      "type": {
+        "display": "Newsreader, \"Iowan Old Style\", Georgia, serif",
+        "line_height": 1.5,
+        "mono": "ui-monospace, \"SF Mono\", Menlo, Consolas, monospace",
+        "size": 16,
+        "ui": "Newsreader, \"Iowan Old Style\", Georgia, serif",
+        "weight": 400
+      }
+    }
+  },
+  "title": "Parchment"
+}

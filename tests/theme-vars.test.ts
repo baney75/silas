@@ -1,7 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { blend, createApplier, radiusAt, themeVars, withAlpha } from "../src/theme-vars";
 import type { Theme } from "../src/api";
@@ -19,25 +17,17 @@ const EXPECTED = [
   "--motion-fast", "--motion-normal", "--motion-slow",
 ];
 
-// The built-in themes, written by the real `polycarp theme set` into a throwaway folder.
+// The built-in themes as Polycarp's `theme set` writes them (tests/fixtures/themes; refresh with
+// `node scripts/theme-fixtures.mjs --refresh`).
 const themes: Record<string, Theme> = {};
-let dir = "";
 beforeAll(() => {
-  dir = mkdtempSync(join(tmpdir(), "silas-vars-"));
-  const manifest = resolve(import.meta.dir, "../../cli/Cargo.toml");
-  const env = { ...process.env, POLYCARP_CONFIG_DIR: dir, XDG_CONFIG_HOME: "" };
-  const run = (...a: string[]) =>
-    process.env.POLYCARP_BIN
-      ? execFileSync(process.env.POLYCARP_BIN, a, { env }).toString()
-      : execFileSync("cargo", ["run", "-q", "--manifest-path", manifest, "--", ...a], { env }).toString();
-  const list = JSON.parse(run("theme", "list", "--json")).data.themes as { name: string; source: string }[];
-  for (const { name } of list.filter((t) => t.source === "built-in")) {
-    run("theme", "set", name);
-    const f = JSON.parse(readFileSync(join(dir, "current", "theme.json"), "utf8"));
+  const dir = resolve(import.meta.dir, "fixtures/themes");
+  for (const file of readdirSync(dir).filter((f) => f.endsWith("-auto.json"))) {
+    const f = JSON.parse(readFileSync(join(dir, file), "utf8"));
     const v = f.surfaces.voice;
-    themes[name] = { name: f.name, mode: f.mode, light: v.light, dark: v.dark, shape: v.shape, type: v.type, motion: v.motion };
+    themes[f.name] = { name: f.name, mode: f.mode, light: v.light, dark: v.dark, shape: v.shape, type: v.type, motion: v.motion };
   }
-}, 120_000);
+});
 
 describe("themeVars", () => {
   test("there are built-in themes to test", () => {
@@ -138,4 +128,3 @@ describe("radiusAt", () => {
   });
 });
 
-process.on("exit", () => dir && rmSync(dir, { recursive: true, force: true }));

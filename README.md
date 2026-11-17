@@ -155,9 +155,12 @@ folders (window and web caches) in `~/Library/Application Support` and `~/Librar
 ```sh
 bun install
 bunx tauri dev                      # run
-(cd src-tauri && cargo test --lib)  # tests
+bun test && (cd core/voice && cargo test) && (cd src-tauri && cargo test --lib)  # tests
 bunx tauri build                    # package
 ```
+
+The voice engine lives in `core/voice` (the `polycarp-voice` crate); the Tauri app in `src-tauri`
+uses it by path, so this repo builds on its own.
 
 Linux needs `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev libudev-dev libxdo-dev`.
 

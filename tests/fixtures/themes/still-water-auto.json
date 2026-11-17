@@ -1,0 +1,243 @@
+{
+  "accent_dark": null,
+  "accent_light": null,
+  "description": "Quiet. Cool greys with a deep teal accent.",
+  "mode": "auto",
+  "name": "still-water",
+  "schema": 1,
+  "surfaces": {
+    "browser": {
+      "dark": {
+        "accent": "#a5cfcb",
+        "background": "#1f2a2d",
+        "border": "#3a4d52",
+        "done": "#8ccbb0",
+        "foreground": "#e8f0f0",
+        "muted": "#b3c5c8",
+        "on_accent": "#12201f",
+        "selection": "#2f4a4b",
+        "strong": "#ffffff",
+        "sunken": "#182225",
+        "surface": "#28363a",
+        "urgent": "#e58a76",
+        "working": "#cdb57a"
+      },
+      "light": {
+        "accent": "#3f6b6a",
+        "background": "#f1f5f5",
+        "border": "#cbd8d9",
+        "done": "#2f6b55",
+        "foreground": "#233033",
+        "muted": "#51636a",
+        "on_accent": "#f1f5f5",
+        "selection": "#d3e4e2",
+        "strong": "#142022",
+        "sunken": "#e3ebeb",
+        "surface": "#fafdfd",
+        "urgent": "#a33a2a",
+        "working": "#80651f"
+      },
+      "motion": {
+        "easing": "cubic-bezier(0.2, 0, 0, 1)",
+        "fast": 120,
+        "normal": 200,
+        "reduced": false,
+        "scale_from": 0.98,
+        "slow": 320
+      },
+      "shape": {
+        "blur": 0,
+        "border_width": 1,
+        "density": "regular",
+        "indicator": "dot",
+        "radius": 10,
+        "radius_large": 16,
+        "radius_small": 6,
+        "shadow": 0.12
+      },
+      "type": {
+        "display": "Newsreader, \"Iowan Old Style\", Georgia, serif",
+        "line_height": 1.5,
+        "mono": "ui-monospace, \"SF Mono\", Menlo, Consolas, monospace",
+        "size": 16,
+        "ui": "system-ui, -apple-system, \"Segoe UI\", Roboto, Ubuntu, Cantarell, sans-serif",
+        "weight": 400
+      }
+    },
+    "site": {
+      "dark": {
+        "accent": "#a5cfcb",
+        "background": "#1f2a2d",
+        "border": "#3a4d52",
+        "done": "#8ccbb0",
+        "foreground": "#e8f0f0",
+        "muted": "#b3c5c8",
+        "on_accent": "#12201f",
+        "selection": "#2f4a4b",
+        "strong": "#ffffff",
+        "sunken": "#182225",
+        "surface": "#28363a",
+        "urgent": "#e58a76",
+        "working": "#cdb57a"
+      },
+      "light": {
+        "accent": "#3f6b6a",
+        "background": "#f1f5f5",
+        "border": "#cbd8d9",
+        "done": "#2f6b55",
+        "foreground": "#233033",
+        "muted": "#51636a",
+        "on_accent": "#f1f5f5",
+        "selection": "#d3e4e2",
+        "strong": "#142022",
+        "sunken": "#e3ebeb",
+        "surface": "#fafdfd",
+        "urgent": "#a33a2a",
+        "working": "#80651f"
+      },
+      "motion": {
+        "easing": "cubic-bezier(0.2, 0, 0, 1)",
+        "fast": 120,
+        "normal": 200,
+        "reduced": false,
+        "scale_from": 0.98,
+        "slow": 320
+      },
+      "shape": {
+        "blur": 0,
+        "border_width": 1,
+        "density": "regular",
+        "indicator": "dot",
+        "radius": 10,
+        "radius_large": 16,
+        "radius_small": 6,
+        "shadow": 0.12
+      },
+      "type": {
+        "display": "Newsreader, \"Iowan Old Style\", Georgia, serif",
+        "line_height": 1.5,
+        "mono": "ui-monospace, \"SF Mono\", Menlo, Consolas, monospace",
+        "size": 16,
+        "ui": "system-ui, -apple-system, \"Segoe UI\", Roboto, Ubuntu, Cantarell, sans-serif",
+        "weight": 400
+      }
+    },
+    "spaces": {
+      "dark": {
+        "accent": "#a5cfcb",
+        "background": "#1f2a2d",
+        "border": "#3a4d52",
+        "done": "#8ccbb0",
+        "foreground": "#e8f0f0",
+        "muted": "#b3c5c8",
+        "on_accent": "#12201f",
+        "selection": "#2f4a4b",
+        "strong": "#ffffff",
+        "sunken": "#182225",
+        "surface": "#28363a",
+        "urgent": "#e58a76",
+        "working": "#cdb57a"
+      },
+      "light": {
+        "accent": "#3f6b6a",
+        "background": "#f1f5f5",
+        "border": "#cbd8d9",
+        "done": "#2f6b55",
+        "foreground": "#233033",
+        "muted": "#51636a",
+        "on_accent": "#f1f5f5",
+        "selection": "#d3e4e2",
+        "strong": "#142022",
+        "sunken": "#e3ebeb",
+        "surface": "#fafdfd",
+        "urgent": "#a33a2a",
+        "working": "#80651f"
+      },
+      "motion": {
+        "easing": "cubic-bezier(0.2, 0, 0, 1)",
+        "fast": 120,
+        "normal": 200,
+        "reduced": false,
+        "scale_from": 0.98,
+        "slow": 320
+      },
+      "shape": {
+        "blur": 0,
+        "border_width": 1,
+        "density": "regular",
+        "indicator": "dot",
+        "radius": 10,
+        "radius_large": 16,
+        "radius_small": 6,
+        "shadow": 0.12
+      },
+      "type": {
+        "display": "Newsreader, \"Iowan Old Style\", Georgia, serif",
+        "line_height": 1.5,
+        "mono": "ui-monospace, \"SF Mono\", Menlo, Consolas, monospace",
+        "size": 16,
+        "ui": "system-ui, -apple-system, \"Segoe UI\", Roboto, Ubuntu, Cantarell, sans-serif",
+        "weight": 400
+      }
+    },
+    "voice": {
+      "dark": {
+        "accent": "#a5cfcb",
+        "background": "#1f2a2d",
+        "border": "#3a4d52",
+        "done": "#8ccbb0",
+        "foreground": "#e8f0f0",
+        "muted": "#b3c5c8",
+        "on_accent": "#12201f",
+        "selection": "#2f4a4b",
+        "strong": "#ffffff",
+        "sunken": "#182225",
+        "surface": "#28363a",
+        "urgent": "#e58a76",
+        "working": "#cdb57a"
+      },
+      "light": {
+        "accent": "#3f6b6a",
+        "background": "#f1f5f5",
+        "border": "#cbd8d9",
+        "done": "#2f6b55",
+        "foreground": "#233033",
+        "muted": "#51636a",
+        "on_accent": "#f1f5f5",
+        "selection": "#d3e4e2",
+        "strong": "#142022",
+        "sunken": "#e3ebeb",
+        "surface": "#fafdfd",
+        "urgent": "#a33a2a",
+        "working": "#80651f"
+      },
+      "motion": {
+        "easing": "cubic-bezier(0.2, 0, 0, 1)",
+        "fast": 120,
+        "normal": 200,
+        "reduced": false,
+        "scale_from": 0.98,
+        "slow": 320
+      },
+      "shape": {
+        "blur": 0,
+        "border_width": 1,
+        "density": "regular",
+        "indicator": "dot",
+        "radius": 10,
+        "radius_large": 16,
+        "radius_small": 6,
+        "shadow": 0.12
+      },
+      "type": {
+        "display": "Newsreader, \"Iowan Old Style\", Georgia, serif",
+        "line_height": 1.5,
+        "mono": "ui-monospace, \"SF Mono\", Menlo, Consolas, monospace",
+        "size": 16,
+        "ui": "system-ui, -apple-system, \"Segoe UI\", Roboto, Ubuntu, Cantarell, sans-serif",
+        "weight": 400
+      }
+    }
+  },
+  "title": "Still Water"
+}
