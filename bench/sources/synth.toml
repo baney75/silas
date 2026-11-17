@@ -6,13 +6,16 @@
 # formatted  ref_formatted: what an excellent dictation app should type. Written by hand.
 #            For command clips it is a JSON action list (see bench/README.md).
 # notes      Optional note copied to the manifest.
+# speak      Optional. Replaces say as the TTS input only, when a clip needs other wording or
+#            pauses to be voiced right. The references still follow say.
+# voice      Optional. Overrides the rotating Kokoro voice for a clip one voice misreads.
 #
 # [respell] maps a spoken token to the spelling Kokoro needs to pronounce it right. It changes
 # only the TTS input, never ref_verbatim.
 
 [respell]
 "A M" = "ay em"
-"onnx" = "on icks"
+"onnx" = "onyx"
 
 # ---------------------------------------------------------------- dictation, spoken punctuation
 
@@ -49,6 +52,7 @@ notes = "spoken punctuation; letter; new paragraph and new line"
 [[item]]
 id = "dictation-0006"
 say = "Grocery list colon. New line. Eggs. New line. Two pounds of chicken thighs. New line. Oat milk. New line. Coffee filters."
+speak = "Grocery list colon. New line, eggs. New line, two pounds of chicken thighs. New line, oat milk. New line, coffee filters."
 formatted = "Grocery list:\nEggs\n2 pounds of chicken thighs\nOat milk\nCoffee filters"
 notes = "spoken punctuation; list with new line"
 
@@ -141,6 +145,7 @@ notes = "names"
 [[item]]
 id = "dictation-0021"
 say = "My new email is d dot reyes at proton dot me, so please update your contacts."
+speak = "My new email is d dot Ray ess at proton dot me, so please update your contacts."
 formatted = "My new email is d.reyes@proton.me, so please update your contacts."
 notes = "email address"
 
@@ -227,6 +232,7 @@ notes = "terminal; Kubernetes CLI"
 [[item]]
 id = "code-0005"
 say = "C D tilde slash projects slash silas"
+speak = "C D tilde slash projects slash Sighless"
 formatted = "cd ~/projects/silas"
 notes = "terminal; file path"
 
@@ -355,6 +361,7 @@ notes = "TypeScript; PascalCase; braces"
 [[item]]
 id = "command-0001"
 say = "new line"
+voice = "bm_george"
 formatted = '[{"action":"newline"}]'
 notes = "Insert a line break."
 
@@ -403,6 +410,7 @@ notes = "Select the three words before the cursor."
 [[item]]
 id = "command-0009"
 say = "cap that"
+voice = "am_michael"
 formatted = '[{"action":"capitalize","target":"last"}]'
 notes = "Capitalize the first letter of the last dictated phrase (or the selection)."
 

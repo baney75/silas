@@ -8,8 +8,14 @@ ref_verbatim. A synthesized clip over 15% WER means the TTS or the reference is 
   OMP_NUM_THREADS=3 nice uv run bench/tools/asr_check.py [--dest DIR] [--n 15] [--all] [--category accent]
 
 Both sides go through Whisper's English normalizer (numbers to digits, fillers dropped,
-spelling variants unified). The hypothesis first has code symbols read back as words
-("-m" becomes "dash m"), since the references spell them out.
+spelling variants unified). Before that, on code clips only, the hypothesis has symbols
+read back as words ("-m" becomes "dash m"), since the references spell them out; on every
+clip, "." and "@" inside emails and URLs are read as "dot" and "at", capitalized acronyms
+are spelled out ("CPU" becomes "c p u"), a few tool names that small.en writes in their
+written form are read back the way they are spoken, and runs of
+single letters or digit groups are joined on both sides ("c p u" becomes "cpu", "555 867"
+becomes "555867"). A hyphen between words in a code clip may be a spoken "dash" or an
+English compound ("back-end"), so both readings are scored and the better one counts.
 """
 
 import argparse
@@ -26,11 +32,41 @@ BENCH = Path(__file__).resolve().parents[1]
 SYMBOLS = [
     (r"\+=", " plus equals "), (r">=", " greater than or equal to "), (r"=>", " arrow "), (r"==", " equals equals "),
     (r"--", " dash dash "), (r"(?<![\w])-(?=\w)", " dash "), (r"(?<=\w)-(?=\w)", " dash "),
-    (r"@", " at "), (r"~", " tilde "), (r"/", " slash "), (r"(?<=\w)\.(?=[a-zA-Z])", " dot "),
+    (r"(?<=\d)\.(?=\d)", " dot "), (r"(?<=[a-zA-Z])(?=\d)", " "), (r"@", " at "), (r"~", " tilde "), (r"/", " slash "), (r"(?<=\w)\.(?=[a-zA-Z])", " dot "),
     (r"_", " underscore "), (r"\+", " plus "), (r"=", " equals "), (r"\*", " times "),
     (r"\(", " open paren "), (r"\)", " close paren "), (r"\[", " open bracket "), (r"\]", " close bracket "),
     (r"\{", " open brace "), (r"\}", " close brace "), (r";", " semicolon "),
 ]
+
+
+# Written forms small.en uses for terms the references spell as spoken.
+JARGON = [(r"\bkubectl\b", "kube control"), (r"\bchmod\b", "c h mod"), (r"\bpostgresql\b", "postgres q l"),
+          (r"\bon[iy]x\b", "onnx")]
+
+
+def spoken_form(text: str, code: bool) -> str:
+    text = re.sub(r"\b[A-Z]{2,6}\b", lambda m: " ".join(m.group().lower()), text)
+    for pat, rep in JARGON:
+        text = re.sub(pat, rep, text, flags=re.I)
+    if code:
+        return spoken_symbols(text)
+    # emails and URLs in prose: "d.reyes@proton.me" (but not "p.m.")
+    return re.sub(r"(?<=\w)\.(?=[a-zA-Z]{2})", " dot ", text.replace("@", " at "))
+
+
+def join_runs(words: list[str]) -> list[str]:
+    """Join runs of single letters, and runs of digit groups, into one token each."""
+    out, run, kind = [], [], None
+    for w in words + [""]:
+        k = "letter" if len(w) == 1 and w.isalpha() else "digit" if w.isdigit() else None
+        if k and k == kind:
+            run.append(w)
+            continue
+        out += ["".join(run)] if len(run) > 1 else run
+        run, kind = ([w], k) if k else ([], None)
+        if w and not k:
+            out.append(w)
+    return out
 
 
 def spoken_symbols(text: str) -> str:
@@ -77,9 +113,11 @@ def main() -> None:
     for r in sorted(picked, key=lambda r: r["id"]):
         segs, _ = model.transcribe(load(args.dest / r["audio"]), language="en", beam_size=5, vad_filter=False)
         hyp_raw = " ".join(s.text.strip() for s in segs)
-        ref = norm(r["ref_verbatim"]).split()
-        hyp = norm(spoken_symbols(hyp_raw)).split()
-        w = wer(ref, hyp)
+        ref = join_runs(norm(r["ref_verbatim"]).split())
+        readings = [hyp_raw]
+        if r["category"] == "code":
+            readings.append(re.sub(r"(?<=[a-zA-Z])-(?=[a-zA-Z])", " ", hyp_raw))
+        w = min(wer(ref, join_runs(norm(spoken_form(h, r["category"] == "code")).split())) for h in readings)
         total_err += w * len(ref)
         total_words += len(ref)
         flag = "  OVER 15%" if w > 0.15 else ""

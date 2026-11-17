@@ -206,7 +206,7 @@ class Tts:
         return y * (0.95 / peak) if peak > 0.95 else y
 
 
-def build_synth(dest, only=None):
+def build_synth(dest, only=None, ids=None):
     spec = tomllib.loads((ROOT / "sources" / "synth.toml").read_text())
     respell = spec["respell"]
     tts = Tts()
@@ -217,8 +217,10 @@ def build_synth(dest, only=None):
         if only and cat != only:
             continue
         n = counters[cat] = counters.get(cat, -1) + 1
-        voice = VOICES[(n + len(cat)) % len(VOICES)]
-        text = it["say"]
+        if ids and it["id"] not in ids:
+            continue
+        voice = it.get("voice", VOICES[(n + len(cat)) % len(VOICES)])
+        text = it.get("speak", it["say"])  # speak: TTS-only wording; the references follow say
         for k, v in respell.items():
             text = re.sub(rf"\b{re.escape(k)}\b", v, text)
         y = tts.say(text, voice, rng_for(it["id"]))
@@ -269,6 +271,7 @@ def main():
                     help="rebuild only recorded (real) or synthesized clips, keeping the other rows of the manifest")
     ap.add_argument("--manifest-out", type=Path, default=ROOT,
                     help="where to write manifest.jsonl and checksums.sha256 (fetch.py --rebuild points this at --dest)")
+    ap.add_argument("--ids", help="comma-separated synthesized ids to re-render, keeping every other manifest row")
     ap.add_argument("--pack", action="store_true")
     ap.add_argument("--pack-only", action="store_true", help="pack the audio already in --dest using bench/manifest.jsonl")
     args = ap.parse_args()
@@ -279,8 +282,15 @@ def main():
     sel = json.loads((ROOT / "sources" / "selection.json").read_text())
     refs = json.loads((ROOT / "sources" / "refs.json").read_text())
     old_path = args.manifest_out.expanduser().resolve() / "manifest.jsonl"
-    keep = [json.loads(line) for line in old_path.read_text().splitlines()] if args.only and old_path.exists() else []
+    keep = [json.loads(line) for line in old_path.read_text().splitlines()] if (args.only or args.ids) and old_path.exists() else []
     rows = []
+    if args.ids:
+        ids = set(args.ids.split(","))
+        rows = [r for r in keep if r["id"] not in ids] + build_synth(dest, ids=ids)
+        assert len(rows) == len(keep), "unknown id in --ids"
+        write_outputs(rows, dest, args.manifest_out.expanduser().resolve())
+        print(f"re-rendered {len(ids)} clips, {len(rows)} in manifest")
+        return
     if args.only != "synth":
         clean = build_clean(sel, refs, dest)
         rows += clean + build_noise(sel, refs, dest, clean) + build_accent(sel, refs, dest) + build_longform_ls(sel, refs, dest)

@@ -1,8 +1,8 @@
 # Bench set v1
 
 A fixed speech test set that Silas and rival dictation apps are scored on: 250 clips,
-62.3 minutes of 16 kHz mono 16-bit PCM WAV, each with a verbatim and a formatted
-reference. Audio is not in git. It lives in the `bench-set-v1` prerelease of this repo
+62.2 minutes of 16 kHz mono 16-bit PCM WAV, each with a verbatim and a formatted
+reference. Audio is not in git. It lives in the `bench-set-v1` release of this repo
 and is checked file by file against `bench/checksums.sha256`.
 
 ```sh
@@ -22,11 +22,11 @@ Python 3 with the `zstd` command on PATH). `--rebuild` needs `uv` and downloads 
 | clean | 60 | 7.8 | LibriSpeech test-clean read speech, 30 speakers, one short (3 to 7 s) and one medium (7 to 15 s) clip each |
 | noise | 60 | 10.8 | 30 of the clean clips mixed with real cafe, street, keyboard and fan noise at 10 dB and 0 dB SNR |
 | accent | 50 | 7.0 | Conversational English from EdAcc, 10 accents, 5 clips and 2 speakers each |
-| dictation | 30 | 4.3 | Emails, messages and notes as people speak them to a computer |
+| dictation | 30 | 4.2 | Emails, messages and notes as people speak them to a computer |
 | code | 25 | 2.2 | Code and terminal dictation |
 | command | 15 | 0.5 | Editing commands a dictation app should act on |
 | longform | 10 | 29.7 | 2 to 5 minute passages: 5 LibriSpeech chapters, 5 synthesized documents |
-| total | 250 | 62.3 | |
+| total | 250 | 62.2 | |
 
 ### Where the audio came from
 
@@ -35,13 +35,16 @@ Python 3 with the `zstd` command on PATH). `--rebuild` needs `uv` and downloads 
 | clean | real recordings: LibriSpeech test-clean (LibriVox readers) | copied unchanged on chapel1 |
 | noise | real recordings: LibriSpeech test-clean mixed with real DEMAND and FSD50K noise | mixed on chapel1 |
 | accent | real recordings: EdAcc conversations | resampled on chapel1 |
-| dictation | TTS: Kokoro-82M, 8 voices | rendered on chapel1 (CPU) |
-| code | TTS: Kokoro-82M, 8 voices | rendered on chapel1 (CPU) |
-| command | TTS: Kokoro-82M, 8 voices | rendered on chapel1 (CPU) |
+| dictation | TTS: Kokoro-82M, 8 voices | chapel1 (CPU); dictation-0006 and 0021 re-rendered on abbey1 (CPU) |
+| code | TTS: Kokoro-82M, 8 voices | chapel1 (CPU); code-0005, 0009 and 0020 re-rendered on abbey1 (CPU) |
+| command | TTS: Kokoro-82M, 8 voices | chapel1 (CPU); command-0001 and 0009 re-rendered on abbey1 (CPU) |
 | longform-0001 to 0005 | real recordings: LibriSpeech test-other | joined on chapel1 |
 | longform-0006 to 0010 | TTS: Kokoro-82M | rendered on chapel1 (CPU) |
 
-No audio in v1 came from Parish1 or any GPU. Each synthesized clip's `tts` field names its
+No audio in v1 came from Parish1 or any GPU. The first build ran on chapel1. When chapel1
+got overloaded, the remaining heavy steps moved to abbey1: the ASR proxy check, the 7 clips
+re-rendered after it, and the release tarball, built from a copy of the chapel1 audio that
+matched `checksums.sha256` byte for byte. Each synthesized clip's `tts` field names its
 engine, voice and host, for example `kokoro-82m af_heart chapel1`.
 
 `bench/subsets/ratchet.txt` lists 40 clips from every category, 5.6 minutes in all,
@@ -161,8 +164,10 @@ All selection is seeded (`20261117`) and frozen in `bench/sources/selection.json
   `am_michael`, `am_fenrir` US; `bf_emma`, `bf_isabella`, `bm_george`, `bm_fable` UK),
   one sentence at a time with 0.25 to 0.5 s pauses, 0.25 s lead and 0.35 s tail,
   normalized to -22 dBFS RMS. Half the dictation clips use spoken punctuation; the other
-  half do not. A small `[respell]` table fixes TTS pronunciation ("A M" is voiced "ay em")
-  without changing the reference.
+  half do not. A small `[respell]` table fixes TTS pronunciation ("A M" is voiced "ay em",
+  "onnx" is voiced "onyx") without changing the reference, and an item's optional `speak`
+  text replaces `say` for the TTS only, when a clip needs different wording to be voiced
+  right.
 - **longform**: `longform-0001` to `0005` join 16 to 34 consecutive LibriSpeech test-other
   utterances from one chapter with 0.35 s gaps (about 2.2 to 4.8 minutes; consecutive
   utterances still skip some book text between them). `longform-0006` to `0010` are a
@@ -213,11 +218,18 @@ OMP_NUM_THREADS=3 nice uv run bench/tools/build.py --pack     # audio, manifest,
 python3 -I bench/tools/make_subsets.py                         # ratchet subset
 python3 -I bench/tools/check.py
 OMP_NUM_THREADS=3 nice uv run bench/tools/asr_check.py         # proxy listen check, 15 random synthesized clips
-gh release create bench-set-v1 --prerelease ~/.cache/silas-bench/bench-set-v1.tar.zst
+gh release create bench-set-v1 --latest=false ~/.cache/silas-bench/bench-set-v1.tar.zst
 ```
 
+`--latest=false` matters: stable Silas updates (`src-tauri/src/updates.rs`) and
+`install.sh` read `releases/latest/download/...`, so a bench release that took "Latest"
+would break every stable install's updater. Keep it a normal release (not a pre-release)
+and check afterward that `gh api repos/baney75/silas/releases/latest --jq .tag_name`
+still prints the newest app version.
+
 Then record the asset URL, size and sha256 in `bench/release.json`. `build.py --only synth`
-or `--only real` rebuilds half the set and keeps the other manifest rows. `build.py
+or `--only real` rebuilds half the set and keeps the other manifest rows; `--ids a,b` re-renders only
+those synthesized clips. `build.py
 --pack-only` repacks the audio already in the cache after a manifest edit.
 
 Rebuilt LibriSpeech, noise and EdAcc clips match the release bit for bit. Kokoro output
