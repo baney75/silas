@@ -30,10 +30,10 @@
         "noise": 0.075342
       },
       "formatted_error": 0.201651,
-      "t_final_ms_median": 709.0,
-      "peak_rss_mb": 1229.4,
+      "t_final_ms_median": 646.3,
+      "peak_rss_mb": 1078.2,
       "timing": "fast",
-      "cpu": null,
+      "cpu": "Intel(R) Xeon(R) 6975P-C",
       "updated": "2026-11-17"
     }
   }
