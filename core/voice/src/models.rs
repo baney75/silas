@@ -60,10 +60,11 @@ pub const MODELS: &[Spec] = &[
         languages: "English + 24 European languages",
         recommended: true,
         source: Source::Archive {
-            url: "https://blob.handy.computer/parakeet-v3-int8.tar.gz",
+            url: "https://github.com/baney75/silas/releases/download/models-v1/parakeet-v3-int8.tar.gz",
             folder: "parakeet-tdt-0.6b-v3-int8",
-            // Published by Handy, which hosts the archive (its model.rs before onnx was removed,
-            // cjpais/Handy 5197faf^), and matched against the file on 2026-11-10.
+            // Handy's archive (its model.rs before onnx was removed, cjpais/Handy 5197faf^), matched
+            // against the file on 2026-11-10 and mirrored byte for byte to our own release on
+            // 2026-11-17: Handy has moved to GGUF models, so its host may drop this file.
             sha256: Some("43d37191602727524a7d8c6da0eef11c4ba24320f5b4730f1a2497befc2efa77"),
         },
     },
