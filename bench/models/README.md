@@ -49,7 +49,7 @@ BIN=/tmp/target-try/release/silas-bench bench/models/run.sh parakeet-v3-onnx-try
 
 - `gguf:<file.gguf>`: any transcribe.cpp model (Parakeet, Nemotron, Canary, Qwen3-ASR, Granite Speech, Whisper and
   more), loaded in process through the `transcribe-cpp` crate on its CPU backend with `--threads` threads (default
-  3). The app runs Parakeet v3 on the same crate. English is passed as the
+  the app's count, one per physical core up to 8; `run.sh` passes 3). The app runs Parakeet v3 on the same crate. English is passed as the
   language to models that take one.
 - `whisper-server:<url>`: posts each piece to a running whisper.cpp server, as `bench/engines/whisper_cpp.py`
   does with whole clips. `--usage-pid <pid>` adds that server's CPU time and peak memory to each row.

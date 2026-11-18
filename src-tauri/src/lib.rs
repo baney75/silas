@@ -47,7 +47,7 @@ pub fn run() {
             app.manage(core.clone());
 
             // First run: honor the launch-at-login default.
-            if !store::exists("settings.json") {
+            if core.first_run {
                 use tauri_plugin_autostart::ManagerExt;
                 if core.settings.lock().launch_at_login {
                     let _ = handle.autolaunch().enable();

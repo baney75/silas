@@ -88,6 +88,9 @@ pub enum Status {
 
 pub struct Core {
     pub host: Arc<dyn Host>,
+    /// No settings.json before this start. The model migration can save one first, so the app asks
+    /// this, not the file, whether it is the first run.
+    pub first_run: bool,
     pub settings: Mutex<Settings>,
     pub dict: Mutex<Dictionary>,
     pub history: Mutex<Vec<HistoryItem>>,
@@ -407,7 +410,6 @@ impl Core {
         // Whoever dictated with those files keeps dictating with them; the model list offers the
         // GGUF build as the recommended download.
         if models::retarget_legacy_parakeet(&mut settings) {
-            store::save("settings.json", &settings);
             log::info!("models: Parakeet v3's ONNX files are now {}", models::PARAKEET_V3_ONNX);
         }
         // A saved key this build can't use is replaced, not kept: every later settings save sends it
@@ -424,6 +426,7 @@ impl Core {
         history.truncate(store::HISTORY_KEEP);
         Arc::new(Core {
             host,
+            first_run: fresh,
             dict: Mutex::new(store::load("dictionary.json")),
             history: Mutex::new(history),
             status: Mutex::new((Status::Loading, None)),
@@ -1738,10 +1741,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let _store = STORE_LOCK.lock();
         store::set_data_dir(Some(dir.clone()));
-        let old = models::model_path("parakeet-v3");
+        let old = store::models_dir().join("parakeet-v3");
         std::fs::create_dir_all(&old).unwrap();
         std::fs::write(old.join(".complete"), b"ok").unwrap();
         let core = Core::new(Arc::new(Nightly));
+        assert!(core.first_run && store::exists("settings.json"), "src-tauri's first-run setup reads first_run");
         let (live, model) = { let s = core.settings.lock(); (s.update_channel.clone(), s.model.clone()) };
         let saved: Settings = store::load("settings.json");
         store::set_data_dir(None);
@@ -1761,6 +1765,7 @@ mod tests {
         let onnx = models::model_path(models::PARAKEET_V3_ONNX);
         std::fs::create_dir_all(&onnx).unwrap();
         std::fs::write(onnx.join(".complete"), b"ok").unwrap();
+        std::fs::write(onnx.join(".migrated"), b"").unwrap(); // left by the move
         std::fs::write(store::data_dir().join("settings.json"), r#"{"model":"parakeet-v3","onboarded":true}"#).unwrap();
         let core = Core::new(Arc::new(NullHost));
         let live = core.settings.lock().model.clone();

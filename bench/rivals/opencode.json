@@ -195,7 +195,7 @@
     "silas_no_step": [
       {
         "what": "the speech model downloads by itself",
-        "quote": "The speech model (478 MB) starts downloading right away."
+        "quote": "The speech model (485 MB) starts downloading right away."
       },
       {
         "what": "Linux asks for no permission",

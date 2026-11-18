@@ -125,7 +125,7 @@ Where Silas still loses: dictation (7.3% against 3.2% one-shot), noise (4.8% aga
 - **Typing:** Silas never pastes (AGENTS.md: text goes out as keystrokes and the clipboard is never touched), so typing stays key by key. It went from 349.9 ms to 110.6 ms a clip on X11 (104.2 ms on the ONNX text, which was shorter). On Wayland it types through `wtype`, which waits 2 ms after every press and every release and tops out near 210 characters a second; a Wayland virtual keyboard of Silas's own would lift that.
 - **Dictation and noise WER:** Hex's Parakeet Unified English build still leads on these, a few points each. Accent no longer loses since the GGUF switch.
 - **Code WER:** the ONNX build scored 21.1%; the GGUF build gave up 8.8 points there for the accent gain. Silas's custom words are the lever.
-- **Wait after key up:** about 225 ms behind at the median, but ahead at p95, and far ahead on long dictation.
+- **Wait after key up:** about 251 ms behind at the median, but ahead at p95, and far ahead on long dictation.
 
 ## The checks
 

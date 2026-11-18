@@ -159,6 +159,7 @@ const device: Device = {
 /** What each mock model scores, so every state of the page can be previewed. */
 const mockScores: Record<string, ModelResult> = {
   "parakeet-v3": { model: "parakeet-v3", speed: 23.4, wer: 0.019, audio_seconds: 62.2, compute_seconds: 2.66, clips: 9 },
+  "parakeet-v3-onnx": { model: "parakeet-v3-onnx", speed: 19.8, wer: 0.022, audio_seconds: 62.2, compute_seconds: 3.14, clips: 9 },
   "cohere-int4": { model: "cohere-int4", speed: 4.1, wer: 0.012, audio_seconds: 62.2, compute_seconds: 15.2, clips: 9 },
 };
 

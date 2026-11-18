@@ -194,8 +194,8 @@ def readme_first_run_items(readme):
 def setup_steps(entry, readme):
     """Silas's setup steps, each still documented in README.md, and the README's First run list unchanged."""
     text = readme.read_text()
-    problems = [f"README.md no longer says {s['quote']!r} (setup step {s['step']!r})"
-                for s in entry["silas_steps"] if s["quote"] not in text]
+    problems = [f"README.md no longer says {s['quote']!r} ({s.get('step') or s['what']!r})"
+                for s in entry["silas_steps"] + entry.get("silas_no_step", []) if s["quote"] not in text]
     items = readme_first_run_items(readme)
     if items != entry["readme_first_run_items"]:
         problems.append(f"README.md's First run has {items} items; bench/rivals has {entry['readme_first_run_items']}:"
