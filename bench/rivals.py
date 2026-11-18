@@ -194,8 +194,8 @@ def readme_first_run_items(readme):
 def setup_steps(entry, readme):
     """Silas's setup steps, each still documented in README.md, and the README's First run list unchanged."""
     text = readme.read_text()
-    problems = [f"README.md no longer says {s['quote']!r} (setup step {s['step']!r})"
-                for s in entry["silas_steps"] if s["quote"] not in text]
+    problems = [f"README.md no longer says {s['quote']!r} ({s.get('step') or s['what']!r})"
+                for s in entry["silas_steps"] + entry.get("silas_no_step", []) if s["quote"] not in text]
     items = readme_first_run_items(readme)
     if items != entry["readme_first_run_items"]:
         problems.append(f"README.md's First run has {items} items; bench/rivals has {entry['readme_first_run_items']}:"
@@ -263,7 +263,7 @@ def main(argv=None):
     if unknown := gates - set(GATES):
         p.error(f"unknown gate {', '.join(sorted(unknown))}")
     manifest = score.load_manifest(a.manifest)
-    load = lambda f: [json.loads(l) for l in f.read_text().splitlines() if l.strip()]  # noqa: E731
+    load = score.read_rows
     # Every row set must cover the recorded subset exactly, or easy clips alone could pass against the full baseline.
     keep = {l.strip() for l in (ROOT / results["subset"]).read_text().splitlines() if l.strip() and not l.startswith("#")}
     want = {k: v for k, v in manifest.items() if k in keep}

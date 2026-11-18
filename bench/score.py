@@ -21,6 +21,7 @@ Python standard library only.
 """
 
 import argparse
+import gzip
 import html
 import json
 import math
@@ -335,6 +336,13 @@ def median(xs):
 # ---------------------------------------------------------------- scoring
 
 
+def read_rows(path):
+    """The JSON lines of a results file; a .gz one (committed rows are gzipped) is read the same."""
+    path = Path(path)
+    text = gzip.decompress(path.read_bytes()).decode() if path.suffix == ".gz" else path.read_text()
+    return [json.loads(l) for l in text.splitlines() if l.strip()]
+
+
 def load_manifest(path):
     return {c["id"]: c for c in (json.loads(l) for l in Path(path).read_text().splitlines() if l.strip())}
 
@@ -343,12 +351,12 @@ def load_results(paths):
     """{label: [rows]}. The label is "engine model"; a second file with the same label gets its file name."""
     runs = {}
     for p in paths:
-        rows = [json.loads(l) for l in Path(p).read_text().splitlines() if l.strip()]
+        rows = read_rows(p)
         if not rows:
             continue
         label = f"{rows[0]['engine']} {rows[0]['model']}"
         if label in runs:
-            label = f"{label} ({Path(p).stem})"
+            label = f"{label} ({Path(p).name.split('.')[0]})"
         runs[label] = rows
     return runs
 

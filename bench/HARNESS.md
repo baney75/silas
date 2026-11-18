@@ -12,7 +12,8 @@ python3 -I bench/tools/fetch.py        # the audio, into ~/.cache/silas-bench/be
 SET=~/.cache/silas-bench/bench-set-v1
 SUB="--subset bench/subsets/ratchet.txt"  # the 40 ratchet clips; leave it off for all 250
 
-# Silas, through the dictation path, in real time (key down at the start of each clip, key up at its end)
+# Silas, through the dictation path, in real time (key down at the start of each clip, key up at its end).
+# parakeet-v3 is the default model (GGUF on transcribe.cpp); parakeet-v3-onnx is its ONNX fallback.
 (cd core/voice && cargo build --release --features bench --bin silas-bench)
 core/voice/target/release/silas-bench run --manifest bench/manifest.jsonl --set $SET $SUB --model parakeet-v3 --out bench/out/silas.jsonl
 # add --fast to skip the real-time pacing: model time stays real, the waiting is simulated
@@ -112,7 +113,7 @@ text shifts a little with how much silence trails the clip. In real time that ta
 plus a few milliseconds of thread timing, and on abbey1 six of the 40 clips came out a word different between a
 real-time run and a `--fast` run; two `--fast` runs matched on all 40. `--real-time` runs it paced anyway.
 
-The same model gives slightly different text on a different CPU, because onnxruntime picks different kernels.
+The same model gives slightly different text on a different CPU, because the engine picks different kernels.
 On these 40 clips, abbey1 (AMD Ryzen 5 3600), an Intel Xeon 6975P-C runner and an AMD EPYC 7763 runner each gave
 different text on up to 10 clips, by a word or a comma; clean WER is 2.2% on both AMD machines and 1.1% on the
 Intel one. GitHub's runners are not all one CPU, so `ratchet.json` keeps baselines in groups, one per CPU model:

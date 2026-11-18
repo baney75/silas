@@ -6,18 +6,23 @@
   python3 -I bench/ratchet.py --results x.jsonl   compare existing results instead of running
   python3 -I bench/ratchet.py --update        rewrite the baseline, only if every metric is equal or better
   python3 -I bench/ratchet.py --baseline ci   compare against the numbers recorded on GitHub's runner (CI does)
+  python3 -I bench/ratchet.py --update --allow-worse "why"   record a reviewed loss (an engine switch) anyway
 
 The ratchet runs --fast by default because it repeats word for word: the model's text depends a little on how
 much silence trails the clip, and in real time that tail varies by a few milliseconds of thread timing, enough
 to change a word on a handful of clips between two runs. --fast pads exactly the app's 200 ms tail every time.
 
-The same model gives slightly different text on a different CPU (onnxruntime picks different kernels): 10 of
+The same model gives slightly different text on a different CPU (the engine picks different kernels): 10 of
 the 40 clips differed by a word or a comma between abbey1's Ryzen and an Intel runner, enough to move a category
 by a few points, and GitHub's runners are not all one CPU. So ratchet.json keeps baselines in groups, "local"
 (abbey1) and "ci" (GitHub's ubuntu-latest runners), one per CPU model. A run compares with the baseline for its own
 CPU. On a CPU not yet recorded it passes if it is within the limits of any recorded one, and says so; --update
 then records that CPU. A new CPU whose text differs enough to fail is seeded with --new-cpu, from a run of code that
 already passed on another CPU. Pass --cpu with --results to name the CPU they came from.
+
+--allow-worse REASON, with --update, records a run that fails, for a change reviewed as a trade (a new engine that
+is far better on accents and worse on code). It writes the reason into the baseline and drops the group's other
+CPUs, whose numbers came from before the trade; each of them reseeds with --update on its next passing run.
 
 Fails (exit 1) when any category's WER or the formatted error rises more than 0.5 points absolute, the median
 t_final_ms rises more than 15%, or peak memory rises more than 10%. Latency is compared only between runs with
@@ -144,7 +149,11 @@ def main(argv=None):
     p.add_argument("--cpu", help="the CPU the --results came from (default: this machine's when it runs Silas)")
     p.add_argument("--new-cpu", action="store_true",
                    help="record a first baseline for this CPU without comparing; only for a run of code that passed on another CPU")
+    p.add_argument("--allow-worse", metavar="REASON",
+                   help="with --update: record this run even where it is worse, for a reviewed trade; drops the group's other CPUs")
     a = p.parse_args(argv)
+    if a.allow_worse is not None and (not a.update or not a.allow_worse.strip()):
+        p.error("--allow-worse needs --update and a reason")
 
     cfg = json.loads(a.ratchet.read_text())
     manifest = score.load_manifest(ROOT / cfg["manifest"])
@@ -158,7 +167,7 @@ def main(argv=None):
         results = HERE / "out" / "ratchet-silas.jsonl"
         results.parent.mkdir(exist_ok=True)
         run_silas(cfg, binary, not a.real_time, results)
-    rows = [json.loads(l) for l in results.read_text().splitlines() if l.strip()]
+    rows = score.read_rows(results)
     gaps = incomplete(rows, manifest)
     for g in gaps:
         print("INCOMPLETE", g)
@@ -170,6 +179,8 @@ def main(argv=None):
     base = group.get(key)
     candidates = {key: base} if base is not None else group
 
+    if a.allow_worse and not cpu:
+        p.error("--allow-worse records one CPU's baseline: name it with --cpu")
     print(json.dumps({**new, "cpu": cpu}, indent=2))
     if a.new_cpu:
         if base is not None or not cpu:
@@ -200,6 +211,15 @@ def main(argv=None):
             print(f"latency not compared: the ratchet holds {candidates[nearest].get('timing')} timing, this run is {new['timing']}")
     for b in bad:
         print("REGRESSION", b)
+    if a.allow_worse:
+        dropped = sorted(k for k in group if k != key)
+        cfg.setdefault("baselines", {})[a.baseline] = {
+            key: {**new, "updated": date.today().isoformat(), "accepted": a.allow_worse.strip()}}
+        a.ratchet.write_text(json.dumps(cfg, indent=2) + "\n")
+        print(f"recorded {key} in {a.baseline!r} with {len(bad)} accepted regression(s): {a.allow_worse.strip()}")
+        if dropped:
+            print(f"dropped {', '.join(dropped)}: recorded before this trade; each reseeds with --update on its next passing run")
+        return 0
     if bad:
         return 1
     print("ratchet passes")

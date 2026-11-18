@@ -1,0 +1,7 @@
+# ggml tunes itself to the build machine by default (GGML_NATIVE=ON on Linux and Windows), so a release
+# built on a CI runner could crash with an illegal instruction on an older CPU. GGML_NATIVE=OFF builds
+# the x86-64 AVX2 + FMA + F16C floor instead (Haswell, 2013, and later); models.rs checks for it before
+# loading a GGUF model and keeps the ONNX fallback for CPUs without it. macOS already builds a portable
+# floor (transcribe-cpp-sys's build.rs). An environment variable of the same name wins over this one.
+[env]
+TRANSCRIBE_CMAKE_ARGS = "-DGGML_NATIVE=OFF"

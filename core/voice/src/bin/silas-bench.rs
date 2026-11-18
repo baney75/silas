@@ -9,10 +9,10 @@
 //! src-tauri so it builds without a UI toolkit.
 //!
 //! Candidate models the app does not ship run through the same path with a prefixed --model:
-//! `gguf:<file.gguf>` loads a GGUF through transcribe.cpp on the CPU (build with `--features gguf`),
+//! `gguf:<file.gguf>` loads any GGUF through transcribe.cpp on the CPU (the engine the app runs Parakeet v3 on),
 //! `whisper-server:<url>` posts each piece to a running whisper.cpp server, `parakeet-onnx:<dir>` loads a
 //! full-precision Parakeet ONNX export through the app's transcribe-rs engine. `--threads` sets
-//! transcribe.cpp's threads (default 3), and `--usage-pid` adds a server process's CPU and memory to
+//! transcribe.cpp's threads, for parakeet-v3 too (default: the app's, one per physical core up to 8), and `--usage-pid` adds a server process's CPU and memory to
 //! each row.
 //!
 //!        silas-bench type --results <results.jsonl> --out <typing.jsonl> [--speed <setting>]
@@ -35,7 +35,7 @@ struct RunArgs {
     fast: bool,
     dict: Option<PathBuf>,
     keep_fillers: bool,
-    threads: i32,
+    threads: Option<i32>,
     usage_pid: Option<u32>,
 }
 
@@ -43,7 +43,7 @@ fn run_args(args: &[String]) -> anyhow::Result<RunArgs> {
     let mut it = args.iter();
     let (mut manifest, mut set, mut subset, mut model, mut out, mut dict) = (None, None, None, None, None, None);
     let (mut fast, mut keep_fillers) = (false, false);
-    let (mut threads, mut usage_pid) = (3, None);
+    let (mut threads, mut usage_pid) = (None, None);
     while let Some(a) = it.next() {
         let mut value = || it.next().cloned().ok_or_else(|| anyhow::anyhow!("{a} needs a value"));
         match a.as_str() {
@@ -55,7 +55,7 @@ fn run_args(args: &[String]) -> anyhow::Result<RunArgs> {
             "--dict" => dict = Some(PathBuf::from(value()?)),
             "--fast" => fast = true,
             "--keep-fillers" => keep_fillers = true,
-            "--threads" => threads = value()?.parse()?,
+            "--threads" => threads = Some(value()?.parse()?),
             "--usage-pid" => usage_pid = Some(value()?.parse()?),
             other => anyhow::bail!("unknown option {other}"),
         }
@@ -99,7 +99,6 @@ fn parakeet_onnx(dir: &str) -> anyhow::Result<polycarp_voice::replay::Model> {
     }))
 }
 
-#[cfg(feature = "gguf")]
 fn gguf(path: &str, threads: i32) -> anyhow::Result<polycarp_voice::replay::Model> {
     use transcribe_cpp::{Backend, Model, ModelOptions, RunOptions, SessionOptions};
     let model = Model::load_with(path, &ModelOptions { backend: Backend::Cpu, ..Default::default() })?;
@@ -110,11 +109,6 @@ fn gguf(path: &str, threads: i32) -> anyhow::Result<polycarp_voice::replay::Mode
     let options = RunOptions { language, ..Default::default() };
     eprintln!("{path}: {} {} on {}", model.arch(), model.variant(), model.backend());
     Ok(Box::new(move |s: &[f32]| Ok(session.run(s, &options)?.text.trim().to_string())))
-}
-
-#[cfg(not(feature = "gguf"))]
-fn gguf(_: &str, _: i32) -> anyhow::Result<polycarp_voice::replay::Model> {
-    anyhow::bail!("gguf: models need silas-bench built with --features gguf")
 }
 
 /// whisper.cpp's server, as bench/engines/whisper_cpp.py runs it: one /inference call per piece.
@@ -200,8 +194,12 @@ fn run(args: &[String]) -> anyhow::Result<()> {
         .or_else(|| dirs::cache_dir().map(|d| d.join("silas-bench/silas-data")))
         .ok_or_else(|| anyhow::anyhow!("set SILAS_BENCH_DATA"))?;
     store::set_data_dir(Some(data));
+    if models::move_legacy_parakeet()? {
+        eprintln!("moved the old ONNX parakeet-v3 to {}", models::PARAKEET_V3_ONNX);
+    }
     let loading = Instant::now();
-    let outside = candidate(&a.model, a.threads)?;
+    models::set_gguf_threads(a.threads.unwrap_or(0));
+    let outside = candidate(&a.model, models::gguf_threads())?;
     let outside_load = loading.elapsed();
     anyhow::ensure!(outside.is_some() || models::spec(&a.model).is_some(), "unknown model {}", a.model);
     if outside.is_none() && !models::installed(&a.model) {
@@ -275,7 +273,7 @@ fn run(args: &[String]) -> anyhow::Result<()> {
             "energy_j": energy,
             "load_ms": load_ms,
             "load1": load1,
-            "threads": a.threads,
+            "threads": models::gguf_threads(),
             "pieces": d.pieces,
             "paced": !a.fast,
         });
