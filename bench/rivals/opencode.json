@@ -27,7 +27,7 @@
     },
     "silas_typing": {
       "rows": "bench/rivals/opencode-chapel1/silas-typing.jsonl",
-      "how": "xvfb-run -a silas-bench type --results <real-time rows> (typing)"
+      "how": "xvfb-run -a -s \"-screen 0 1280x1024x24 -noreset\" silas-bench type --results <real-time rows> (typing)"
     },
     "rival_service": {
       "rows": "bench/rivals/opencode-chapel1/hex-service.jsonl",
@@ -128,16 +128,16 @@
       "opencode_voice_note": "not measured"
     },
     "typing_ms": {
-      "what": "median time to put each clip's final text into the focused app on X11 (Xvfb). Silas: measured, its typer at the default \"fast\" pace. Hex: modeled from its source, one Ctrl+V after a clipboard write, timed as one key event by the same typer.",
+      "what": "median time to put each clip's final text into the focused app on X11 (Xvfb). Silas: measured, its typer at the default \"fast\" pace. Hex: modeled from its source, one Ctrl+V after a clipboard write, timed as one key event by the typer before XTest (2026-11-18).",
       "better": "lower",
       "gate": "typing",
-      "slack": 90,
+      "slack": 30,
       "tie": 5,
-      "silas": 349.9,
+      "silas": 91.5,
       "rival": 2.0,
       "rival_source": "modeled",
       "winner": "rival",
-      "margin": -347.9,
+      "margin": -89.5,
       "opencode_voice": null,
       "opencode_voice_note": "none: a call never puts text in another app; its delegate sends messages to OpenCode sessions only"
     },
