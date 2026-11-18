@@ -1748,6 +1748,19 @@ mod tests {
         (core, seen, dir)
     }
 
+    /// Waits for the recovery timer to clear an error. A fixed sleep of a few RECOVER_AFTERs failed on a slow
+    /// Windows runner (2026-11-18), so this polls with a deadline far past the timer instead.
+    fn cleared(core: &Shared) -> bool {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if core.status().0 != Status::Error {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
     fn done(dir: std::path::PathBuf) {
         // Let a recovery timer (`RECOVER_AFTER`, short in tests) finish inside this folder.
         std::thread::sleep(Duration::from_millis(250));
@@ -1828,8 +1841,7 @@ mod tests {
         assert_eq!(events, vec!["notice", "status"]);
         assert_eq!(seen.notices(), vec![("error".to_string(), "Microphone: unplugged".to_string())]);
         assert_eq!(core.status(), (Status::Error, Some("Microphone: unplugged".into())));
-        std::thread::sleep(RECOVER_AFTER * 4);
-        assert_ne!(core.status().0, Status::Error, "the error clears on its own");
+        assert!(cleared(&core), "the error clears on its own");
         done(dir);
     }
 
@@ -1872,8 +1884,7 @@ mod tests {
         assert_eq!(core.status(), (Status::Error, Some(crash_message("Polycarp"))));
         assert!(!core.typing.load(Ordering::Relaxed), "the next keys are the user's again");
         assert_eq!(seen.notices()[0].0, "error");
-        std::thread::sleep(RECOVER_AFTER * 4);
-        assert_ne!(core.status().0, Status::Error, "and it recovers");
+        assert!(cleared(&core), "and it recovers");
         // From the key handler too: the key machine starts over.
         core.machine.lock().toggle_from_ui();
         core.survive(true, || panic!("in on_key"));
