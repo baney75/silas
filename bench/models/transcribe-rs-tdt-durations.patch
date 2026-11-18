@@ -1,0 +1,32 @@
+--- a/src/onnx/parakeet/mod.rs
++++ b/src/onnx/parakeet/mod.rs
+@@ -352,6 +352,17 @@
+             } else {
+                 vocab_logits_slice
+             };
++            // TDT: the joint's outputs past the vocabulary score how many frames to advance (0..=4).
++            let step = if probs.len() > self.vocab_size {
++                vocab_logits_slice[self.vocab_size..]
++                    .iter()
++                    .enumerate()
++                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
++                    .map(|(i, _)| i)
++                    .unwrap_or(0)
++            } else {
++                0
++            };
+ 
+             let token = vocab_logits
+                 .iter()
+@@ -367,7 +378,10 @@
+                 emitted_tokens += 1;
+             }
+ 
+-            if token == self.blank_idx || emitted_tokens == MAX_TOKENS_PER_STEP {
++            if step > 0 {
++                t += step;
++                emitted_tokens = 0;
++            } else if token == self.blank_idx || emitted_tokens == MAX_TOKENS_PER_STEP {
+                 t += 1;
+                 emitted_tokens = 0;
+             }
