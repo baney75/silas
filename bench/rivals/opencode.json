@@ -1,0 +1,240 @@
+{
+  "rival": "OpenCode",
+  "study": "bench/rivals/opencode.md",
+  "scored": "Hex 3.4.0",
+  "why_scored": "OpenCode's own voice is a GPT-Live call that needs a paid OpenAI API key or a paid OpenCode Console account, and it only steers OpenCode sessions, so it cannot run free or type into another app. Hex (anomalyco/hex) is the OpenCode team's local dictation app; it runs free and headless on Linux, so it is scored in its place, with its default English model.",
+  "engines": {
+    "silas": "Silas, Parakeet v3 (int8 ONNX), through the dictation path (silas-bench run)",
+    "rival": "Hex 3.4.0 release binary, Parakeet Unified English 0.6B Q8_0 GGUF on transcribe.cpp, CPU (bench/engines/hex_engine.py)",
+    "opencode_voice": "OpenCode Desktop voice call: gpt-live-1 over WebRTC, delegating to gpt-6.1-sol (not run: paid key)"
+  },
+  "machine": {
+    "name": "chapel1",
+    "cpu": "Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz",
+    "cores": 8,
+    "gpu": "none used (Hex fell back to its CPU engine; Silas runs on CPU)"
+  },
+  "subset": "bench/subsets/ratchet.txt",
+  "recorded": "2026-11-18",
+  "runs": {
+    "silas_fast": {
+      "rows": "bench/rivals/opencode-chapel1/silas-fast.jsonl",
+      "how": "silas-bench run --fast (accuracy; what CI compares)"
+    },
+    "silas_real_time": {
+      "rows": "bench/rivals/opencode-chapel1/silas-real-time.jsonl",
+      "how": "silas-bench run, paced in real time (times)"
+    },
+    "silas_typing": {
+      "rows": "bench/rivals/opencode-chapel1/silas-typing.jsonl",
+      "how": "xvfb-run -a silas-bench type --results <real-time rows> (typing)"
+    },
+    "rival_service": {
+      "rows": "bench/rivals/opencode-chapel1/hex-service.jsonl",
+      "how": "bench/engines/hex_engine.py: a warm `hex service`, one `hex transcribe` per clip (times and accuracy)"
+    },
+    "rival_one_shot": {
+      "rows": "bench/rivals/opencode-chapel1/hex-one-shot.jsonl",
+      "how": "bench/engines/hex_engine.py --one-shot: no service (accuracy only; Hex keeps its better run per metric)"
+    },
+    "report": "bench/rivals/opencode-chapel1/report.json"
+  },
+  "metrics": {
+    "time_to_first_word_ms": {
+      "what": "median, key down to the first text available. Silas: its first piece or its final text. Hex's file path is batch: clip length plus its wait.",
+      "better": "lower",
+      "gate": "latency",
+      "slack": 300,
+      "tie": 100,
+      "silas": 6643.5,
+      "rival": 6371.0,
+      "rival_source": "measured",
+      "winner": "rival",
+      "margin": -272.5,
+      "opencode_voice": null,
+      "opencode_voice_note": "not measured: needs a paid key. A GPT-Live call streams, but its words go to a voice agent, not to a text field."
+    },
+    "wait_after_key_up_ms": {
+      "what": "median, key up to the final text: the wait users feel",
+      "better": "lower",
+      "gate": "latency",
+      "slack": 130,
+      "tie": 25,
+      "silas": 840.4,
+      "rival": 615.9,
+      "rival_source": "measured",
+      "winner": "rival",
+      "margin": -224.5,
+      "opencode_voice": null,
+      "opencode_voice_note": "not measured: needs a paid key"
+    },
+    "wait_after_key_up_p95_ms": {
+      "what": "95th percentile of the same wait; the long clips",
+      "better": "lower",
+      "gate": "latency",
+      "slack": 170,
+      "tie": 25,
+      "silas": 1132.9,
+      "rival": 1228.7,
+      "rival_source": "measured",
+      "winner": "silas",
+      "margin": 95.8,
+      "opencode_voice": null,
+      "opencode_voice_note": "not measured: needs a paid key"
+    },
+    "wer": {
+      "what": "word error rate on ref_verbatim, pooled over the subset's speech clips (score.py's default normalization)",
+      "better": "lower",
+      "gate": "accuracy",
+      "slack": 0.01,
+      "tie": 0.0,
+      "silas": 0.082162,
+      "rival": 0.052973,
+      "rival_source": "measured",
+      "winner": "rival",
+      "margin": -0.029189,
+      "opencode_voice": null,
+      "opencode_voice_note": "not measured: gpt-live-1 is a paid cloud model with no free tier in the source"
+    },
+    "punctuation_f1": {
+      "what": "F1 of sentence marks (comma, stop, question) on ref_formatted, words aligned (rivals.py)",
+      "better": "higher",
+      "gate": "accuracy",
+      "slack": 0.02,
+      "tie": 0.0,
+      "silas": 0.724638,
+      "rival": 0.69434,
+      "rival_source": "measured",
+      "winner": "silas",
+      "margin": 0.030298,
+      "opencode_voice": null,
+      "opencode_voice_note": "not measured: its text is rewritten by an agent before a session sees it"
+    },
+    "formatted_error": {
+      "what": "token error rate on ref_formatted, case and punctuation counted (score.py)",
+      "better": "lower",
+      "gate": "accuracy",
+      "slack": 0.01,
+      "tie": 0.0,
+      "silas": 0.198113,
+      "rival": 0.180425,
+      "rival_source": "measured",
+      "winner": "rival",
+      "margin": -0.017688,
+      "opencode_voice": null,
+      "opencode_voice_note": "not measured"
+    },
+    "typing_ms": {
+      "what": "median time to put each clip's final text into the focused app on X11 (Xvfb). Silas: measured, its typer at the default \"fast\" pace. Hex: modeled from its source, one Ctrl+V after a clipboard write, timed as one key event by the same typer.",
+      "better": "lower",
+      "gate": "typing",
+      "slack": 90,
+      "tie": 5,
+      "silas": 349.9,
+      "rival": 2.0,
+      "rival_source": "modeled",
+      "winner": "rival",
+      "margin": -347.9,
+      "opencode_voice": null,
+      "opencode_voice_note": "none: a call never puts text in another app; its delegate sends messages to OpenCode sessions only"
+    },
+    "setup_steps": {
+      "what": "user actions on Linux from nothing to the first dictation (setup.steps lists each, with its source)",
+      "better": "lower",
+      "gate": "setup",
+      "slack": 0,
+      "tie": 0,
+      "silas": 1,
+      "rival": 2,
+      "rival_source": "documented",
+      "winner": "silas",
+      "margin": 1,
+      "opencode_voice": 6,
+      "opencode_voice_note": "plus a paid OpenAI or OpenCode Console account"
+    },
+    "peak_rss_mb": {
+      "what": "peak resident memory of the process holding the model",
+      "better": "lower",
+      "gate": "latency",
+      "slack": 120,
+      "tie": 20,
+      "silas": 1212.7,
+      "rival": 2161.9,
+      "rival_source": "measured",
+      "winner": "silas",
+      "margin": 949.2,
+      "opencode_voice": null,
+      "opencode_voice_note": "the model runs on OpenAI's servers"
+    },
+    "cpu_s_per_audio_min": {
+      "what": "CPU seconds per minute of audio, all threads: the battery proxy",
+      "better": "lower",
+      "gate": "latency",
+      "slack": 4,
+      "tie": 1,
+      "silas": 24.25,
+      "rival": 54.92,
+      "rival_source": "measured",
+      "winner": "silas",
+      "margin": 30.67,
+      "opencode_voice": null,
+      "opencode_voice_note": "the model runs on OpenAI's servers"
+    }
+  },
+  "setup": {
+    "readme_first_run_items": 3,
+    "silas_steps": [
+      {
+        "step": "paste the one-line installer into a terminal; it installs Silas and opens it",
+        "quote": "Paste one line into a terminal. It downloads Silas, installs it and opens it."
+      }
+    ],
+    "silas_no_step": [
+      {
+        "what": "the speech model downloads by itself",
+        "quote": "The speech model (478 MB) starts downloading right away."
+      },
+      {
+        "what": "Linux asks for no permission",
+        "quote": "Windows asks for nothing. On Linux the installer"
+      }
+    ],
+    "rival_steps": [
+      {
+        "step": "run Hex's install script",
+        "source": "anomalyco/hex@536cffef8d5e508b92e50a31a562edd43803ab22 docs/linux.md:220"
+      },
+      {
+        "step": "open Hex from the launcher (the script does not open it); the first run downloads the model",
+        "source": "anomalyco/hex@536cffef8d5e508b92e50a31a562edd43803ab22 docs/linux.md:223-225"
+      }
+    ],
+    "rival_steps_note": "On a Wayland desktop without the GlobalShortcuts portal, binding the shortcut in the desktop's own keybindings is one more step (docs/linux.md:530-536).",
+    "opencode_voice_steps": [
+      {
+        "step": "install an OpenCode Desktop build that is not the prod channel",
+        "source": "anomalyco/opencode@1862f2ce5c4ac5ec9b47b4aea85a5412f8e23a19 packages/app/src/voice/composer.tsx:55-56"
+      },
+      {
+        "step": "turn on the Voice calls experiment in the developer Knobs panel (off by default)",
+        "source": "packages/app/src/voice/composer.tsx:31-38, packages/ui/src/motion-tuning.ts:1-4"
+      },
+      {
+        "step": "give the server an OpenAI API key or an OpenCode Console sign-in (both paid; a ChatGPT sign-in is refused)",
+        "source": "packages/core/src/voice.ts:68-76,155-156"
+      },
+      {
+        "step": "open a session",
+        "source": "packages/app/src/voice/composer.tsx:67"
+      },
+      {
+        "step": "click Call",
+        "source": "packages/app/src/voice/composer.tsx:69-79"
+      },
+      {
+        "step": "allow the microphone",
+        "source": "packages/app/src/voice/transport.ts:281-286, packages/desktop/src/main/ipc-handlers/window.ts:23-25"
+      }
+    ]
+  }
+}
