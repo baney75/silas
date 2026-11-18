@@ -6,6 +6,7 @@
 //! one. This writes a run's events at once and waits on the server only when typing ends.
 
 use x11rb::connection::{Connection, RequestConnection};
+use x11rb::protocol::xkb::{self, ConnectionExt as _};
 use x11rb::protocol::xproto::{self, ConnectionExt as _, ModMask};
 use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
@@ -14,16 +15,23 @@ use x11rb::wrapper::ConnectionExt as _;
 const RETURN: u32 = 0xff0d;
 const TAB: u32 = 0xff09;
 
-/// How long the server holds a press of the key just released, in ms. Qt and SDL read a release
-/// followed by a press of the same key with the same timestamp (SDL: under 2 ms apart) as key
-/// autorepeat, and a game can drop the repeat, so the "ee" in "needs" gets 3 ms between its two
-/// presses. Other keys go at once.
-const REPEAT_HOLD_MS: u32 = 3;
+/// How long the server holds a press of the key just released, in ms. Qt's xcb plugin reads a
+/// press of the same keycode within 10 ms of its release as autorepeat, and SDL one within 2 ms; a
+/// game can drop the repeat. 11 ms clears both, so the second "e" in "needs" is a new key. Other
+/// keys go at once.
+const REPEAT_HOLD_MS: u32 = 11;
 
-/// How long the server holds the first press of a keycode just bound to a new keysym, in ms. An
-/// app reads the key in order after the map change, but an input method server that is sent the
-/// raw key looks it up on its own time; enigo gave it the same 12 ms.
+/// How long a keycode's map change waits on an input method, in ms: before the first press of a
+/// keycode just bound, and before a bound keycode is bound again or unbound. An app reads keys in
+/// order with the map changes, but an input method server that is sent the raw key looks it up on
+/// its own time; enigo gave it the same 12 ms.
 const REBIND_HOLD_MS: u32 = 12;
+
+/// The locked modifiers that change which column of a key types: Caps Lock, and Shift Lock
+/// (`caps:shiftlock`). Typing lifts them for the run and locks them again when it ends.
+pub(super) fn level_locks(locked: ModMask) -> ModMask {
+    locked & (ModMask::SHIFT | ModMask::LOCK)
+}
 
 /// The X keysym for a character: Latin-1 keysyms are the code point, the rest are 0x0100_0000 plus it.
 pub(super) fn keysym(c: char) -> u32 {
@@ -35,7 +43,8 @@ pub(super) fn keysym(c: char) -> u32 {
     }
 }
 
-/// The server's keyboard map: `per` keysyms for each keycode from `min`.
+/// The server's keyboard map: `per` keysyms for each keycode from `min`. Under XKB a key's first
+/// four keysyms are group 1 level 1 and 2, then group 2 level 1 and 2.
 pub(super) struct Map {
     pub min: u8,
     pub per: usize,
@@ -43,16 +52,20 @@ pub(super) struct Map {
 }
 
 impl Map {
-    /// The keycode that types `sym`, and whether it needs Shift. A keysym in the first column needs
-    /// no modifier; one in the second needs Shift, which only holds while Caps Lock is off (Shift
-    /// would undo Caps Lock on a letter). Anything else gets a spare keycode of its own.
-    pub fn find(&self, sym: u32, shift_ok: bool) -> Option<(u8, bool)> {
-        let cols: &[usize] = if shift_ok && self.per > 1 { &[0, 1] } else { &[0] };
-        cols.iter().find_map(|&col| {
+    /// The keycode that types `sym` in the active `group` (0 for the first layout), and whether it
+    /// needs Shift. Level 1 needs no modifier and level 2 needs Shift, with no level lock held.
+    /// Groups past the second, and keysyms not in the active group, get a spare keycode of their own.
+    pub fn find(&self, sym: u32, group: u8, shift_ok: bool) -> Option<(u8, bool)> {
+        let first = match group {
+            0 | 1 => usize::from(group) * 2,
+            _ => return None,
+        };
+        let cols = first..first + if shift_ok { 2 } else { 1 };
+        cols.filter(|&col| col < self.per).find_map(|col| {
             self.syms
                 .chunks(self.per)
                 .position(|keys| keys[col] == sym)
-                .map(|i| (self.min + i as u8, col == 1))
+                .map(|i| (self.min + i as u8, col == first + 1))
         })
     }
 
@@ -137,8 +150,10 @@ pub(super) struct Keys {
     root: xproto::Window,
     map: Map,
     shift: Option<u8>,
-    /// Caps Lock was on when typing began, so Shift can't be used to reach a second column.
-    caps: bool,
+    /// The active XKB group: which layout's columns the keys type.
+    group: u8,
+    /// Level locks that were on when typing began, lifted until it ends.
+    locks: ModMask,
     /// Keycodes this run binds, put back to nothing when it ends.
     spares: Spares,
     /// The next press is of a keycode just bound to a new keysym.
@@ -165,28 +180,56 @@ impl Keys {
         // The modifier map's first row is Shift.
         let mods = conn.get_modifier_mapping()?.reply()?;
         let shift = mods.keycodes[..mods.keycodes.len() / 8].iter().copied().find(|&k| k != 0);
-        let caps = conn.query_pointer(root)?.reply()?.mask.contains(ModMask::LOCK);
+        let (group, locks) = if conn.xkb_use_extension(1, 0)?.reply()?.supported {
+            let state = conn.xkb_get_state(xkb::ID::USE_CORE_KBD.into())?.reply()?;
+            (u8::from(state.group), level_locks(state.locked_mods))
+        } else {
+            (0, ModMask::from(0u16))
+        };
         let spares = Spares { free: map.spare(), bound: vec![] };
-        Ok(Self { conn, root, map, shift, caps, spares, rebound: false, last: None })
+        let keys = Self { conn, root, map, shift, group, locks, spares, rebound: false, last: None };
+        // Under Caps Lock a letter's bare key types its capital; with the lock lifted, every key
+        // types the column it is found in. Drop locks it again.
+        keys.lock(ModMask::from(0u16))?;
+        Ok(keys)
+    }
+
+    /// Sets the lifted level locks to `to`: none to lift them, `self.locks` to put them back.
+    fn lock(&self, to: ModMask) -> anyhow::Result<()> {
+        if u16::from(self.locks) != 0 {
+            let none = ModMask::from(0u16);
+            let dev = xkb::ID::USE_CORE_KBD.into();
+            self.conn
+                .xkb_latch_lock_state(dev, self.locks, to, false, xkb::Group::M1, none, false, 0)?
+                .check()?;
+        }
+        Ok(())
+    }
+
+    /// Waits until the server has taken every event, then gives an input method time to look up
+    /// the keys it was sent before a spare keycode they used changes.
+    fn settle(&self) -> anyhow::Result<()> {
+        self.conn.sync()?;
+        std::thread::sleep(std::time::Duration::from_millis(REBIND_HOLD_MS.into()));
+        Ok(())
     }
 
     /// The keycode for `sym` and the Shift key it needs, binding a spare keycode if the map has none.
     fn keycode(&mut self, sym: u32) -> anyhow::Result<(u8, Option<u8>)> {
-        let shift_ok = self.shift.is_some() && !self.caps;
-        if let Some((k, shifted)) = self.map.find(sym, shift_ok) {
+        if let Some((k, shifted)) = self.map.find(sym, self.group, self.shift.is_some()) {
             return Ok((k, if shifted { self.shift } else { None }));
         }
         let k = match self.spares.slot(sym) {
             Some(Slot::Bound(k)) => return Ok((k, None)),
             Some(Slot::Free(k)) => k,
             Some(Slot::Reused(k)) => {
-                // Every key sent with the old keysym reaches its app before the map changes.
-                self.conn.sync()?;
-                self.rebound = true;
+                // Every key sent with the old keysym is looked up before the map changes.
+                self.settle()?;
                 k
             }
             None => anyhow::bail!("the X server has no free keycode to type {sym:#x}"),
         };
+        self.rebound = true;
         // Both columns, or X fills the second with the keysym's other case.
         self.conn.change_keyboard_mapping(1, k, 2, &[sym, sym])?.check()?;
         Ok((k, None))
@@ -234,11 +277,16 @@ impl Keys {
 
 impl Drop for Keys {
     fn drop(&mut self) {
-        // The keys are processed before the map changes back, so they keep their keysyms.
-        let _ = self.conn.sync();
+        // The keys are looked up before the map changes back, so they keep their keysyms.
+        if self.spares.bound.is_empty() {
+            let _ = self.conn.sync();
+        } else {
+            let _ = self.settle();
+        }
         for &(_, k) in &self.spares.bound {
             let _ = self.conn.change_keyboard_mapping(1, k, 2, &[0, 0]);
         }
+        let _ = self.lock(self.locks);
         let _ = self.conn.sync();
     }
 }
@@ -267,16 +315,55 @@ mod tests {
         assert_eq!(keysym('\t'), TAB);
     }
 
+    /// The keys and Shift that type `text` in `group`, or None for a spare keycode.
+    fn keys(m: &Map, group: u8, text: &str) -> Vec<Option<(u8, bool)>> {
+        text.chars().map(|c| m.find(keysym(c), group, true)).collect()
+    }
+
     #[test]
-    fn capitals_and_shifted_symbols_use_shift_unless_caps_lock_is_on() {
+    fn capitals_and_shifted_symbols_use_shift() {
         let m = us();
-        assert_eq!(m.find(0x61, true), Some((38, false)));
-        assert_eq!(m.find(0x41, true), Some((38, true)), "A is Shift+a");
-        assert_eq!(m.find(0x21, true), Some((41, true)), "! is Shift+1");
-        // Under Caps Lock, Shift+a is "a": a capital needs a keycode of its own.
-        assert_eq!(m.find(0x41, false), None);
-        assert_eq!(m.find(0xe9, true), None, "é is not on this layout");
+        assert_eq!(m.find(0x61, 0, true), Some((38, false)));
+        assert_eq!(m.find(0x41, 0, true), Some((38, true)), "A is Shift+a");
+        assert_eq!(m.find(0x21, 0, true), Some((41, true)), "! is Shift+1");
+        // With no Shift key, a capital needs a keycode of its own.
+        assert_eq!(m.find(0x41, 0, false), None);
+        assert_eq!(m.find(0xe9, 0, true), None, "é is not on this layout");
         assert_eq!(m.spare(), vec![42]);
+    }
+
+    #[test]
+    fn caps_lock_is_lifted_so_lowercase_letters_stay_lowercase() {
+        // Under Caps Lock the bare "a" key types "A", so "as" would come out "AS". Caps Lock and
+        // Shift Lock are lifted for the run; Num Lock (Mod2) is left alone.
+        assert_eq!(level_locks(ModMask::LOCK | ModMask::M2), ModMask::LOCK);
+        assert_eq!(level_locks(ModMask::SHIFT | ModMask::LOCK), ModMask::SHIFT | ModMask::LOCK);
+        assert_eq!(level_locks(ModMask::M2), ModMask::from(0u16));
+        // With no lock held, lowercase is bare and a capital is Shift.
+        let m = us();
+        assert_eq!(keys(&m, 0, "as"), vec![Some((38, false)), Some((39, false))]);
+        assert_eq!(keys(&m, 0, "aS!"), vec![Some((38, false)), Some((39, true)), Some((41, true))]);
+    }
+
+    #[test]
+    fn keys_come_from_the_active_layout_group() {
+        // us,ru: a/A and ef/EF on one key, s/S and yeru/YERU on the next, and a space key with one
+        // group, which X repeats into the second group's columns.
+        let m = Map {
+            min: 38,
+            per: 4,
+            syms: vec![0x61, 0x41, 0x6c6, 0x6e6, 0x73, 0x53, 0x6d9, 0x6f9, 0x20, 0, 0x20, 0],
+        };
+        assert_eq!(keys(&m, 0, "aS "), vec![Some((38, false)), Some((39, true)), Some((40, false))]);
+        // With Russian active, the "a" key types "ф": "a" needs a spare keycode.
+        assert_eq!(keys(&m, 1, "aS "), vec![None, None, Some((40, false))]);
+        assert_eq!(m.find(0x6c6, 1, true), Some((38, false)), "ф is the bare key");
+        assert_eq!(m.find(0x6f9, 1, true), Some((39, true)), "Ы is Shift");
+        assert_eq!(m.find(0x6c6, 0, true), None, "ф is not in the US group");
+        // A third or fourth group is not in the core map's first columns.
+        assert_eq!(m.find(0x61, 2, true), None);
+        // A map with one group has no second group's columns.
+        assert_eq!(us().find(0x61, 1, true), None);
     }
 
     #[test]
@@ -292,9 +379,10 @@ mod tests {
 
     #[test]
     fn a_doubled_letter_gets_the_server_to_wait_before_its_second_press() {
-        // "ee": the second press would carry the release's timestamp and read as autorepeat.
+        // "ee": a press within 10 ms of the release reads as autorepeat in Qt (2 ms in SDL).
         let second = strokes(26, None, Some(26));
-        assert_eq!(second[0], Event { keycode: 26, down: true, hold_ms: REPEAT_HOLD_MS });
+        assert_eq!((second[0].keycode, second[0].down), (26, true));
+        assert!(second[0].hold_ms > 10, "held {} ms, inside Qt's window", second[0].hold_ms);
         // A different key goes at once.
         assert_eq!(strokes(27, None, Some(26))[0].hold_ms, 0);
         assert_eq!(strokes(27, None, None)[0].hold_ms, 0);

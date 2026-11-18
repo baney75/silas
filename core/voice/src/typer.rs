@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 pub struct Pace {
     /// Characters sent per key event.
     pub chunk: usize,
-    /// Pause after each event.
+    /// Time from one event's start to the next's start; the event's own cost is spent inside it.
     pub gap: Duration,
 }
 
