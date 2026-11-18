@@ -7,6 +7,11 @@
 //! and simulates the waiting. Models live under $SILAS_BENCH_DATA (default
 //! ~/.cache/silas-bench/silas-data) and are downloaded if missing. Lives here rather than in
 //! src-tauri so it builds without a UI toolkit.
+//!
+//!        silas-bench type --results <results.jsonl> --out <typing.jsonl> [--speed <setting>]
+//! Types each row's `hypothesis` with the app's typer (`typer::type_text`) at a typing-speed setting
+//! (default: the app's default, "fast") and writes how long each took. Run it on a display that
+//! takes synthetic keys (Xvfb on Linux); it types into whatever has focus.
 //! Build: cargo build --release --features bench --bin silas-bench
 
 use std::io::Write;
@@ -170,10 +175,49 @@ fn run(args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Times the typer on each row's text: key events from the first to the last, as a dictation types
+/// them once its text is final.
+fn type_rows(args: &[String]) -> anyhow::Result<()> {
+    let mut it = args.iter();
+    let (mut results, mut out, mut speed) = (None, None, "fast".to_string());
+    while let Some(flag) = it.next() {
+        let mut value = || it.next().cloned().ok_or_else(|| anyhow::anyhow!("{flag} needs a value"));
+        match flag.as_str() {
+            "--results" => results = Some(PathBuf::from(value()?)),
+            "--out" => out = Some(PathBuf::from(value()?)),
+            "--speed" => speed = value()?,
+            other => anyhow::bail!("unknown argument {other}"),
+        }
+    }
+    let results = results.ok_or_else(|| anyhow::anyhow!("--results is required"))?;
+    let out = out.ok_or_else(|| anyhow::anyhow!("--out is required"))?;
+    let pace = polycarp_voice::typer::Pace::from_setting(&speed);
+    let mut f = std::io::BufWriter::new(std::fs::File::create(&out)?);
+    for line in std::fs::read_to_string(&results)?.lines().filter(|l| !l.trim().is_empty()) {
+        let row: serde_json::Value = serde_json::from_str(line)?;
+        let text = row["hypothesis"].as_str().unwrap_or_default();
+        let t = Instant::now();
+        let typed = polycarp_voice::typer::type_text(text, pace, false, &|_| true)?;
+        let ms = t.elapsed().as_secs_f64() * 1000.0;
+        anyhow::ensure!(typed, "the typer stopped early");
+        writeln!(
+            f,
+            "{}",
+            serde_json::json!({"id": row["id"], "chars": text.chars().count(), "type_ms": ms, "speed": speed})
+        )?;
+        println!("{}: {} chars in {ms:.0} ms", row["id"].as_str().unwrap_or("?"), text.chars().count());
+    }
+    f.flush()?;
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("run") => run(&args[2..]),
-        _ => anyhow::bail!("usage: silas-bench run --manifest <file> --model <id> --out <results.jsonl> [options]"),
+        Some("type") => type_rows(&args[2..]),
+        _ => anyhow::bail!(
+            "usage: silas-bench run --manifest <file> --model <id> --out <results.jsonl> [options]\n       silas-bench type --results <results.jsonl> --out <typing.jsonl> [--speed <setting>]"
+        ),
     }
 }

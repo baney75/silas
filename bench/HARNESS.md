@@ -22,6 +22,7 @@ bench/engines/build-whisper-cpp.sh
 uv run bench/engines/whisper_cpp.py --manifest bench/manifest.jsonl --set $SET $SUB --model small.en --out bench/out/whisper-small.en.jsonl
 uv run bench/engines/moonshine.py   --manifest bench/manifest.jsonl --set $SET $SUB --model base --out bench/out/moonshine-base.jsonl
 uv run bench/engines/vosk_engine.py --manifest bench/manifest.jsonl --set $SET $SUB --model small-en-us-0.15 --out bench/out/vosk.jsonl
+uv run bench/engines/hex_engine.py   --manifest bench/manifest.jsonl --set $SET $SUB --model parakeet_unified_en --out bench/out/hex.jsonl
 
 # report: bench/out/report.json and bench/out/report.html
 python3 -I bench/score.py --manifest bench/manifest.jsonl bench/out/*.jsonl
@@ -65,6 +66,11 @@ One row per clip in `results.jsonl`:
 The rival adapters write the same rows. whisper.cpp and Moonshine are batch engines: they see the whole clip
 after key up, so `t_first_ms = t_final_ms` = decode time. Vosk streams, so its adapter feeds 100 ms blocks on a
 simulated clock the way nerd-dictation does and reports when the text was ready.
+Hex (`hex_engine.py`, the OpenCode team's dictation app) runs its pinned release binary through `hex transcribe`
+against a warm `hex service`, so on a CPU it is batch too; `--one-shot` skips the service.
+
+`silas-bench type --results <rows> --out <file>` types each row's final text with the app's typer at the default
+"fast" pace (`--speed` picks another) and writes `type_ms` per clip. It needs a display: `xvfb-run -a` works.
 
 ## Scoring
 
@@ -121,3 +127,12 @@ Intel one. GitHub's runners are not all one CPU, so `ratchet.json` keeps baselin
 One limit remains: under `--fast` the pieces worker still waits on the model's real speed, so on a much slower or
 faster machine a long clip can be cut at different pauses and its text can change by a word or two. Only the one
 longform clip in the ratchet subset is long enough to be cut.
+
+## Rivals
+
+`bench/rivals/<name>.json` puts Silas against one rival metric by metric (time to first word, wait after key up,
+WER, punctuation F1, formatted error, typing time, setup steps, memory, CPU), with who wins and by how much,
+losses included. `bench/rivals/<name>.md` is the study behind it. `bench/rivals.py <name>` fails when Silas's
+margin is worse than recorded by more than the metric's slack; CI runs its accuracy and setup gates on the
+ratchet's own rows, and the latency and typing gates run only on the CPU the file was recorded on. The first
+rival is OpenCode ([opencode.md](rivals/opencode.md)).

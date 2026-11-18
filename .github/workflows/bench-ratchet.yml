@@ -8,6 +8,7 @@ on:
       - core/voice/**
       - bench/**
       - .github/workflows/bench-ratchet.yml
+      - README.md # the setup gate reads it
 permissions:
   contents: read
 concurrency:
@@ -19,8 +20,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { persist-credentials: false }
-      - name: Ratchet and scorer unit tests
-        run: python3 -I bench/test_ratchet.py
+      - name: Ratchet, scorer and rival unit tests
+        run: python3 -I bench/test_ratchet.py && python3 -I bench/test_rivals.py
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           toolchain: stable
@@ -49,6 +50,10 @@ jobs:
         run: cargo build --release --features bench --bin silas-bench
       - name: Ratchet
         run: python3 -I bench/ratchet.py --baseline ci --gate accuracy --bin core/voice/target/release/silas-bench
+      # Fails when Silas falls further behind OpenCode's scored dictation engine (bench/rivals/opencode.json)
+      # on accuracy, or its documented setup grows. Latency and typing are recorded on chapel1 only.
+      - name: Rival, OpenCode
+        run: python3 -I bench/rivals.py opencode --silas bench/out/ratchet-silas.jsonl --gate accuracy,setup
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
