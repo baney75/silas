@@ -70,7 +70,8 @@ Hex (`hex_engine.py`, the OpenCode team's dictation app) runs its pinned release
 against a warm `hex service`, so on a CPU it is batch too; `--one-shot` skips the service.
 
 `silas-bench type --results <rows> --out <file>` types each row's final text with the app's typer at the default
-"fast" pace (`--speed` picks another) and writes `type_ms` per clip. It needs a display: `xvfb-run -a` works.
+"fast" pace (`--speed` picks another) and writes `type_ms` per clip. It needs a display: `xvfb-run -a -s "-screen 0 1280x1024x24 -noreset"` works. Keep `-noreset`: without it
+Xvfb resets whenever the typer's connection closes, and the next row's time includes waiting for it.
 
 ## Scoring
 

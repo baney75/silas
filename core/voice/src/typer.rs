@@ -2,13 +2,13 @@
 //! prompt and the clipboard stays untouched.
 
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy)]
 pub struct Pace {
     /// Characters sent per key event.
     pub chunk: usize,
-    /// Pause after each event.
+    /// Time from one event's start to the next's start; the event's own cost is spent inside it.
     pub gap: Duration,
 }
 
@@ -104,6 +104,36 @@ fn events(text: &str, size: usize, whole: bool) -> Vec<String> {
     }
 }
 
+/// What the typing loop needs from a platform's keyboard.
+trait Keys {
+    /// The tool types a whole string per call, so it gets batches rather than key events.
+    fn whole_runs(&self) -> bool {
+        false
+    }
+    fn text(&mut self, t: &str) -> anyhow::Result<()>;
+    fn enter(&mut self, shift: bool) -> anyhow::Result<()>;
+    /// Whether the last event waited inside itself (an X11 key the app must see apart from the one
+    /// before it), so the gap to the next event runs from when it ended.
+    fn held(&mut self) -> bool {
+        false
+    }
+    /// Waits until the last event has left, so a run counts as typed only once it has.
+    fn finish(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+/// Waits until `due`, then sets the next event `gap` after this one starts. The gap runs from one
+/// event's start to the next, so the time an event takes (a focus check, a round trip, starting a
+/// process) is spent inside it instead of added to it, and events are still never closer than it.
+fn pace(due: &mut Instant, gap: Duration) {
+    let now = Instant::now();
+    if now < *due {
+        sleep(*due - now);
+    }
+    *due = Instant::now() + gap;
+}
+
 /// Types `text`, asking `still_here` before every event whether the keyboard is still on the
 /// target (a check costs well under a tenth of a millisecond). Returns false if it stopped
 /// because focus moved.
@@ -113,35 +143,58 @@ pub fn type_text(
     shift_enter: bool,
     still_here: &dyn Fn(bool) -> bool,
 ) -> anyhow::Result<bool> {
-    let mut k = Keyboard::new()?;
+    type_with(&mut Keyboard::new()?, text, pace, shift_enter, still_here)
+}
+
+fn type_with(
+    k: &mut impl Keys,
+    text: &str,
+    p: Pace,
+    shift_enter: bool,
+    still_here: &dyn Fn(bool) -> bool,
+) -> anyhow::Result<bool> {
+    let mut due = Instant::now();
     // A Tab or Return may move focus to the next field on purpose.
     let mut after_focus_key = false;
     for piece in pieces(text) {
-        if !still_here(after_focus_key) {
-            return Ok(false);
-        }
         match piece {
             Piece::Text(t) => {
-                for c in events(t, pace.chunk, k.whole_runs()) {
+                for c in events(t, p.chunk, k.whole_runs()) {
+                    pace(&mut due, p.gap);
                     if !still_here(after_focus_key) {
                         return Ok(false);
                     }
                     k.text(&c)?;
-                    sleep(pace.gap);
+                    if k.held() {
+                        due = Instant::now() + p.gap;
+                    }
                 }
             }
             Piece::Newline => {
+                pace(&mut due, p.gap);
+                if !still_here(after_focus_key) {
+                    return Ok(false);
+                }
                 after_focus_key = true;
                 k.enter(shift_enter)?;
-                sleep(pace.gap * 4);
+                // Four gaps from when the Return landed, however long sending it took: the app may
+                // be busy with it (a new line, a sent message).
+                due = Instant::now() + p.gap * 4;
             }
             Piece::Tab => {
+                pace(&mut due, p.gap);
+                if !still_here(after_focus_key) {
+                    return Ok(false);
+                }
                 after_focus_key = true;
                 k.text("\t")?;
-                sleep(pace.gap);
+                if k.held() {
+                    due = Instant::now() + p.gap;
+                }
             }
         }
     }
+    k.finish()?;
     Ok(true)
 }
 
@@ -180,11 +233,10 @@ impl Keyboard {
         }
         Ok(())
     }
+}
 
-    fn whole_runs(&self) -> bool {
-        false
-    }
-
+#[cfg(target_os = "macos")]
+impl Keys for Keyboard {
     fn text(&mut self, t: &str) -> anyhow::Result<()> {
         self.post(
             0,
@@ -204,82 +256,145 @@ impl Keyboard {
     }
 }
 
-// --------------------------------------------------------- Windows / Linux
+// ------------------------------------------------------------------ Linux
 
-#[cfg(not(target_os = "macos"))]
-struct Keyboard {
-    enigo: Option<enigo::Enigo>,
-    #[cfg(target_os = "linux")]
-    wayland_tool: Option<&'static str>,
+#[cfg(target_os = "linux")]
+mod x11;
+
+#[cfg(target_os = "linux")]
+enum Keyboard {
+    /// wtype or ydotool, for native Wayland windows, which ignore X11 input.
+    Tool(&'static str),
+    X11(Box<x11::Keys>),
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 impl Keyboard {
     fn new() -> anyhow::Result<Self> {
-        #[cfg(target_os = "linux")]
-        {
-            // Native Wayland windows ignore X11 input, so prefer a Wayland typing tool.
-            if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-                for tool in ["wtype", "ydotool"] {
-                    if which(tool) {
-                        return Ok(Self {
-                            enigo: None,
-                            wayland_tool: Some(tool),
-                        });
-                    }
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            for tool in ["wtype", "ydotool"] {
+                if which(tool) {
+                    return Ok(Self::Tool(tool));
                 }
             }
         }
-        let enigo = enigo::Enigo::new(&enigo::Settings::default())
-            .map_err(|e| anyhow::anyhow!("could not open the keyboard: {e}"))?;
-        Ok(Self {
-            enigo: Some(enigo),
-            #[cfg(target_os = "linux")]
-            wayland_tool: None,
-        })
+        x11::Keys::new()
+            .map(|k| Self::X11(Box::new(k)))
+            .map_err(|e| anyhow::anyhow!("could not open the keyboard: {e}"))
     }
+}
 
-    /// A Wayland tool types a whole run per process; enigo goes key event by key event.
+#[cfg(target_os = "linux")]
+impl Keys for Keyboard {
     fn whole_runs(&self) -> bool {
-        #[cfg(target_os = "linux")]
-        return self.wayland_tool.is_some();
-        #[cfg(not(target_os = "linux"))]
-        false
+        matches!(self, Self::Tool(_))
     }
 
     fn text(&mut self, t: &str) -> anyhow::Result<()> {
-        #[cfg(target_os = "linux")]
-        if let Some(tool) = self.wayland_tool {
-            let mut cmd = std::process::Command::new(tool);
-            match tool {
-                "wtype" => cmd.arg("--").arg(t),
-                _ => cmd.args(["type", "--key-delay", "1", "--"]).arg(t),
-            };
-            return run(tool, &mut cmd);
+        match self {
+            Self::Tool(tool) => {
+                let mut cmd = std::process::Command::new(*tool);
+                match *tool {
+                    "wtype" => cmd.arg("--").arg(t),
+                    _ => cmd.args(ydotool_type(ydotool_holds())).arg("--").arg(t),
+                };
+                run(tool, &mut cmd)
+            }
+            Self::X11(x) => x.text(t),
         }
-        use enigo::Keyboard as _;
-        self.enigo
-            .as_mut()
-            .unwrap()
-            .text(t)
-            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     fn enter(&mut self, shift: bool) -> anyhow::Result<()> {
-        #[cfg(target_os = "linux")]
-        if let Some(tool) = self.wayland_tool {
-            let mut cmd = std::process::Command::new(tool);
-            match (tool, shift) {
-                ("wtype", true) => cmd.args(["-M", "shift", "-k", "Return", "-m", "shift"]),
-                ("wtype", false) => cmd.args(["-k", "Return"]),
-                // ydotool keycodes: 42 = Left Shift, 28 = Enter.
-                (_, true) => cmd.args(["key", "42:1", "28:1", "28:0", "42:0"]),
-                (_, false) => cmd.args(["key", "28:1", "28:0"]),
-            };
-            return run(tool, &mut cmd);
+        match self {
+            Self::Tool(tool) => {
+                let mut cmd = std::process::Command::new(*tool);
+                match (*tool, shift) {
+                    ("wtype", true) => cmd.args(["-M", "shift", "-k", "Return", "-m", "shift"]),
+                    ("wtype", false) => cmd.args(["-k", "Return"]),
+                    // ydotool keycodes: 42 = Left Shift, 28 = Enter.
+                    (_, true) => cmd.args(["key", "42:1", "28:1", "28:0", "42:0"]),
+                    (_, false) => cmd.args(["key", "28:1", "28:0"]),
+                };
+                run(tool, &mut cmd)
+            }
+            Self::X11(x) => x.enter(shift),
         }
+    }
+
+    fn held(&mut self) -> bool {
+        match self {
+            Self::Tool(_) => false,
+            Self::X11(x) => x.held(),
+        }
+    }
+
+    fn finish(&mut self) -> anyhow::Result<()> {
+        match self {
+            Self::Tool(_) => Ok(()),
+            Self::X11(x) => x.finish(),
+        }
+    }
+}
+
+/// `ydotool type`'s options. ydotool 1.0.4 holds each key down 20 ms unless told otherwise, which
+/// kept typing under 50 characters a second; `--key-hold 1` is the 1 ms hold that 1.0.0 and 1.0.1
+/// take from `--key-delay 1`. Those two refuse `--key-hold`, so it goes only where `--help` lists it.
+#[cfg(target_os = "linux")]
+fn ydotool_type(hold: bool) -> Vec<&'static str> {
+    let mut args = vec!["type", "--key-delay", "1"];
+    if hold {
+        args.extend(["--key-hold", "1"]);
+    }
+    args
+}
+
+/// Whether this ydotool takes `--key-hold`, asked once. A failed answer (no daemon yet) is asked
+/// again next time.
+#[cfg(target_os = "linux")]
+fn ydotool_holds() -> bool {
+    static HOLDS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if let Some(&h) = HOLDS.get() {
+        return h;
+    }
+    match std::process::Command::new("ydotool").args(["type", "--help"]).output() {
+        Ok(o) if o.status.success() => *HOLDS.get_or_init(|| {
+            lists_key_hold(&o.stdout) || lists_key_hold(&o.stderr)
+        }),
+        _ => false,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn lists_key_hold(help: &[u8]) -> bool {
+    String::from_utf8_lossy(help).contains("--key-hold")
+}
+
+// --------------------------------------------------------- Windows and the rest
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+struct Keyboard {
+    enigo: enigo::Enigo,
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+impl Keyboard {
+    fn new() -> anyhow::Result<Self> {
+        let enigo = enigo::Enigo::new(&enigo::Settings::default())
+            .map_err(|e| anyhow::anyhow!("could not open the keyboard: {e}"))?;
+        Ok(Self { enigo })
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+impl Keys for Keyboard {
+    fn text(&mut self, t: &str) -> anyhow::Result<()> {
+        use enigo::Keyboard as _;
+        self.enigo.text(t).map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    fn enter(&mut self, shift: bool) -> anyhow::Result<()> {
         use enigo::{Direction, Key, Keyboard as _};
-        let e = self.enigo.as_mut().unwrap();
+        let e = &mut self.enigo;
         let err = |e: enigo::InputError| anyhow::anyhow!("{e}");
         if shift {
             e.key(Key::Shift, Direction::Press).map_err(err)?;
@@ -342,6 +457,117 @@ mod tests {
         for b in &batches {
             assert!(b.chars().filter(|c| !c.is_whitespace()).count() <= WHOLE_BATCH, "{b:?}");
         }
+    }
+
+    /// Records what it was asked to type, taking `cost` for each run of text.
+    #[derive(Default)]
+    struct Fake {
+        log: Vec<String>,
+        starts: Vec<Instant>,
+        cost: Duration,
+        /// How long the `cost` sleeps really took (a loaded CI runner oversleeps a lot).
+        spent: Duration,
+        finished: bool,
+        /// The text event (counted from 0) that waits inside itself, and for how long.
+        hold: Option<(usize, Duration)>,
+        held: bool,
+        /// When each event, Returns included, started and ended.
+        spans: Vec<(Instant, Instant)>,
+    }
+
+    impl Keys for Fake {
+        fn text(&mut self, t: &str) -> anyhow::Result<()> {
+            self.starts.push(Instant::now());
+            self.log.push(t.into());
+            let t0 = Instant::now();
+            sleep(self.cost);
+            self.spent += t0.elapsed();
+            if let Some((_, d)) = self.hold.filter(|&(n, _)| n == self.starts.len() - 1) {
+                sleep(d);
+                self.held = true;
+            }
+            self.spans.push((t0, Instant::now()));
+            Ok(())
+        }
+        fn enter(&mut self, shift: bool) -> anyhow::Result<()> {
+            self.spans.push((Instant::now(), Instant::now()));
+            self.log.push(if shift { "Shift+Return" } else { "Return" }.into());
+            Ok(())
+        }
+        fn held(&mut self) -> bool {
+            std::mem::take(&mut self.held)
+        }
+        fn finish(&mut self) -> anyhow::Result<()> {
+            self.finished = true;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_gap_after_a_key_that_waited_and_after_a_return_runs_from_when_it_ended() {
+        // "Hello\nWorld" at steady, where the second "l" waits 11 ms inside itself, as a doubled
+        // X11 key does. Before, "o" and the Return came right behind it in one burst.
+        let p = Pace::from_setting("steady");
+        let mut k = Fake { hold: Some((3, Duration::from_millis(11))), ..Fake::default() };
+        assert!(type_with(&mut k, "Hello\nWorld", p, false, &|_| true).unwrap());
+        assert_eq!(k.log[3..7], ["l", "o", "Return", "W"]);
+        let s = &k.spans;
+        assert!(s[3].1 - s[3].0 >= Duration::from_millis(11));
+        assert!(s[4].0 - s[3].1 >= p.gap, "o came {:?} after the wait", s[4].0 - s[3].1);
+        assert!(s[5].0 - s[4].0 >= p.gap, "Return came {:?} after o", s[5].0 - s[4].0);
+        assert!(s[6].0 - s[5].1 >= p.gap * 4, "W came {:?} after Return", s[6].0 - s[5].1);
+    }
+
+    const NO_GAP: Pace = Pace { chunk: 1, gap: Duration::ZERO };
+
+    #[test]
+    fn keys_go_out_in_order_and_a_whole_run_is_finished() {
+        let mut k = Fake::default();
+        assert!(type_with(&mut k, "Ab\ncd\te", NO_GAP, true, &|_| true).unwrap());
+        assert_eq!(k.log, ["A", "b", "Shift+Return", "c", "d", "\t", "e"]);
+        assert!(k.finished);
+    }
+
+    #[test]
+    fn typing_stops_at_the_first_event_after_focus_moves() {
+        let mut k = Fake::default();
+        let asked = std::cell::RefCell::new(vec![]);
+        let still_here = |after_focus_key: bool| {
+            asked.borrow_mut().push(after_focus_key);
+            asked.borrow().len() < 5
+        };
+        assert!(!type_with(&mut k, "ab\ncdef", NO_GAP, false, &still_here).unwrap());
+        assert_eq!(k.log, ["a", "b", "Return", "c"], "nothing after the check that said no");
+        assert!(!k.finished);
+        // After a Return only the window is checked, since the Return may move focus on purpose.
+        assert_eq!(*asked.borrow(), [false, false, false, true, true]);
+    }
+
+    #[test]
+    fn the_gap_runs_from_one_event_to_the_next_instead_of_after_each() {
+        // Each event takes at least the gap. Sleeping a gap after each event, as the typer did,
+        // adds 10 more gaps on top of the events' own time; counting the event inside the gap adds
+        // none. The bound is relative to what the events really took, since a loaded macOS runner
+        // stretched a 10 ms sleep to about 31 ms (2026-11-18) and a fixed bound failed there.
+        let gap = Duration::from_millis(10);
+        let mut k = Fake { cost: gap, ..Fake::default() };
+        let t = Instant::now();
+        assert!(type_with(&mut k, "abcdefghij", Pace { chunk: 1, gap }, false, &|_| true).unwrap());
+        let took = t.elapsed();
+        assert!(took < k.spent + gap * 5, "{took:?} for events that took {:?}", k.spent);
+        // Never closer together than the gap.
+        assert!(k.starts.windows(2).all(|w| w[1] - w[0] >= gap), "{:?}", k.starts);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ydotool_gets_a_short_hold_only_when_it_takes_one() {
+        let v104 = b"  -d, --key-delay=N          Delay N milliseconds between keys (the delay between every key down/up pair) (default: 20)\n  -H, --key-hold=N           Hold each key for N milliseconds (the delay between key down and up) (default: 20)\n";
+        let v101 = b"  -d, --key-delay=N          Delay N milliseconds between key events (up/down each)\n  -D, --next-delay=N         Delay N milliseconds between strings\n";
+        assert!(lists_key_hold(v104));
+        assert!(!lists_key_hold(v101));
+        assert_eq!(ydotool_type(true), ["type", "--key-delay", "1", "--key-hold", "1"]);
+        assert_eq!(ydotool_type(false), ["type", "--key-delay", "1"]);
     }
 
     #[cfg(unix)]
