@@ -123,6 +123,22 @@ def timed(rows):
                               for r in rows)
 
 
+POLLED = ("time_to_first_word_ms", "wait_after_key_up_ms", "wait_after_key_up_p95_ms")
+
+
+def polled(rows):
+    """True when a rival's times come in whole steps of one poll interval, whatever the clip length: then they
+    measure how often a CLI polls its service, not how long the engine takes (Hex's `hex transcribe`, ~612 ms)."""
+    times = [r["t_final_ms"] for r in rows if r.get("engine") != "silas" and r.get("t_final_ms")]
+    if len(times) < 10:
+        return False
+    step = min(times)
+    if step < 200:
+        return False
+    on_step = sum(abs(t / step - round(t / step)) < 0.05 for t in times)
+    return on_step >= 0.9 * len(times)
+
+
 def measure(rows, manifest, typing=None):
     """Every metric these rows can give, keyed as in the results file. Times only from timed rows."""
     s = score.summarize(rows, manifest, score.normalize_silas, random.Random(score.SEED))["overall"]
@@ -137,6 +153,8 @@ def measure(rows, manifest, typing=None):
         out["wait_after_key_up_p95_ms"] = round(s["t_final_ms_p95"], 1)
         out["peak_rss_mb"] = round(s["peak_rss_mb"], 1)
         out["cpu_s_per_audio_min"] = round(s["cpu_s_per_audio_min"], 2)
+        if polled(rows):
+            out.update(dict.fromkeys(POLLED))  # unmeasured, not a win or a loss
     if typing:
         out["typing_ms"] = round(median(t["type_ms"] for t in typing), 1)
     return out
@@ -157,7 +175,10 @@ def best(sets, metrics):
     out = {}
     for m in sets:
         for k, v in m.items():
-            if k in out and k in metrics:
+            if v is None:
+                out.setdefault(k, None)
+                continue
+            if out.get(k) is not None and k in metrics:
                 v = min(out[k], v) if metrics[k]["better"] == "lower" else max(out[k], v)
             out[k] = v
     return out
@@ -252,6 +273,9 @@ def main(argv=None):
     if a.record:
         if not (a.silas and a.rival_rows):
             p.error("--record needs --silas and --rival")
+        if gates & {"latency", "typing"} and cpu != results["machine"]["cpu"]:
+            p.error(f"--record of latency or typing needs rows from {results['machine']['cpu']}, where the rival's"
+                    f" times were measured; this is {cpu}. Record --gate accuracy,setup, or re-measure both sides")
         rival = best([measure(load(f), manifest) for f in a.rival_rows], results["metrics"])
         fails = [] if a.allow_worse else check(results, current, gates, cpu, new_rival=rival)
         if fails or problems:
@@ -261,8 +285,9 @@ def main(argv=None):
         for key, m in results["metrics"].items():
             if key not in current or m["gate"] not in gates:
                 continue
-            if m.get("rival_source", "measured") == "measured":
+            if m.get("rival_source", "measured") in ("measured", "unmeasured"):
                 m["rival"] = rival.get(key, m["rival"])
+                m["rival_source"] = "measured" if m["rival"] is not None else "unmeasured"
             m["silas"] = current[key]
             m["winner"] = winner(m["better"], m["silas"], m["rival"], m.get("tie", 0.0)) if m["rival"] is not None else "not scored"
             m["margin"] = round(margin(m["better"], m["silas"], m["rival"]), 6) if m["rival"] is not None else None

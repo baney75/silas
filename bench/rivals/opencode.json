@@ -47,12 +47,13 @@
       "slack": 300,
       "tie": 100,
       "silas": 6643.5,
-      "rival": 6371.0,
-      "rival_source": "measured",
-      "winner": "rival",
-      "margin": -272.5,
+      "rival": null,
+      "rival_source": "unmeasured",
+      "winner": "not scored",
+      "margin": null,
       "opencode_voice": null,
-      "opencode_voice_note": "not measured: needs a paid key. A GPT-Live call streams, but its words go to a voice agent, not to a text field."
+      "opencode_voice_note": "not measured: needs a paid key. A GPT-Live call streams, but its words go to a voice agent, not to a text field.",
+      "note": "Hex's service-mode times come in whole ~612 ms steps (the hex transcribe CLI's poll interval), so they don't measure decoding. Unmeasured until Hex is timed through its local API."
     },
     "wait_after_key_up_ms": {
       "what": "median, key up to the final text: the wait users feel",
@@ -61,12 +62,13 @@
       "slack": 130,
       "tie": 25,
       "silas": 840.4,
-      "rival": 615.9,
-      "rival_source": "measured",
-      "winner": "rival",
-      "margin": -224.5,
+      "rival": null,
+      "rival_source": "unmeasured",
+      "winner": "not scored",
+      "margin": null,
       "opencode_voice": null,
-      "opencode_voice_note": "not measured: needs a paid key"
+      "opencode_voice_note": "not measured: needs a paid key",
+      "note": "Hex's service-mode times come in whole ~612 ms steps (the hex transcribe CLI's poll interval), so they don't measure decoding. Unmeasured until Hex is timed through its local API."
     },
     "wait_after_key_up_p95_ms": {
       "what": "95th percentile of the same wait; the long clips",
@@ -75,12 +77,13 @@
       "slack": 170,
       "tie": 25,
       "silas": 1132.9,
-      "rival": 1228.7,
-      "rival_source": "measured",
-      "winner": "silas",
-      "margin": 95.8,
+      "rival": null,
+      "rival_source": "unmeasured",
+      "winner": "not scored",
+      "margin": null,
       "opencode_voice": null,
-      "opencode_voice_note": "not measured: needs a paid key"
+      "opencode_voice_note": "not measured: needs a paid key",
+      "note": "Hex's service-mode times come in whole ~612 ms steps (the hex transcribe CLI's poll interval), so they don't measure decoding. Unmeasured until Hex is timed through its local API."
     },
     "wer": {
       "what": "word error rate on ref_verbatim, pooled over the subset's speech clips (score.py's default normalization)",

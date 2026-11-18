@@ -75,7 +75,7 @@ class Check(unittest.TestCase):
 
     def test_latency_is_compared_on_the_recorded_cpu_only(self):
         now = recorded()
-        now["wait_after_key_up_ms"] += 10_000
+        now["peak_rss_mb"] += 10_000
         self.assertEqual(len(quiet(rivals.check, RESULTS, now, {"latency"}, CPU)), 1)
         self.assertEqual(quiet(rivals.check, RESULTS, now, {"latency"}, "another CPU"), [])
 
@@ -95,6 +95,17 @@ class Check(unittest.TestCase):
         self.assertEqual(quiet(rivals.check, RESULTS, recorded(), {"accuracy"}, CPU), [])
         fails = quiet(rivals.check, RESULTS, recorded(), {"accuracy"}, CPU, new_rival=better_rival)
         self.assertTrue(any("wer" in f for f in fails))
+
+    def test_cli_polled_rival_times_are_unmeasured(self):
+        load = lambda f: [json.loads(l) for l in (ROWS / f).read_text().splitlines() if l.strip()]  # noqa: E731
+        self.assertTrue(rivals.polled(load("hex-service.jsonl")))
+        self.assertFalse(rivals.polled(load("silas-real-time.jsonl")))
+        for k in rivals.POLLED:
+            self.assertIsNone(RESULTS["metrics"][k]["rival"], k)
+            self.assertEqual(RESULTS["metrics"][k]["winner"], "not scored", k)
+
+    def test_the_workflow_runs_when_the_readme_changes(self):
+        self.assertIn("- README.md", (ROOT / ".github/workflows/bench-ratchet.yml").read_text())
 
     def test_a_metric_outside_the_gates_is_not_checked(self):
         now = recorded()
@@ -136,8 +147,9 @@ class EndToEnd(unittest.TestCase):
         code, out = self.run_check("--silas", str(ROWS / "silas-fast.jsonl"), "--silas", str(ROWS / "silas-real-time.jsonl"),
                                    "--typing", str(ROWS / "silas-typing.jsonl"), "--cpu", CPU)
         self.assertEqual(code, 0, out)
-        for key in RESULTS["metrics"]:
-            self.assertIn(f"ok   {key}:", out)
+        for key, m in RESULTS["metrics"].items():
+            if m["rival"] is not None:
+                self.assertIn(f"ok   {key}:", out)
 
     def test_worse_silas_text_fails_the_accuracy_gate(self):
         rows = [json.loads(l) for l in (ROWS / "silas-fast.jsonl").read_text().splitlines() if l.strip()]

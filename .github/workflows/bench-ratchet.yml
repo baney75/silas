@@ -8,6 +8,7 @@ on:
       - core/voice/**
       - bench/**
       - .github/workflows/bench-ratchet.yml
+      - README.md # the setup gate reads it
 permissions:
   contents: read
 concurrency:

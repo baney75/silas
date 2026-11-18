@@ -12,10 +12,11 @@ The numbers are in [opencode.json](opencode.json). `bench/rivals.py` checks them
 
 OpenCode's own voice is not dictation. It is a paid cloud voice call that steers OpenCode sessions, and it can't run free. So the bench scores Hex, the OpenCode team's free local dictation app, on the same 40 clips and the same machine as Silas.
 
-Against Hex, Silas wins on 5 of 10 metrics and loses on 5:
+Against Hex, Silas wins 4 of the 7 metrics scored and loses 3:
 
-- Silas wins: punctuation, p95 wait after key up, setup steps, memory and CPU.
-- Hex wins: word accuracy (mostly on accented speech), formatted error, median wait after key up, time to first word, and typing time.
+- Silas wins: punctuation, setup steps, memory and CPU.
+- Hex wins: word accuracy (mostly on accented speech), formatted error, and typing time.
+- Not scored: time to first word and both waits after key up. Hex's times through `hex transcribe` come in whole steps of about 612 ms whatever the clip length (a 3.1 s clip and a 4.4 s clip both took 615 ms, a 122 s clip about 30 steps), so they measure the CLI's polling, not Hex's decoding. They stay unmeasured until Hex is timed through its local API.
 
 The typing loss is the largest: Silas types its text key by key at about 108 characters a second, while Hex pastes it in one step.
 
