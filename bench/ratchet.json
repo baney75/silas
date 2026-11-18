@@ -38,6 +38,21 @@
         "timing": "fast",
         "updated": "2026-11-18",
         "accepted": "transcribe.cpp Parakeet v3 Q4_K_M (#46, #47): accent WER far lower; code WER 21.1 to 29.8 on this subset is the reviewed cost (trailing periods on shell commands; spoken-code formatting follow-up)"
+      },
+      "AMD EPYC 9V45 96-Core Processor": {
+        "wer": {
+          "accent": 0.106557,
+          "clean": 0.022222,
+          "code": 0.298246,
+          "dictation": 0.064516,
+          "longform": 0.007772,
+          "noise": 0.047945
+        },
+        "formatted_error": 0.173349,
+        "t_final_ms_median": 612.1,
+        "peak_rss_mb": 976.3,
+        "timing": "fast",
+        "updated": "2026-11-18"
       }
     }
   }

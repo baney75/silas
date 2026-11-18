@@ -752,9 +752,17 @@ mod tests {
     fn a_failed_move_never_lets_the_gguf_download_delete_the_onnx_files() {
         let _store = crate::store::TEST_DIR.lock();
         let dir = legacy_onnx_dir("legacy-stuck");
-        // A file where the fallback's folder goes makes the rename fail.
+        // Something where the fallback's folder goes makes the rename fail: a file, or on Windows, which
+        // deletes that file, a folder holding a file opened without delete sharing.
         std::fs::create_dir_all(models_dir()).unwrap();
+        #[cfg(not(windows))]
         std::fs::write(model_path(PARAKEET_V3_ONNX), b"in the way").unwrap();
+        #[cfg(windows)]
+        let _held = {
+            use std::os::windows::fs::OpenOptionsExt;
+            std::fs::create_dir_all(model_path(PARAKEET_V3_ONNX)).unwrap();
+            std::fs::OpenOptions::new().write(true).create(true).share_mode(0).open(model_path(PARAKEET_V3_ONNX).join("held")).unwrap()
+        };
         let err = download("parakeet-v3", &|_, _, _| {}, &|| true).unwrap_err().to_string();
         let kept = models_dir().join("parakeet-v3/encoder-model.int8.onnx").exists();
         crate::store::set_data_dir(None);
