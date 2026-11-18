@@ -5,20 +5,21 @@
   "set": "~/.cache/silas-bench/bench-set-v1",
   "baselines": {
     "local": {
-      "AMD Ryzen 5 3600 6-Core Processor": {
+      "Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz": {
         "wer": {
-          "accent": 0.295082,
+          "accent": 0.106557,
           "clean": 0.022222,
-          "code": 0.210526,
-          "dictation": 0.08871,
-          "longform": 0.012953,
-          "noise": 0.068493
+          "code": 0.298246,
+          "dictation": 0.064516,
+          "longform": 0.007772,
+          "noise": 0.047945
         },
-        "formatted_error": 0.198113,
-        "t_final_ms_median": 974.1,
-        "peak_rss_mb": 1569.9,
+        "formatted_error": 0.174528,
+        "t_final_ms_median": 893.7,
+        "peak_rss_mb": 976.2,
         "timing": "fast",
-        "updated": "2026-11-17"
+        "updated": "2026-11-18",
+        "accepted": "transcribe.cpp Parakeet v3 Q4_K_M (#46): accent WER 29.5 to 10.7 on this subset; code WER 21.1 to 29.8 is the reviewed cost"
       }
     },
     "ci": {

@@ -9,7 +9,7 @@
 //! src-tauri so it builds without a UI toolkit.
 //!
 //! Candidate models the app does not ship run through the same path with a prefixed --model:
-//! `gguf:<file.gguf>` loads a GGUF through transcribe.cpp on the CPU (build with `--features gguf`),
+//! `gguf:<file.gguf>` loads any GGUF through transcribe.cpp on the CPU (the engine the app runs Parakeet v3 on),
 //! `whisper-server:<url>` posts each piece to a running whisper.cpp server, `parakeet-onnx:<dir>` loads a
 //! full-precision Parakeet ONNX export through the app's transcribe-rs engine. `--threads` sets
 //! transcribe.cpp's threads (default 3), and `--usage-pid` adds a server process's CPU and memory to
@@ -99,7 +99,6 @@ fn parakeet_onnx(dir: &str) -> anyhow::Result<polycarp_voice::replay::Model> {
     }))
 }
 
-#[cfg(feature = "gguf")]
 fn gguf(path: &str, threads: i32) -> anyhow::Result<polycarp_voice::replay::Model> {
     use transcribe_cpp::{Backend, Model, ModelOptions, RunOptions, SessionOptions};
     let model = Model::load_with(path, &ModelOptions { backend: Backend::Cpu, ..Default::default() })?;
@@ -110,11 +109,6 @@ fn gguf(path: &str, threads: i32) -> anyhow::Result<polycarp_voice::replay::Mode
     let options = RunOptions { language, ..Default::default() };
     eprintln!("{path}: {} {} on {}", model.arch(), model.variant(), model.backend());
     Ok(Box::new(move |s: &[f32]| Ok(session.run(s, &options)?.text.trim().to_string())))
-}
-
-#[cfg(not(feature = "gguf"))]
-fn gguf(_: &str, _: i32) -> anyhow::Result<polycarp_voice::replay::Model> {
-    anyhow::bail!("gguf: models need silas-bench built with --features gguf")
 }
 
 /// whisper.cpp's server, as bench/engines/whisper_cpp.py runs it: one /inference call per piece.
@@ -200,6 +194,9 @@ fn run(args: &[String]) -> anyhow::Result<()> {
         .or_else(|| dirs::cache_dir().map(|d| d.join("silas-bench/silas-data")))
         .ok_or_else(|| anyhow::anyhow!("set SILAS_BENCH_DATA"))?;
     store::set_data_dir(Some(data));
+    if models::move_legacy_parakeet()? {
+        eprintln!("moved the old ONNX parakeet-v3 to {}", models::PARAKEET_V3_ONNX);
+    }
     let loading = Instant::now();
     let outside = candidate(&a.model, a.threads)?;
     let outside_load = loading.elapsed();

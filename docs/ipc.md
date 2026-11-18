@@ -44,7 +44,7 @@ interface Settings {
 }
 
 interface ModelEntry {
-  id: string;                     // "parakeet-v3" | "cohere-int4" | "moonshine-base"
+  id: string;                     // "parakeet-v3" | "parakeet-v3-onnx" | "cohere-int4"
   name: string;                   // "Parakeet v3"
   tier: "fast" | "balanced" | "best";
   tagline: string;

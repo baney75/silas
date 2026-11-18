@@ -32,8 +32,10 @@ flate2 = "1"
 hound = "3.5"
 chrono = { version = "0.4", features = ["serde"] }
 sysinfo = { version = "0.38", default-features = false, features = ["system"] }
-# Bench only: GGUF candidate models through transcribe.cpp (bench/models). CPU build, no Metal.
-transcribe-cpp = { version = "=0.4.2", default-features = false, optional = true }
+# Parakeet v3 (the default model) runs in process on transcribe.cpp. CPU build on every platform, no
+# Metal: the engine the model study scored (bench/models/accent-2026-11.md). Builds transcribe.cpp and
+# ggml from vendored source, so it needs CMake and a C++ compiler; see .cargo/config.toml for the CPU floor.
+transcribe-cpp = { version = "=0.4.2", default-features = false }
 
 [target.'cfg(not(any(target_os = "macos", target_os = "linux")))'.dependencies]
 enigo = "0.6"
@@ -53,4 +55,9 @@ objc2-foundation = "0.3"
 
 [features]
 bench = []
-gguf = ["bench", "dep:transcribe-cpp"]
+# Kept so older commands still build: GGUF models need no extra feature now.
+gguf = ["bench"]
+
+# The TDT decoder fix for the ONNX fallback (vendor/transcribe-rs/VENDORED.md).
+[patch.crates-io]
+transcribe-rs = { path = "../../vendor/transcribe-rs" }

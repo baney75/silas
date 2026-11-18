@@ -380,6 +380,12 @@ struct Live {
 impl Core {
     pub fn new(host: Arc<dyn Host>) -> Shared {
         let mut settings: Settings = store::load_fields("settings.json");
+        // An older Silas kept Parakeet v3's ONNX files under the id the GGUF build now has. They
+        // move aside as the ONNX fallback, before anything counts or loads models.
+        let moved = models::move_legacy_parakeet().unwrap_or_else(|e| {
+            log::error!("models: could not move the old Parakeet v3 files aside: {e}");
+            false
+        });
         // Settings from before per-device picks have no modelSource. A model other than the
         // default was chosen by the user then, so no benchmark or registry may move them off it.
         if store::exists("settings.json") {
@@ -393,6 +399,18 @@ impl Core {
                 installed,
             );
             store::migrate_hotkey(&mut settings, &store::read_raw("settings.json"));
+        }
+        if moved {
+            // Whoever dictated with those files keeps dictating with them; the model list offers
+            // the GGUF build as the recommended download.
+            let mut report = store::exists(benchmark::REPORT_FILE)
+                .then(|| store::load::<benchmark::Report>(benchmark::REPORT_FILE));
+            models::retarget_legacy_parakeet(&mut settings, report.as_mut());
+            store::save("settings.json", &settings);
+            if let Some(r) = &report {
+                benchmark::save_report(r);
+            }
+            log::info!("models: Parakeet v3's ONNX files are now {}", models::PARAKEET_V3_ONNX);
         }
         // A fresh nightly or dev install stays on its channel instead of jumping to stable.
         if !store::exists("settings.json") {

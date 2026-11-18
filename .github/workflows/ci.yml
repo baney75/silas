@@ -42,6 +42,10 @@ jobs:
       - name: Release channel rules
         if: runner.os == 'Linux'
         run: scripts/check-channels.sh && scripts/check-channels-test.sh && scripts/channel-version-test.sh && scripts/release-draft-test.sh
+      # The default speech engine, transcribe.cpp, builds from source: CMake and a C++ compiler
+      # come with every runner image (Xcode on macOS, Visual Studio on Windows, GCC on Ubuntu).
+      - name: CMake
+        run: cmake --version
       - run: bun install --frozen-lockfile
       - run: bun run build
       - run: bun run check:theme
@@ -57,3 +61,8 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: src-tauri
         run: cargo clippy --lib -- -D warnings
+      # Silas on iOS will link the same engine, so its native build is checked for the iPhone target.
+      - name: Speech engine builds for iOS
+        if: runner.os == 'macOS'
+        working-directory: core/voice
+        run: rustup target add aarch64-apple-ios && cargo build -p transcribe-cpp --target aarch64-apple-ios

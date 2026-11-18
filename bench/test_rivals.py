@@ -15,6 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "bench"))
 import rivals  # noqa: E402
+import score  # noqa: E402
 
 RESULTS = json.loads((ROOT / "bench/rivals/opencode.json").read_text())
 ROWS = ROOT / "bench/rivals/opencode-chapel1"
@@ -97,9 +98,8 @@ class Check(unittest.TestCase):
         self.assertTrue(any("wer" in f for f in fails))
 
     def test_cli_polled_rival_times_are_unmeasured(self):
-        load = lambda f: [json.loads(l) for l in (ROWS / f).read_text().splitlines() if l.strip()]  # noqa: E731
-        self.assertTrue(rivals.polled(load("hex-service.jsonl")))
-        self.assertFalse(rivals.polled(load("silas-real-time.jsonl")))
+        self.assertTrue(rivals.polled(score.read_rows(ROWS / "hex-service.jsonl.gz")))
+        self.assertFalse(rivals.polled(score.read_rows(ROWS / "silas-real-time.jsonl.gz")))
         for k in rivals.POLLED:
             self.assertIsNone(RESULTS["metrics"][k]["rival"], k)
             self.assertEqual(RESULTS["metrics"][k]["winner"], "not scored", k)
@@ -144,23 +144,23 @@ class EndToEnd(unittest.TestCase):
         return code, out.getvalue()
 
     def test_the_committed_rows_reproduce_the_results_file(self):
-        code, out = self.run_check("--silas", str(ROWS / "silas-fast.jsonl"), "--silas", str(ROWS / "silas-real-time.jsonl"),
-                                   "--typing", str(ROWS / "silas-typing.jsonl"), "--cpu", CPU)
+        code, out = self.run_check("--silas", str(ROWS / "silas-fast.jsonl.gz"), "--silas", str(ROWS / "silas-real-time.jsonl.gz"),
+                                   "--typing", str(ROWS / "silas-typing.jsonl.gz"), "--cpu", CPU)
         self.assertEqual(code, 0, out)
         for key, m in RESULTS["metrics"].items():
             if m["rival"] is not None:
                 self.assertIn(f"ok   {key}:", out)
 
     def test_rows_that_skip_clips_fail(self):
-        rows = (ROWS / "silas-fast.jsonl").read_text().splitlines()
+        rows = score.read_rows(ROWS / "silas-fast.jsonl.gz")
         easy = Path(tempfile.mkdtemp()) / "easy.jsonl"
-        easy.write_text("\n".join(l for l in rows if '"clean-' in l) + "\n")
+        easy.write_text("".join(json.dumps(r) + "\n" for r in rows if r["id"].startswith("clean-")))
         code, out = self.run_check("--silas", str(easy), "--gate", "accuracy")
         self.assertEqual(code, 1, out)
         self.assertIn("INCOMPLETE", out)
 
     def test_worse_silas_text_fails_the_accuracy_gate(self):
-        rows = [json.loads(l) for l in (ROWS / "silas-fast.jsonl").read_text().splitlines() if l.strip()]
+        rows = score.read_rows(ROWS / "silas-fast.jsonl.gz")
         for r in rows:
             words = r["hypothesis_raw"].split()
             r["hypothesis_raw"] = r["hypothesis"] = " ".join(words[: len(words) * 3 // 4])

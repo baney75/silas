@@ -49,16 +49,41 @@ pub struct File {
 /// A download that gets no new bytes for this long fails instead of hanging.
 pub const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The default model's one file. `Engine::load` finds the model by this name.
+const PARAKEET_V3_GGUF: &str = "parakeet-tdt-0.6b-v3-Q4_K_M.gguf";
+
+/// The ONNX build of Parakeet v3 that installs before 0.1.7 put under `parakeet-v3`.
+pub const PARAKEET_V3_ONNX: &str = "parakeet-v3-onnx";
+
 pub const MODELS: &[Spec] = &[
     Spec {
         id: "parakeet-v3",
         name: "Parakeet v3",
         tier: "balanced",
         tagline:
-            "Fast and accurate. Transcribes a minute of speech in about 5 seconds on a laptop CPU.",
-        size_mb: 478,
+            "Fast and accurate, and the best of these with accents. Transcribes a minute of speech in about 5 seconds on a laptop CPU.",
+        size_mb: 463,
         languages: "English + 24 European languages",
         recommended: true,
+        // Q4_K_M GGUF on transcribe.cpp: the model study's pick (bench/models/accent-2026-11.md).
+        // Pinned to one revision of the public repo; the hash is the Hub's Git LFS object id, and
+        // bench/models/accent-2026-11.candidates.json records the same one.
+        source: Source::Files {
+            base: "https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/d8d8c32cb2017c57e5307767343e97870f8a7f53",
+            files: &[File {
+                name: PARAKEET_V3_GGUF,
+                sha256: Some("b68557be1e3c40207fd7c4bd9d63f1d3316b963f15325bfb0cc16a8bb0ffd181"),
+            }],
+        },
+    },
+    Spec {
+        id: PARAKEET_V3_ONNX,
+        name: "Parakeet v3 (ONNX)",
+        tier: "balanced",
+        tagline: "The same model on the older engine. Slower to load and less accurate with accents; for computers that can't run Parakeet v3.",
+        size_mb: 478,
+        languages: "English + 24 European languages",
+        recommended: false,
         source: Source::Archive {
             url: "https://github.com/baney75/silas/releases/download/models-v1/parakeet-v3-int8.tar.gz",
             folder: "parakeet-tdt-0.6b-v3-int8",
@@ -115,8 +140,81 @@ pub fn model_path(id: &str) -> PathBuf {
     models_dir().join(id)
 }
 
+/// Downloaded and checked. A model of loose files also needs each file in place, so the ONNX files an
+/// older Silas left under `parakeet-v3` never count as the GGUF model.
 pub fn installed(id: &str) -> bool {
-    model_path(id).join(".complete").exists()
+    let dir = model_path(id);
+    dir.join(".complete").exists()
+        && match spec(id).map(|m| &m.source) {
+            Some(Source::Files { files, .. }) => files.iter().all(|f| dir.join(f.name).exists()),
+            _ => true,
+        }
+}
+
+/// Whether this computer can run the model. The GGUF engine is built for a CPU floor
+/// (`.cargo/config.toml`): on x86 that is AVX2, FMA and F16C (macOS x86: AVX and F16C). Loading it
+/// anywhere below that would crash on an illegal instruction instead of failing.
+pub fn runs_here(id: &str) -> bool {
+    id != "parakeet-v3" || cpu_runs_gguf()
+}
+
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_os = "macos"))]
+fn cpu_runs_gguf() -> bool {
+    is_x86_feature_detected!("sse4.2") && is_x86_feature_detected!("avx") && is_x86_feature_detected!("f16c")
+}
+
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), not(target_os = "macos")))]
+fn cpu_runs_gguf() -> bool {
+    ["sse4.2", "avx", "avx2", "fma", "f16c", "bmi2"].iter().all(|f| match *f {
+        "sse4.2" => is_x86_feature_detected!("sse4.2"),
+        "avx" => is_x86_feature_detected!("avx"),
+        "avx2" => is_x86_feature_detected!("avx2"),
+        "fma" => is_x86_feature_detected!("fma"),
+        "f16c" => is_x86_feature_detected!("f16c"),
+        _ => is_x86_feature_detected!("bmi2"),
+    })
+}
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+fn cpu_runs_gguf() -> bool {
+    true
+}
+
+/// Silas before 0.1.7 kept Parakeet v3's ONNX files under `parakeet-v3`, the id that now names the
+/// GGUF model. Move them to `parakeet-v3-onnx` so they keep working as the fallback. A rename on the
+/// same disk: nothing is downloaded or deleted. True when it moved them. Run before any model loads.
+pub fn move_legacy_parakeet() -> anyhow::Result<bool> {
+    let old = model_path("parakeet-v3");
+    let onnx = model_path(PARAKEET_V3_ONNX);
+    if !old.join(".complete").exists() || old.join(PARAKEET_V3_GGUF).exists() {
+        return Ok(false);
+    }
+    if onnx.join(".complete").exists() {
+        // Both copies are here (a crash between steps, or a hand copy): keep the one in place.
+        fs::remove_dir_all(&old)?;
+        return Ok(false);
+    }
+    let _ = fs::remove_dir_all(&onnx);
+    fs::rename(&old, &onnx)?;
+    Ok(true)
+}
+
+/// After `move_legacy_parakeet`: settings and this computer's benchmark report that said
+/// `parakeet-v3` meant the ONNX files, so they now say `parakeet-v3-onnx`. Who chose the model stays
+/// as it was. The report's pick is dropped rather than moved: it was made before the GGUF build
+/// existed, and kept it would mark the ONNX build "best for this computer" over it.
+pub fn retarget_legacy_parakeet(settings: &mut crate::store::Settings, report: Option<&mut benchmark::Report>) {
+    if settings.model == "parakeet-v3" {
+        settings.model = PARAKEET_V3_ONNX.into();
+    }
+    if let Some(r) = report {
+        for x in r.results.iter_mut().filter(|x| x.model == "parakeet-v3") {
+            x.model = PARAKEET_V3_ONNX.into();
+        }
+        if r.pick.as_deref() == Some("parakeet-v3") {
+            r.pick = None;
+        }
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -152,11 +250,20 @@ pub fn list(active: Option<&str>) -> Vec<ModelEntry> {
             installed: installed(m.id),
             active: active == Some(m.id) && installed(m.id),
             // Recommend what is known to suit this computer; the static flag otherwise.
-            recommended: best.as_deref().map_or(m.recommended, |b| b == m.id),
+            recommended: runs_here(m.id) && best.as_deref().map_or(recommended(m), |b| b == m.id),
             device_result: report.as_ref().and_then(|r| r.results.iter().find(|x| x.model == m.id).cloned()),
             best_for_device: best.as_deref() == Some(m.id),
         })
         .collect()
+}
+
+/// The static recommendation: Parakeet v3, or its ONNX build on a CPU the GGUF engine can't run on.
+fn recommended(m: &Spec) -> bool {
+    if m.id == PARAKEET_V3_ONNX {
+        !runs_here("parakeet-v3")
+    } else {
+        m.recommended
+    }
 }
 
 /// Download a model into place. `progress(downloaded, total, stage)` is called often;
@@ -365,16 +472,39 @@ pub fn remove(id: &str) -> anyhow::Result<()> {
 }
 
 pub enum Engine {
+    Gguf(transcribe_cpp::Session),
     Parakeet(ParakeetModel),
     Cohere(CohereModel),
+}
+
+/// CPU threads for the GGUF engine: one per physical core this process may run on, at most 8.
+/// ggml's own default counts hyperthreads, and two threads on one core only slow it down; the
+/// smaller of the two counts respects a CPU affinity (taskset, a container's cpuset).
+pub fn gguf_threads() -> i32 {
+    let allowed = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let cores = sysinfo::System::physical_core_count().unwrap_or(allowed);
+    allowed.min(cores).clamp(1, 8) as i32
 }
 
 impl Engine {
     pub fn load(id: &str) -> anyhow::Result<Self> {
         let dir = model_path(id);
         anyhow::ensure!(installed(id), "model {id} is not installed");
+        anyhow::ensure!(
+            runs_here(id),
+            "this computer's processor can't run it (it needs AVX2). Choose Parakeet v3 (ONNX) instead."
+        );
         Ok(match id {
-            "parakeet-v3" => Engine::Parakeet(ParakeetModel::load(&dir, &Quantization::Int8)?),
+            "parakeet-v3" => {
+                use transcribe_cpp::{Backend, Model, ModelOptions, SessionOptions};
+                static LOGGING: std::sync::Once = std::sync::Once::new();
+                LOGGING.call_once(transcribe_cpp::init_logging);
+                let options = ModelOptions { backend: Backend::Cpu, ..Default::default() };
+                let model = Model::load_with(dir.join(PARAKEET_V3_GGUF), &options)?;
+                // The session keeps the model alive.
+                Engine::Gguf(model.session_with(&SessionOptions { n_threads: gguf_threads(), ..Default::default() })?)
+            }
+            PARAKEET_V3_ONNX => Engine::Parakeet(ParakeetModel::load(&dir, &Quantization::Int8)?),
             "cohere-int4" => Engine::Cohere(CohereModel::load(&dir, &Quantization::Int4)?),
             other => anyhow::bail!("unknown model {other}"),
         })
@@ -382,6 +512,8 @@ impl Engine {
 
     pub fn transcribe(&mut self, samples: &[f32], language: &str) -> anyhow::Result<String> {
         let text = match self {
+            // Parakeet v3 finds the language itself; transcribe.cpp takes none for it.
+            Engine::Gguf(s) => s.run(samples, &transcribe_cpp::RunOptions::default())?.text,
             Engine::Parakeet(m) => m.transcribe_with(samples, &ParakeetParams::default())?.text,
             Engine::Cohere(m) => {
                 let lang = if language.is_empty() || language == "auto" {
@@ -439,6 +571,136 @@ mod tests {
         assert_eq!(*capped(never, limit).after, limit, "ureq waits forever by default: the bug");
         assert_eq!(*capped(long, limit).after, limit);
         assert_eq!(capped(short, limit), short, "a shorter wait ureq asked for stands");
+    }
+
+    #[test]
+    fn the_onnx_fallback_honors_tdt_durations() {
+        // Needs the vendored transcribe-rs (vendor/transcribe-rs/VENDORED.md): the crates.io release
+        // has no TdtCursor, and its decoder emits a word once per frame the model meant to skip.
+        use transcribe_rs::onnx::parakeet::TdtCursor;
+        let (vocab, blank) = (4, 3);
+        // One word spanning 4 frames, then silence: token 1 with duration 4, then blanks.
+        let joint = |t: usize| {
+            let mut v = vec![0.0f32; vocab + 5];
+            if t < 4 {
+                v[1] = 1.0;
+                v[vocab + 4] = 1.0;
+            } else {
+                v[blank as usize] = 1.0;
+                v[vocab + 1] = 1.0;
+            }
+            v
+        };
+        let mut cursor = TdtCursor::default();
+        let mut words = vec![];
+        while cursor.t < 8 {
+            let t = cursor.t;
+            words.extend(cursor.step(&joint(t), vocab, blank).map(|w| (t, w)));
+        }
+        assert_eq!(words, vec![(0, 1)], "the stock decoder emits it 10 times on each of 4 frames");
+    }
+
+    #[test]
+    fn the_default_model_is_the_build_the_study_scored() {
+        let study: serde_json::Value = serde_json::from_str(include_str!("../../../bench/models/accent-2026-11.candidates.json")).unwrap();
+        let pick = study["candidates"].as_array().unwrap().iter().find(|c| c["id"] == "parakeet-v3-q4km-gguf").unwrap();
+        let m = spec("parakeet-v3").unwrap();
+        assert!(m.recommended);
+        let Source::Files { base, files } = &m.source else { panic!("parakeet-v3 is one GGUF file") };
+        assert_eq!(files.len(), 1);
+        assert_eq!(pick["model"].as_str().unwrap(), format!("handy-computer/parakeet-tdt-0.6b-v3-gguf {}", files[0].name));
+        assert_eq!(files[0].sha256, pick["sha256"].as_str());
+        // Pinned: a commit, not a branch, so the file can't change under its hash.
+        let rev = base.rsplit('/').next().unwrap();
+        assert!(base.starts_with("https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/"), "{base}");
+        assert!(rev.len() == 40 && rev.chars().all(|c| c.is_ascii_hexdigit()), "{base}");
+        // The ONNX fallback stays on Silas's own mirror.
+        assert!(matches!(spec(PARAKEET_V3_ONNX).unwrap().source, Source::Archive { url, .. } if url.contains("baney75/silas/releases")));
+    }
+
+    #[test]
+    fn old_onnx_files_move_to_the_fallback_and_keep_their_user() {
+        let _store = crate::store::TEST_DIR.lock();
+        let dir = std::env::temp_dir().join(format!("pc-legacy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        crate::store::set_data_dir(Some(dir.clone()));
+        let old = model_path("parakeet-v3");
+        std::fs::create_dir_all(&old).unwrap();
+        for f in ["encoder-model.int8.onnx", "decoder_joint-model.int8.onnx", "vocab.txt", ".complete"] {
+            std::fs::write(old.join(f), b"x").unwrap();
+        }
+        assert!(!installed("parakeet-v3"), "ONNX files are not the GGUF model");
+        let moved = move_legacy_parakeet().unwrap();
+        let (onnx, gguf) = (installed(PARAKEET_V3_ONNX), installed("parakeet-v3"));
+        let again = move_legacy_parakeet().unwrap();
+        // A finished GGUF install is never moved.
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join(PARAKEET_V3_GGUF), b"x").unwrap();
+        std::fs::write(old.join(".complete"), b"ok").unwrap();
+        let gguf_moved = move_legacy_parakeet().unwrap();
+        let gguf_after = installed("parakeet-v3");
+        crate::store::set_data_dir(None);
+        let _ = std::fs::remove_dir_all(dir);
+        assert!(moved && onnx && !gguf, "moved {moved}, onnx {onnx}, gguf {gguf}");
+        assert!(!again && !gguf_moved && gguf_after);
+
+        let mut s = crate::store::Settings { model_source: "default".into(), ..Default::default() };
+        let r = |m: &str| ModelResult { model: m.into(), speed: 20.0, wer: 0.01, audio_seconds: 1.0, compute_seconds: 0.05, clips: 9 };
+        let mut report = benchmark::Report::new(benchmark::detect(), vec![r("parakeet-v3"), r("cohere-int4")]);
+        report.pick = Some("parakeet-v3".into());
+        retarget_legacy_parakeet(&mut s, Some(&mut report));
+        assert_eq!((s.model.as_str(), s.model_source.as_str()), (PARAKEET_V3_ONNX, "default"));
+        let ids: Vec<_> = report.results.iter().map(|x| x.model.as_str()).collect();
+        assert_eq!(ids, [PARAKEET_V3_ONNX, "cohere-int4"]);
+        assert_eq!(report.pick, None, "the ONNX build must not be marked best over the GGUF one");
+        let mut chose_cohere = crate::store::Settings { model: "cohere-int4".into(), ..Default::default() };
+        retarget_legacy_parakeet(&mut chose_cohere, None);
+        assert_eq!(chose_cohere.model, "cohere-int4");
+    }
+
+    #[test]
+    fn gguf_threads_stay_within_the_cores() {
+        let n = gguf_threads();
+        assert!((1..=8).contains(&n), "{n}");
+        assert!(n as usize <= std::thread::available_parallelism().map_or(8, |p| p.get()));
+    }
+
+    /// Transcribes the first clip of the bundled set with a real model. Models are big, so this runs
+    /// only with SILAS_TEST_MODELS set to a Silas data folder (CI's bench job sets it); a missing model
+    /// is downloaded there, hash-checked, the way the app does.
+    fn engine_on_a_bundled_clip(id: &str) {
+        let Some(data) = std::env::var_os("SILAS_TEST_MODELS") else {
+            eprintln!("skipped: set SILAS_TEST_MODELS to a data folder to run {id}");
+            return;
+        };
+        let _store = crate::store::TEST_DIR.lock();
+        crate::store::set_data_dir(Some(data.into()));
+        let run = || -> anyhow::Result<(String, String, f32)> {
+            move_legacy_parakeet()?;
+            if !installed(id) {
+                download(id, &|_, _, _| {}, &|| false)?;
+            }
+            let mut engine = Engine::load(id)?;
+            let clip = benchmark::load_clips()?.remove(0);
+            let text = engine.transcribe(&clip.samples, "en")?;
+            let wer = benchmark::wer(&clip.text, &text);
+            Ok((clip.text, text, wer))
+        };
+        let got = run();
+        crate::store::set_data_dir(None);
+        let (want, text, wer) = got.unwrap();
+        eprintln!("{id}: {text:?}");
+        assert!(wer <= 0.1, "{id} heard {text:?} for {want:?} ({:.0}% word errors)", wer * 100.0);
+    }
+
+    #[test]
+    fn parakeet_v3_gguf_transcribes_a_clip() {
+        engine_on_a_bundled_clip("parakeet-v3");
+    }
+
+    #[test]
+    fn parakeet_v3_onnx_transcribes_a_clip() {
+        engine_on_a_bundled_clip(PARAKEET_V3_ONNX);
     }
 
     #[test]

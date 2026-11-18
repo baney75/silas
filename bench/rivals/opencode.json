@@ -4,7 +4,7 @@
   "scored": "Hex 3.4.0",
   "why_scored": "OpenCode's own voice is a GPT-Live call that needs a paid OpenAI API key or a paid OpenCode Console account, and it only steers OpenCode sessions, so it cannot run free or type into another app. Hex (anomalyco/hex) is the OpenCode team's local dictation app; it runs free and headless on Linux, so it is scored in its place, with its default English model.",
   "engines": {
-    "silas": "Silas, Parakeet v3 (int8 ONNX), through the dictation path (silas-bench run)",
+    "silas": "Silas, Parakeet TDT 0.6B v3 Q4_K_M GGUF on transcribe.cpp, CPU, through the dictation path (silas-bench run)",
     "rival": "Hex 3.4.0 release binary, Parakeet Unified English 0.6B Q8_0 GGUF on transcribe.cpp, CPU (bench/engines/hex_engine.py)",
     "opencode_voice": "OpenCode Desktop voice call: gpt-live-1 over WebRTC, delegating to gpt-6.1-sol (not run: paid key)"
   },
@@ -18,23 +18,23 @@
   "recorded": "2026-11-18",
   "runs": {
     "silas_fast": {
-      "rows": "bench/rivals/opencode-chapel1/silas-fast.jsonl",
+      "rows": "bench/rivals/opencode-chapel1/silas-fast.jsonl.gz",
       "how": "silas-bench run --fast (accuracy; what CI compares)"
     },
     "silas_real_time": {
-      "rows": "bench/rivals/opencode-chapel1/silas-real-time.jsonl",
+      "rows": "bench/rivals/opencode-chapel1/silas-real-time.jsonl.gz",
       "how": "silas-bench run, paced in real time (times)"
     },
     "silas_typing": {
-      "rows": "bench/rivals/opencode-chapel1/silas-typing.jsonl",
+      "rows": "bench/rivals/opencode-chapel1/silas-typing.jsonl.gz",
       "how": "xvfb-run -a -s \"-screen 0 1280x1024x24 -noreset\" silas-bench type --results <real-time rows> (typing)"
     },
     "rival_service": {
-      "rows": "bench/rivals/opencode-chapel1/hex-service.jsonl",
+      "rows": "bench/rivals/opencode-chapel1/hex-service.jsonl.gz",
       "how": "bench/engines/hex_engine.py: a warm `hex service`, one `hex transcribe` per clip (times and accuracy)"
     },
     "rival_one_shot": {
-      "rows": "bench/rivals/opencode-chapel1/hex-one-shot.jsonl",
+      "rows": "bench/rivals/opencode-chapel1/hex-one-shot.jsonl.gz",
       "how": "bench/engines/hex_engine.py --one-shot: no service (accuracy only; Hex keeps its better run per metric)"
     },
     "report": "bench/rivals/opencode-chapel1/report.json"
@@ -46,7 +46,7 @@
       "gate": "latency",
       "slack": 300,
       "tie": 100,
-      "silas": 6643.5,
+      "silas": 6476.3,
       "rival": null,
       "rival_source": "unmeasured",
       "winner": "not scored",
@@ -61,7 +61,7 @@
       "gate": "latency",
       "slack": 130,
       "tie": 25,
-      "silas": 840.4,
+      "silas": 867.1,
       "rival": null,
       "rival_source": "unmeasured",
       "winner": "not scored",
@@ -76,7 +76,7 @@
       "gate": "latency",
       "slack": 170,
       "tie": 25,
-      "silas": 1132.9,
+      "silas": 1145.8,
       "rival": null,
       "rival_source": "unmeasured",
       "winner": "not scored",
@@ -91,11 +91,11 @@
       "gate": "accuracy",
       "slack": 0.01,
       "tie": 0.0,
-      "silas": 0.082162,
+      "silas": 0.054054,
       "rival": 0.052973,
       "rival_source": "measured",
       "winner": "rival",
-      "margin": -0.029189,
+      "margin": -0.001081,
       "opencode_voice": null,
       "opencode_voice_note": "not measured: gpt-live-1 is a paid cloud model with no free tier in the source"
     },
@@ -105,11 +105,11 @@
       "gate": "accuracy",
       "slack": 0.02,
       "tie": 0.0,
-      "silas": 0.724638,
+      "silas": 0.751773,
       "rival": 0.69434,
       "rival_source": "measured",
       "winner": "silas",
-      "margin": 0.030298,
+      "margin": 0.057433,
       "opencode_voice": null,
       "opencode_voice_note": "not measured: its text is rewritten by an agent before a session sees it"
     },
@@ -119,11 +119,11 @@
       "gate": "accuracy",
       "slack": 0.01,
       "tie": 0.0,
-      "silas": 0.198113,
+      "silas": 0.174528,
       "rival": 0.180425,
       "rival_source": "measured",
-      "winner": "rival",
-      "margin": -0.017688,
+      "winner": "silas",
+      "margin": 0.005897,
       "opencode_voice": null,
       "opencode_voice_note": "not measured"
     },
@@ -133,11 +133,11 @@
       "gate": "typing",
       "slack": 30,
       "tie": 5,
-      "silas": 104.2,
+      "silas": 110.6,
       "rival": 2.0,
       "rival_source": "modeled",
       "winner": "rival",
-      "margin": -102.2,
+      "margin": -108.6,
       "opencode_voice": null,
       "opencode_voice_note": "none: a call never puts text in another app; its delegate sends messages to OpenCode sessions only"
     },
@@ -161,11 +161,11 @@
       "gate": "latency",
       "slack": 120,
       "tie": 20,
-      "silas": 1212.7,
+      "silas": 1048.4,
       "rival": 2161.9,
       "rival_source": "measured",
       "winner": "silas",
-      "margin": 949.2,
+      "margin": 1113.5,
       "opencode_voice": null,
       "opencode_voice_note": "the model runs on OpenAI's servers"
     },
@@ -175,11 +175,11 @@
       "gate": "latency",
       "slack": 4,
       "tie": 1,
-      "silas": 24.25,
+      "silas": 20.19,
       "rival": 54.92,
       "rival_source": "measured",
       "winner": "silas",
-      "margin": 30.67,
+      "margin": 34.73,
       "opencode_voice": null,
       "opencode_voice_note": "the model runs on OpenAI's servers"
     }

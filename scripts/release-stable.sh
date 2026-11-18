@@ -55,6 +55,9 @@ if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
   [ "$(git rev-parse "$tag^{commit}")" = "$sha" ] || { echo "$tag already exists on another commit" >&2; exit 1; }
 fi
 
+# The default speech engine (transcribe.cpp) builds from source with CMake.
+command -v cmake >/dev/null || { echo "cmake is missing: the speech engine builds with it (brew install cmake)" >&2; exit 1; }
+
 identity="${APPLE_SIGNING_IDENTITY:-$(find_identity "Developer ID Application:")}"
 if [ -z "$identity" ] && [ "${SILAS_LOCAL_SIGNING:-1}" != 0 ]; then
   # Self-signed, so `find-identity -v` hides it; codesign takes it by SHA-1.

@@ -12,13 +12,15 @@ The numbers are in [opencode.json](opencode.json). `bench/rivals.py` checks them
 
 OpenCode's own voice is not dictation. It is a paid cloud voice call that steers OpenCode sessions, and it can't run free. So the bench scores Hex, the OpenCode team's free local dictation app, on the same 40 clips and the same machine as Silas.
 
-Against Hex, Silas wins 4 of the 7 metrics scored and loses 3:
+Against Hex, Silas wins 5 of the 7 metrics scored and loses 2:
 
-- Silas wins: punctuation, setup steps, memory and CPU.
-- Hex wins: word accuracy (mostly on accented speech), formatted error, and typing time.
+- Silas wins: punctuation, formatted error, setup steps, memory and CPU.
+- Hex wins: word accuracy, by 0.1 point (5.4% against 5.3%), which the paired bootstrap calls a tie, and typing time.
+
+Since 2026-11-18 Silas runs the same engine family as Hex: Parakeet TDT 0.6B v3, Q4_K_M GGUF, on transcribe.cpp ([accent study](../models/accent-2026-11.md)). That closed the accent gap: 10.7% WER against Hex's 14.8%, where the int8 ONNX build scored 29.5%. It cost code dictation: 29.8% WER, level with Hex's service run, where the ONNX build scored 21.1%.
 - Not scored: time to first word and both waits after key up. Hex's times through `hex transcribe` come in whole steps of about 612 ms whatever the clip length (a 3.1 s clip and a 4.4 s clip both took 615 ms, a 122 s clip about 30 steps), so they measure the CLI's polling, not Hex's decoding. They stay unmeasured until Hex is timed through its local API.
 
-The typing loss was the largest: Silas typed its text key by key at about 108 characters a second, while Hex pastes it in one step. Its typer now sends X11 keys straight through XTest at about 680 a second, so the median clip takes 104.2 ms to type instead of 349.9 ms; Hex still wins it, since a paste is one key.
+The typing loss was the largest: Silas typed its text key by key at about 108 characters a second, while Hex pastes it in one step. Its typer now sends X11 keys straight through XTest at about 680 a second, so the median clip takes 110.6 ms to type instead of 349.9 ms; Hex still wins it, since a paste is one key.
 
 ## What OpenCode's voice is
 
@@ -70,7 +72,7 @@ Hex:
 - It needs a Vulkan driver even for CPU inference ([docs/linux.md:11](https://github.com/anomalyco/hex/blob/536cffef8d5e508b92e50a31a562edd43803ab22/docs/linux.md#L11)) and quits on a CPU without AVX2 ([docs/linux.md:15](https://github.com/anomalyco/hex/blob/536cffef8d5e508b92e50a31a562edd43803ab22/docs/linux.md#L15)).
 - On CPU it is batch, so a long dictation waits for the whole clip after key up. On the 122 s longform clip Hex took 18.4 s after key up; Silas took 0.45 s.
 - Paste goes through the clipboard with a fixed wait and no acknowledgment ([paste.rs:41-43](https://github.com/anomalyco/hex/blob/536cffef8d5e508b92e50a31a562edd43803ab22/src/linux/paste.rs#L41-L43)). A terminal needs the Terminal paste setting unless it takes Ctrl+V ([docs/linux.md:527-529](https://github.com/anomalyco/hex/blob/536cffef8d5e508b92e50a31a562edd43803ab22/docs/linux.md#L527-L529)).
-- Code dictation came out worse than Silas: 29.8% WER against 22.8%.
+- Code dictation: 29.8% WER, level with Silas now (the ONNX build Silas used before scored 22.8% in real time).
 - Its two install docs give different script URLs ([README.md:83](https://github.com/anomalyco/hex/blob/536cffef8d5e508b92e50a31a562edd43803ab22/README.md#L83), [docs/linux.md:220](https://github.com/anomalyco/hex/blob/536cffef8d5e508b92e50a31a562edd43803ab22/docs/linux.md#L220)).
 - It takes no pull requests ([README.md:107](https://github.com/anomalyco/hex/blob/536cffef8d5e508b92e50a31a562edd43803ab22/README.md#L107)).
 
@@ -78,16 +80,18 @@ Hex:
 
 | Metric | Silas | Hex 3.4.0 | Winner | Gate |
 |---|---|---|---|---|
-| Time to first word, median (key down) | 6643.5 ms | 6371.0 ms | **Hex** by 272 ms | latency |
-| Wait after key up, median | 840.4 ms | 615.9 ms | **Hex** by 225 ms | latency |
-| Wait after key up, p95 | 1132.9 ms | 1228.7 ms | **Silas** by 96 ms | latency |
-| WER, pooled | 8.2% | 5.3% | **Hex** by 2.9 pts | accuracy |
-| Punctuation F1 | 0.725 | 0.694 | **Silas** by 0.030 | accuracy |
-| Formatted error | 19.8% | 18.0% | **Hex** by 1.8 pts | accuracy |
-| Typing time into the app, median | 104.2 ms | 2.0 ms (modeled) | **Hex** by 102 ms | typing |
+| Time to first word, median (key down) | 6476.3 ms | 6371.0 ms | not scored (Hex by 105 ms) | latency |
+| Wait after key up, median | 867.1 ms | 615.9 ms | not scored (Hex by 251 ms) | latency |
+| Wait after key up, p95 | 1145.8 ms | 1228.7 ms | not scored (Silas by 83 ms) | latency |
+| WER, pooled | 5.4% | 5.3% | **Hex** by 0.1 pt (a bootstrap tie) | accuracy |
+| Punctuation F1 | 0.752 | 0.694 | **Silas** by 0.057 | accuracy |
+| Formatted error | 17.5% | 18.0% | **Silas** by 0.6 pt | accuracy |
+| Typing time into the app, median | 110.6 ms | 2.0 ms (modeled) | **Hex** by 109 ms | typing |
 | Setup steps on Linux | 1 | 2 (OpenCode voice: 6) | **Silas** by 1 | setup |
-| Peak memory | 1213 MB | 2162 MB | **Silas** by 949 MB | latency |
-| CPU s per audio minute | 24.3 | 54.9 | **Silas**, 2.3x less | latency |
+| Peak memory | 1048 MB | 2162 MB | **Silas** by 1114 MB | latency |
+| CPU s per audio minute | 20.2 | 54.9 | **Silas**, 2.7x less | latency |
+
+Before the engine switch (int8 ONNX, recorded earlier on 2026-11-18): WER 8.2%, formatted error 19.8%, punctuation F1 0.725, peak memory 1213 MB, CPU 24.3 s per audio minute.
 
 How each was measured:
 
@@ -95,30 +99,32 @@ How each was measured:
 - **Hex** ran its pinned 3.4.0 release binary through `hex transcribe` against a warm `hex service`, and again one-shot with no service. Each metric keeps Hex's better run (`--rival` twice). The two differ in text: the service drops a final period on `clean-0011` that one-shot keeps.
 - **Hex picked its CPU engine** on chapel1 ("GPU failed or ran slower"). So its file path is batch, and its time to first word is the clip length plus its wait.
 - **Silas's first piece** arrives while you speak. Its median first word is still later than Hex's batch result because the median clip is about 6 s long.
-- **Typing:** Silas's figure is measured by `xvfb-run -a -s "-screen 0 1280x1024x24 -noreset" silas-bench type`, its typer at the default "fast" pace on X11. Hex's figure is modeled, not measured: one Ctrl+V after a clipboard write, timed as one key event by the old typer. Hex's 100 ms settle runs after the paste, so it is not counted. Silas typed 4745 characters in 7.0 s, about 680 a second (it was 43.9 s, about 108 a second, before the typer wrote to XTest itself); the 122 s longform clip took 2.9 s to type (it was 24.6 s). Keys with no wait go at about 803 a second: the 40 clips have 87 doubled keys, and the typer waits 11 ms before the second press of each so Qt (10 ms) and SDL (2 ms) don't read it as autorepeat, about 1 s in all. Without `-noreset`, Xvfb resets each time the typer's connection closes and the next row waits for it, which adds about 36 ms a row.
+- **Typing:** Silas's figure is measured by `xvfb-run -a -s "-screen 0 1280x1024x24 -noreset" silas-bench type`, its typer at the default "fast" pace on X11. Hex's figure is modeled, not measured: one Ctrl+V after a clipboard write, timed as one key event by the old typer. Hex's 100 ms settle runs after the paste, so it is not counted. Silas typed 4852 characters in 7.2 s, about 680 a second (it was 43.9 s, about 108 a second, before the typer wrote to XTest itself); the 122 s longform clip took 2.9 s to type (it was 24.6 s). Keys with no wait go at about 803 a second: the 40 clips have 87 doubled keys, and the typer waits 11 ms before the second press of each so Qt (10 ms) and SDL (2 ms) don't read it as autorepeat, about 1 s in all. Without `-noreset`, Xvfb resets each time the typer's connection closes and the next row waits for it, which adds about 36 ms a row.
 
 ### WER by category (lower is better)
 
 | Category | Silas fast | Silas real time | Hex service | Hex one-shot |
 |---|---|---|---|---|
-| accent | 29.5% | 28.7% | 14.8% | 14.8% |
-| clean | 2.2% | 1.1% | 1.1% | 1.1% |
-| code | 21.1% | 22.8% | 29.8% | 33.3% |
-| dictation | 8.9% | 6.5% | 4.8% | 3.2% |
-| longform | 1.3% | 1.3% | 0.8% | 0.8% |
-| noise | 6.8% | 6.8% | 3.4% | 2.7% |
+| accent | 10.7% | 10.7% | 14.8% | 14.8% |
+| clean | 2.2% | 2.2% | 1.1% | 1.1% |
+| code | 29.8% | 29.8% | 29.8% | 33.3% |
+| dictation | 6.5% | 7.3% | 4.8% | 3.2% |
+| longform | 0.8% | 0.3% | 0.8% | 0.8% |
+| noise | 4.8% | 4.8% | 3.4% | 2.7% |
 
-Paired bootstrap, Hex service against Silas real time ([report.json](opencode-chapel1/report.json)):
+Paired bootstrap, Hex against Silas real time ([report.json](opencode-chapel1/report.json)):
 
-- Hex is better overall, by 2.4 pts.
-- Hex is better on accent (13.9 pts) and noise (3.4 pts).
-- Code is a tie that leans to Silas.
-- Clean and dictation are ties.
+- Overall is a tie (Hex's service run 0.1 pt better, its one-shot run level).
+- Every category is a tie against Hex's service run, including accent, where Silas is 4.1 pts ahead on 7 clips.
+- Hex's one-shot run is better on dictation, by 4.0 pts.
+
+Where Silas still loses: dictation (7.3% against 3.2% one-shot), noise (4.8% against 2.7%) and clean (2.2% against 1.1%) lean to Hex, typing is a paste against keystrokes, and the median wait after key up is 251 ms behind (not scored). Code is level at 29.8%, which is worse than Silas's old engine.
 
 ### What it would take to win
 
-- **Typing:** Silas never pastes (AGENTS.md: text goes out as keystrokes and the clipboard is never touched), so typing stays key by key. It went from 349.9 ms to 104.2 ms a clip on X11. On Wayland it types through `wtype`, which waits 2 ms after every press and every release and tops out near 210 characters a second; a Wayland virtual keyboard of Silas's own would lift that.
-- **Accent and noise WER:** this is where Hex's newer Parakeet build wins most.
+- **Typing:** Silas never pastes (AGENTS.md: text goes out as keystrokes and the clipboard is never touched), so typing stays key by key. It went from 349.9 ms to 110.6 ms a clip on X11 (104.2 ms on the ONNX text, which was shorter). On Wayland it types through `wtype`, which waits 2 ms after every press and every release and tops out near 210 characters a second; a Wayland virtual keyboard of Silas's own would lift that.
+- **Dictation and noise WER:** Hex's Parakeet Unified English build still leads on these, a few points each. Accent no longer loses since the GGUF switch.
+- **Code WER:** the ONNX build scored 21.1%; the GGUF build gave up 8.8 points there for the accent gain. Silas's custom words are the lever.
 - **Wait after key up:** about 225 ms behind at the median, but ahead at p95, and far ahead on long dictation.
 
 ## The checks
@@ -132,7 +138,7 @@ Paired bootstrap, Hex service against Silas real time ([report.json](opencode-ch
 | latency | Time to first word, both waits, memory, CPU | Only on the recorded CPU; skipped elsewhere, since shared runners are noisy |
 | typing | `silas-bench type` | Only on the recorded CPU |
 
-To rerun on chapel1, set `S=~/.cache/silas-bench/bench-set-v1` and `D=bench/rivals/opencode-chapel1`, then:
+The committed rows are gzipped (`gzip -n`); the scripts read `.jsonl.gz` as is. To rerun on chapel1, set `S=~/.cache/silas-bench/bench-set-v1` and `D=bench/rivals/opencode-chapel1`, then:
 
 ```sh
 silas-bench run --manifest bench/manifest.jsonl --set $S --subset bench/subsets/ratchet.txt --model parakeet-v3 --fast --out $D/silas-fast.jsonl
@@ -141,6 +147,7 @@ xvfb-run -a -s "-screen 0 1280x1024x24 -noreset" silas-bench type --results $D/s
 uv run bench/engines/hex_engine.py --manifest bench/manifest.jsonl --set $S --subset bench/subsets/ratchet.txt --model parakeet_unified_en --out $D/hex-service.jsonl
 uv run bench/engines/hex_engine.py --manifest bench/manifest.jsonl --set $S --subset bench/subsets/ratchet.txt --model parakeet_unified_en --one-shot --out $D/hex-one-shot.jsonl
 python3 -I bench/rivals.py opencode --silas $D/silas-fast.jsonl --silas $D/silas-real-time.jsonl --typing $D/silas-typing.jsonl
+gzip -n -f $D/*.jsonl
 ```
 
 Add `--rival $D/hex-service.jsonl --rival $D/hex-one-shot.jsonl --record` to the last command to rewrite the file. It refuses when Silas fell behind, unless `--allow-worse` says the loss is known.

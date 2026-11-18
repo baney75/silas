@@ -263,7 +263,7 @@ def main(argv=None):
     if unknown := gates - set(GATES):
         p.error(f"unknown gate {', '.join(sorted(unknown))}")
     manifest = score.load_manifest(a.manifest)
-    load = lambda f: [json.loads(l) for l in f.read_text().splitlines() if l.strip()]  # noqa: E731
+    load = score.read_rows
     # Every row set must cover the recorded subset exactly, or easy clips alone could pass against the full baseline.
     keep = {l.strip() for l in (ROOT / results["subset"]).read_text().splitlines() if l.strip() and not l.startswith("#")}
     want = {k: v for k, v in manifest.items() if k in keep}

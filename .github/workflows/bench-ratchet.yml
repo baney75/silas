@@ -50,6 +50,11 @@ jobs:
         run: cargo build --release --features bench --bin silas-bench
       - name: Ratchet
         run: python3 -I bench/ratchet.py --baseline ci --gate accuracy --bin core/voice/target/release/silas-bench
+      # Both Parakeet v3 engines on a bundled clip (models.rs, engine_on_a_bundled_clip). The GGUF model
+      # is the one the ratchet just used; the ONNX fallback downloads into the same cached folder.
+      - name: Engine tests with the models
+        working-directory: core/voice
+        run: SILAS_TEST_MODELS="$HOME/.cache/silas-bench/silas-data" cargo test --release --features bench transcribes_a_clip -- --test-threads 1 --nocapture
       # Fails when Silas falls further behind OpenCode's scored dictation engine (bench/rivals/opencode.json)
       # on accuracy, or its documented setup grows. Latency and typing are recorded on chapel1 only.
       - name: Rival, OpenCode

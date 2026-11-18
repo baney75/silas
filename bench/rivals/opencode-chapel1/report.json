@@ -1,5 +1,5 @@
 {
-  "generated": "2026-11-18T07:34:15+00:00",
+  "generated": "2026-11-18T17:10:47+00:00",
   "manifest": "bench/manifest.jsonl",
   "clips": 250,
   "normalization": "silas",
@@ -8,89 +8,89 @@
     "silas parakeet-v3": {
       "overall": {
         "clips": 40,
-        "wer": 0.07783783783783783,
+        "wer": 0.05297297297297297,
         "wer_ci": [
-          0.04028436018957346,
-          0.16346153846153846
+          0.02497027348394768,
+          0.12121212121212122
         ],
-        "formatted_error": 0.19339622641509435,
+        "formatted_error": 0.1650943396226415,
         "command_acc": 0.0,
-        "t_first_ms_median": 6643.5491435,
-        "t_first_ms_p95": 10146.544137549998,
-        "t_final_ms_median": 840.402193,
-        "t_final_ms_p95": 1132.88080505,
-        "rtf_median": 0.11269841953887955,
-        "peak_rss_mb": 1212.74609375,
-        "cpu_s_per_audio_min": 24.24908942875903,
-        "load1_median": 0.85,
-        "load1_max": 1.88,
+        "t_first_ms_median": 6476.348396,
+        "t_first_ms_p95": 10218.024791749996,
+        "t_final_ms_median": 867.0893545,
+        "t_final_ms_p95": 1145.8422073999998,
+        "rtf_median": 0.11824161642737402,
+        "peak_rss_mb": 1048.4453125,
+        "cpu_s_per_audio_min": 20.18706333739799,
+        "load1_median": 0.62,
+        "load1_max": 2.31,
         "energy_j_per_audio_min": null,
         "audio_seconds": 333.15625,
-        "load_ms": 1468,
+        "load_ms": 279,
         "paced": true,
         "mode": "dictation path"
       },
       "categories": {
         "accent": {
           "clips": 7,
-          "wer": 0.28688524590163933,
+          "wer": 0.10655737704918032,
           "wer_ci": [
-            0.1342281879194631,
-            0.4782608695652174
+            0.043478260869565216,
+            0.18691588785046728
           ],
-          "formatted_error": 0.29914529914529914,
+          "formatted_error": 0.2564102564102564,
           "command_acc": null,
-          "t_first_ms_median": 6686.206931,
-          "t_first_ms_p95": 8225.0887032,
-          "t_final_ms_median": 862.0066549999999,
-          "t_final_ms_p95": 1248.680076,
-          "rtf_median": 0.11519108545034641,
-          "peak_rss_mb": 1159.51171875,
-          "cpu_s_per_audio_min": 26.048636386449182,
-          "load1_median": 0.79,
-          "load1_max": 1.88,
+          "t_first_ms_median": 6251.498668,
+          "t_first_ms_p95": 8234.664800899998,
+          "t_final_ms_median": 871.308724,
+          "t_final_ms_p95": 1048.5633183999998,
+          "rtf_median": 0.12033615643086817,
+          "peak_rss_mb": 944.0859375,
+          "cpu_s_per_audio_min": 21.093173902133,
+          "load1_median": 0.61,
+          "load1_max": 0.75,
           "energy_j_per_audio_min": null,
           "audio_seconds": 39.85
         },
         "clean": {
           "clips": 7,
-          "wer": 0.011111111111111112,
+          "wer": 0.022222222222222223,
           "wer_ci": [
             0.0,
-            0.0379746835443038
+            0.0759493670886076
           ],
           "formatted_error": 0.1,
           "command_acc": null,
-          "t_first_ms_median": 4526.99945,
-          "t_first_ms_p95": 7388.5886623999995,
-          "t_final_ms_median": 656.9381010000001,
-          "t_final_ms_p95": 916.4539658,
-          "rtf_median": 0.11597948475452195,
-          "peak_rss_mb": 1051.90234375,
-          "cpu_s_per_audio_min": 25.476369672785317,
-          "load1_median": 1.05,
-          "load1_max": 1.21,
+          "t_first_ms_median": 4553.295223,
+          "t_first_ms_p95": 7453.9182543,
+          "t_final_ms_median": 711.502343,
+          "t_final_ms_p95": 985.7974555,
+          "rtf_median": 0.12338877028423773,
+          "peak_rss_mb": 915.51171875,
+          "cpu_s_per_audio_min": 21.811311093375895,
+          "load1_median": 2.04,
+          "load1_max": 2.31,
           "energy_j_per_audio_min": null,
           "audio_seconds": 31.325
         },
         "code": {
           "clips": 6,
-          "wer": 0.22807017543859648,
+          "wer": 0.2982456140350877,
           "wer_ci": [
-            0.08928571428571429,
-            0.38461538461538464
+            0.10714285714285714,
+            0.5294117647058824
           ],
-          "formatted_error": 1.3571428571428572,
+          "formatted_error": 1.2142857142857142,
           "command_acc": null,
-          "t_first_ms_median": 4778.422628,
-          "t_first_ms_p95": 6065.61097425,
-          "t_final_ms_median": 679.5924435,
-          "t_final_ms_p95": 804.2072222500001,
-          "rtf_median": 0.11563248329550749,
-          "peak_rss_mb": 1159.51171875,
-          "cpu_s_per_audio_min": 26.281655597722963,
-          "load1_median": 0.99,
-          "load1_max": 1.16,
+          "t_first_ms_median": 4800.2031765,
+          "t_first_ms_p95": 6092.6950545,
+          "t_final_ms_median": 717.629029,
+          "t_final_ms_p95": 831.18180225,
+          "rtf_median": 0.1211162957913098,
+          "peak_rss_mb": 944.0859375,
+          "cpu_s_per_audio_min": 21.437279411764706,
+          "load1_median": 0.41500000000000004,
+          "load1_max": 0.52,
           "energy_j_per_audio_min": null,
           "audio_seconds": 25.296
         },
@@ -100,78 +100,78 @@
           "wer_ci": null,
           "formatted_error": null,
           "command_acc": 0.0,
-          "t_first_ms_median": 1910.440762,
-          "t_first_ms_p95": 2012.7925466000002,
-          "t_final_ms_median": 411.457444,
-          "t_final_ms_p95": 435.5729586,
-          "rtf_median": 0.1407138012820513,
-          "peak_rss_mb": 1159.51171875,
-          "cpu_s_per_audio_min": 30.12661841974819,
-          "load1_median": 0.7,
-          "load1_max": 0.77,
+          "t_first_ms_median": 1952.75288,
+          "t_first_ms_p95": 2027.49823,
+          "t_final_ms_median": 442.94032,
+          "t_final_ms_p95": 450.2779604,
+          "rtf_median": 0.15391998022819953,
+          "peak_rss_mb": 944.0859375,
+          "cpu_s_per_audio_min": 27.541746802815506,
+          "load1_median": 0.4,
+          "load1_max": 0.44,
           "energy_j_per_audio_min": null,
           "audio_seconds": 7.56525
         },
         "dictation": {
           "clips": 7,
-          "wer": 0.06451612903225806,
+          "wer": 0.07258064516129033,
           "wer_ci": [
-            0.01694915254237288,
-            0.12096774193548387
+            0.01680672268907563,
+            0.14035087719298245
           ],
-          "formatted_error": 0.31,
+          "formatted_error": 0.25,
           "command_acc": null,
-          "t_first_ms_median": 8283.040547,
-          "t_first_ms_p95": 8854.9651528,
-          "t_final_ms_median": 973.0908029999999,
-          "t_final_ms_p95": 1045.9983345,
-          "rtf_median": 0.10790929968374646,
-          "peak_rss_mb": 1159.51171875,
-          "cpu_s_per_audio_min": 24.43616189747978,
-          "load1_median": 1.29,
-          "load1_max": 1.66,
+          "t_first_ms_median": 8282.680278000002,
+          "t_first_ms_p95": 8879.962982199999,
+          "t_final_ms_median": 978.17018,
+          "t_final_ms_p95": 1091.1241999000001,
+          "rtf_median": 0.1109941637642043,
+          "peak_rss_mb": 944.0859375,
+          "cpu_s_per_audio_min": 19.38098651529499,
+          "load1_median": 0.53,
+          "load1_max": 0.72,
           "energy_j_per_audio_min": null,
           "audio_seconds": 49.37075
         },
         "longform": {
           "clips": 1,
-          "wer": 0.012953367875647668,
+          "wer": 0.0025906735751295338,
           "wer_ci": [
-            0.012953367875647668,
-            0.012953367875647668
+            0.0025906735751295338,
+            0.0025906735751295338
           ],
-          "formatted_error": 0.09536784741144415,
+          "formatted_error": 0.07629427792915532,
           "command_acc": null,
-          "t_first_ms_median": 14211.682963,
-          "t_first_ms_p95": 14211.682963,
-          "t_final_ms_median": 447.392904,
-          "t_final_ms_p95": 447.392904,
-          "rtf_median": 0.10004815277427606,
-          "peak_rss_mb": 1212.74609375,
-          "cpu_s_per_audio_min": 22.93344959691057,
-          "load1_median": 0.65,
-          "load1_max": 0.65,
+          "t_first_ms_median": 14337.180575,
+          "t_first_ms_p95": 14337.180575,
+          "t_final_ms_median": 456.700724,
+          "t_final_ms_p95": 456.700724,
+          "rtf_median": 0.10992336394476249,
+          "peak_rss_mb": 1048.4453125,
+          "cpu_s_per_audio_min": 19.344289166702538,
+          "load1_median": 0.37,
+          "load1_max": 0.37,
           "energy_j_per_audio_min": null,
           "audio_seconds": 121.96425
         },
         "noise": {
           "clips": 7,
-          "wer": 0.0684931506849315,
+          "wer": 0.04794520547945205,
           "wer_ci": [
-            0.03184713375796178,
-            0.1111111111111111
+            0.012987012987012988,
+            0.0948905109489051
           ],
-          "formatted_error": 0.1095890410958904,
+          "formatted_error": 0.0958904109589041,
           "command_acc": null,
-          "t_first_ms_median": 8956.863631,
-          "t_first_ms_p95": 10783.6626397,
-          "t_final_ms_median": 1036.6867399999999,
-          "t_final_ms_p95": 1139.4937887,
-          "rtf_median": 0.10301327027388109,
-          "peak_rss_mb": 1159.51171875,
-          "cpu_s_per_audio_min": 23.300536125292034,
-          "load1_median": 0.65,
-          "load1_max": 0.83,
+          "t_first_ms_median": 9045.142536,
+          "t_first_ms_p95": 10873.768097499998,
+          "t_final_ms_median": 1124.943252,
+          "t_final_ms_p95": 1229.5895719,
+          "rtf_median": 0.11127101740100391,
+          "peak_rss_mb": 944.0859375,
+          "cpu_s_per_audio_min": 19.639021199273174,
+          "load1_median": 1.15,
+          "load1_max": 1.48,
           "energy_j_per_audio_min": null,
           "audio_seconds": 57.785
         }
@@ -1165,131 +1165,131 @@
     "hex parakeet_unified_en": {
       "accent": {
         "clips": 7,
-        "wer_diff": -0.13934426229508196,
+        "wer_diff": 0.04098360655737705,
         "ci": [
-          -0.3047619047619048,
-          -0.008264462809917356
+          -0.015625,
+          0.10619469026548674
         ],
-        "verdict": "better"
+        "verdict": "tie"
       },
       "all": {
         "clips": 35,
-        "wer_diff": -0.023783783783783777,
+        "wer_diff": 0.001081081081081084,
         "ci": [
-          -0.06925675675675676,
-          -0.0015987210231814541
+          -0.01736111111111112,
+          0.013565891472868213
         ],
-        "verdict": "better"
+        "verdict": "tie"
       },
       "clean": {
         "clips": 7,
-        "wer_diff": 0.0,
+        "wer_diff": -0.011111111111111112,
         "ci": [
-          0.0,
+          -0.0380952380952381,
           0.0
         ],
         "verdict": "tie"
       },
       "code": {
         "clips": 6,
-        "wer_diff": 0.07017543859649122,
+        "wer_diff": 0.0,
         "ci": [
-          0.0,
-          0.15384615384615385
+          -0.054545454545454564,
+          0.051724137931034475
         ],
         "verdict": "tie"
       },
       "dictation": {
         "clips": 7,
-        "wer_diff": -0.016129032258064516,
+        "wer_diff": -0.02419354838709678,
         "ci": [
-          -0.03478260869565217,
-          0.0
+          -0.06451612903225805,
+          0.03125
         ],
         "verdict": "tie"
       },
       "longform": {
         "clips": 1,
-        "wer_diff": -0.005181347150259067,
+        "wer_diff": 0.005181347150259067,
         "ci": [
-          -0.005181347150259067,
-          -0.005181347150259067
+          0.005181347150259067,
+          0.005181347150259067
         ],
         "verdict": "too few clips"
       },
       "noise": {
         "clips": 7,
-        "wer_diff": -0.03424657534246575,
+        "wer_diff": -0.0136986301369863,
         "ci": [
-          -0.0588235294117647,
-          -0.007042253521126758
+          -0.031007751937984496,
+          0.0
         ],
-        "verdict": "better"
+        "verdict": "tie"
       }
     },
     "hex parakeet_unified_en (hex-one-shot)": {
       "accent": {
         "clips": 7,
-        "wer_diff": -0.13934426229508196,
+        "wer_diff": 0.04098360655737705,
         "ci": [
-          -0.3047619047619048,
-          -0.008264462809917356
+          -0.015625,
+          0.10619469026548674
         ],
-        "verdict": "better"
+        "verdict": "tie"
       },
       "all": {
         "clips": 35,
-        "wer_diff": -0.02486486486486486,
+        "wer_diff": 0.0,
         "ci": [
-          -0.07129094412331405,
-          -0.0016090104585679832
+          -0.021235521235521228,
+          0.01428571428571429
         ],
-        "verdict": "better"
+        "verdict": "tie"
       },
       "clean": {
         "clips": 7,
-        "wer_diff": 0.0,
+        "wer_diff": -0.011111111111111112,
         "ci": [
-          0.0,
+          -0.0380952380952381,
           0.0
         ],
         "verdict": "tie"
       },
       "code": {
         "clips": 6,
-        "wer_diff": 0.10526315789473684,
+        "wer_diff": 0.03508771929824561,
         "ci": [
-          0.0,
-          0.2641509433962264
+          -0.0535714285714286,
+          0.15517241379310343
         ],
         "verdict": "tie"
       },
       "dictation": {
         "clips": 7,
-        "wer_diff": -0.03225806451612903,
+        "wer_diff": -0.040322580645161296,
         "ci": [
-          -0.06201550387596899,
-          -0.007936507936507936
+          -0.06611570247933884,
+          -0.015625
         ],
         "verdict": "better"
       },
       "longform": {
         "clips": 1,
-        "wer_diff": -0.005181347150259067,
+        "wer_diff": 0.005181347150259067,
         "ci": [
-          -0.005181347150259067,
-          -0.005181347150259067
+          0.005181347150259067,
+          0.005181347150259067
         ],
         "verdict": "too few clips"
       },
       "noise": {
         "clips": 7,
-        "wer_diff": -0.0410958904109589,
+        "wer_diff": -0.02054794520547945,
         "ci": [
-          -0.07518796992481203,
-          -0.012422360248447204
+          -0.05263157894736842,
+          0.0
         ],
-        "verdict": "better"
+        "verdict": "tie"
       }
     }
   },

@@ -145,6 +145,24 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(self.main("--results", str(slower), "--baseline", "ci", "--cpu", "AMD", "--update"), 0)
         self.assertEqual(set(json.loads(self.cfg.read_text())["baselines"]["ci"]), {"Intel"})
 
+    def test_a_reviewed_loss_records_only_with_a_reason_and_resets_the_group(self):
+        self.assertEqual(self.main("--results", str(self.good), "--cpu", "Intel", "--update"), 0)
+        self.assertEqual(self.main("--results", str(self.good), "--cpu", "AMD", "--new-cpu"), 0)
+        before = self.cfg.read_text()
+        with self.assertRaises(SystemExit):
+            self.main("--results", str(self.bad), "--cpu", "Intel", "--allow-worse", "new engine")  # no --update
+        with self.assertRaises(SystemExit):
+            self.main("--results", str(self.bad), "--cpu", "Intel", "--update", "--allow-worse", " ")
+        self.assertEqual(self.cfg.read_text(), before)
+        self.assertEqual(self.main("--results", str(self.bad), "--cpu", "Intel", "--update", "--allow-worse", "new engine"), 0)
+        local = json.loads(self.cfg.read_text())["baselines"]["local"]
+        self.assertEqual(set(local), {"Intel"})
+        self.assertEqual(local["Intel"]["accepted"], "new engine")
+        self.assertEqual(self.main("--results", str(self.bad), "--cpu", "Intel"), 0)
+        # The dropped CPU now compares with the new numbers and reseeds itself.
+        self.assertEqual(self.main("--results", str(self.bad), "--cpu", "AMD", "--update"), 0)
+        self.assertEqual(set(json.loads(self.cfg.read_text())["baselines"]["local"]), {"Intel", "AMD"})
+
 
 class Scoring(unittest.TestCase):
     def test_normalization_matches_benchmark_rs(self):

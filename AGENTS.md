@@ -32,6 +32,12 @@ bun install --frozen-lockfile && bun run build && bun run check:theme && bun tes
 - Never call `set_status` (it waits on the main thread for the tray) while holding a lock, and
   never write `if let Some(x) = self.m.lock().take()`: the guard lives through the body.
 - `[profile.release.build-override]` must stay: thin LTO otherwise breaks proc-macros.
-- Benchmark engines with `cargo run --release --features bench --bin silas-bench -- parakeet <dir> <wav>...`.
+- Benchmark Silas with `silas-bench run` in `core/voice` (`bench/HARNESS.md`); `src-tauri`'s
+  `silas-bench parakeet <dir> <wav>...` runs only the ONNX fallback.
+- Parakeet v3, the default model, runs on transcribe.cpp (the `transcribe-cpp` crate), built from source
+  with CMake. `.cargo/config.toml` turns off `GGML_NATIVE` so a release built on a CI runner runs on other
+  CPUs, and `models::runs_here` keeps CPUs below that floor on `parakeet-v3-onnx`; keep both. The ONNX
+  models run on the vendored transcribe-rs (`vendor/transcribe-rs/VENDORED.md`), patched in both
+  `core/voice` and `src-tauri`.
 - Colours, radii, fonts and durations come from the theme (`src/theme-vars.ts`, applied by `src/theme.ts`). Write `var(--x)` in rule bodies; defaults live in the `:root` blocks. `bun run check:theme` fails on a hex, `rgb()` or named colour, a literal `border-radius` (other than `50%`), `font-family` or `transition` time (other than 0 and 1ms), and a colour given to a variable outside `:root`. The only exceptions are the files in `ALLOW` in `scripts/check-theme.mjs`, each with a reason.
 - Theme logic that `bun test` runs (`theme-vars.ts`, `theme-boot.ts`) must not touch `window` or `document`. `bun test` and `cargo test --lib` load the built-in themes from `tests/fixtures/themes`, the files Polycarp's `theme set` writes; refresh them with `node scripts/theme-fixtures.mjs --refresh` (needs a `polycarp` command on PATH or `POLYCARP_BIN`) when Polycarp's theme format changes.
