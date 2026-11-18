@@ -264,6 +264,13 @@ def main(argv=None):
         p.error(f"unknown gate {', '.join(sorted(unknown))}")
     manifest = score.load_manifest(a.manifest)
     load = lambda f: [json.loads(l) for l in f.read_text().splitlines() if l.strip()]  # noqa: E731
+    # Every row set must cover the recorded subset exactly, or easy clips alone could pass against the full baseline.
+    keep = {l.strip() for l in (ROOT / results["subset"]).read_text().splitlines() if l.strip() and not l.startswith("#")}
+    want = {k: v for k, v in manifest.items() if k in keep}
+    for f in [*a.silas, *a.rival_rows, *([a.typing] if a.typing else [])]:
+        if gaps := ratchet.incomplete(load(f), want):
+            print("\n".join(f"INCOMPLETE {f.name}: {g}" for g in gaps))
+            return 1
     typing = load(a.typing) if a.typing else None
     current = silas_metrics([measure(load(f), manifest, typing) for f in a.silas])
     steps, problems = setup_steps(results["setup"], ROOT / "README.md")

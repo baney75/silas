@@ -151,6 +151,14 @@ class EndToEnd(unittest.TestCase):
             if m["rival"] is not None:
                 self.assertIn(f"ok   {key}:", out)
 
+    def test_rows_that_skip_clips_fail(self):
+        rows = (ROWS / "silas-fast.jsonl").read_text().splitlines()
+        easy = Path(tempfile.mkdtemp()) / "easy.jsonl"
+        easy.write_text("\n".join(l for l in rows if '"clean-' in l) + "\n")
+        code, out = self.run_check("--silas", str(easy), "--gate", "accuracy")
+        self.assertEqual(code, 1, out)
+        self.assertIn("INCOMPLETE", out)
+
     def test_worse_silas_text_fails_the_accuracy_gate(self):
         rows = [json.loads(l) for l in (ROWS / "silas-fast.jsonl").read_text().splitlines() if l.strip()]
         for r in rows:
