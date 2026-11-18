@@ -10,14 +10,14 @@ The app does the same job: you speak, and Silas writes it down faithfully, in yo
 
 ## Mark
 
-`icon.svg` is a gold pen nib on a deep-ink rounded square. The nib's slit rises into a
-five-bar sound wave, so the pen and the voice are one shape. The light left half and
-darker right half give it a struck-metal look without gradients.
+`icon.svg` is a gold pen nib on a diamond-black rounded square with a thin gold rim. The nib's
+slit rises into a five-bar sound wave, so the pen and the voice are one shape. The nib is cut in
+four flat facets, lit from the upper left, so it reads as struck gold without gradients or glow.
 
 | File | Use |
 | --- | --- |
-| `icon.svg` / `icon-1024.png` | App icon source. Regenerate with `bunx tauri icon brand/icon-1024.png`. |
-| `wordmark.svg` | Nib plus "Silas" (Charter, outlined). Ink text, so use it on parchment or light surfaces. |
+| `icon.svg` / `icon-1024.png` | App icon source. Regenerate with `bunx tauri icon brand/icon-1024.png` (delete the android and ios folders it adds). |
+| `wordmark.svg` | Faceted nib plus "Silas" (Charter, outlined) in parchment. Set it on diamond black. |
 | `tray.svg`, `tray-recording.svg` | Menu-bar glyphs. Black on transparent; macOS renders them as template images. Export to `src-tauri/icons/tray*.png` at 22 and 44 px. |
 
 Keep clear space around the mark equal to the nib's collar height. Don't recolor the nib,
@@ -25,14 +25,20 @@ add effects, or set the wordmark in another face.
 
 ## Color
 
+Diamond black and gold. Silas is dark only: it does not change with the system light or dark setting.
+
 | Token | Hex | Role |
 | --- | --- | --- |
-| Ink | `#14161A` | Dark background, light-mode text |
-| Parchment | `#F5F0E6` | Light background, dark-mode text (`#EDE6D8` on dark) |
-| Scribe gold | `#C8A15A` | The one accent: active states, recording, the nib |
-| Gold, deep | `#8A6A2E` | Gold text on parchment (passes AA) |
-| Quill blue | `#2F4E73` / `#8FB0D6` | Secondary, used sparingly for info and links |
-| Nib light / dark | `#D9B676` / `#B98F4B` | The mark's two faces |
+| Diamond black | `#0A0A0B` | Background. The sidebar is `#050506`, cards `#101012` |
+| Parchment | `#F3EEE4` | Text. Secondary `#BDB6A8`, muted `#8E877A` |
+| Gold | `#D6AE45` | The one accent: primary buttons, active states, the nib |
+| Gold ink | `#E8C66C` | Gold text and links on black |
+| Gold high / deep | `#F2D58A` / `#A7832B` | Focus ring and keycap edge / dark edges |
+| Gold hairline | `#D6AE45` at 30% | The hero card's border and the sidebar edge |
+| Facets | `#F6DE9C` `#DDB451` `#C49A36` `#8F6C22` | The nib's four faces, light to dark |
+| Green / red | `#86BF93` / `#EC7D65` | Saved and error states only |
+
+Cards carry one facet: a 1 px light line along the top edge (`--facet`). No gradients, glass or glow.
 
 ## Type
 
