@@ -380,15 +380,15 @@ struct Live {
 impl Core {
     pub fn new(host: Arc<dyn Host>) -> Shared {
         let mut settings: Settings = store::load_fields("settings.json");
+        let fresh = !store::exists("settings.json");
         // An older Silas kept Parakeet v3's ONNX files under the id the GGUF build now has. They
         // move aside as the ONNX fallback, before anything counts or loads models.
-        let moved = models::move_legacy_parakeet().unwrap_or_else(|e| {
+        if let Err(e) = models::move_legacy_parakeet() {
             log::error!("models: could not move the old Parakeet v3 files aside: {e}");
-            false
-        });
+        }
         // Settings from before per-device picks have no modelSource. A model other than the
         // default was chosen by the user then, so no benchmark or registry may move them off it.
-        if store::exists("settings.json") {
+        if !fresh {
             let installed = models::MODELS
                 .iter()
                 .filter(|m| models::installed(m.id))
@@ -400,21 +400,15 @@ impl Core {
             );
             store::migrate_hotkey(&mut settings, &store::read_raw("settings.json"));
         }
-        if moved {
-            // Whoever dictated with those files keeps dictating with them; the model list offers
-            // the GGUF build as the recommended download.
-            let mut report = store::exists(benchmark::REPORT_FILE)
-                .then(|| store::load::<benchmark::Report>(benchmark::REPORT_FILE));
-            models::retarget_legacy_parakeet(&mut settings, report.as_mut());
-            store::save("settings.json", &settings);
-            if let Some(r) = &report {
-                benchmark::save_report(r);
-            }
-            log::info!("models: Parakeet v3's ONNX files are now {}", models::PARAKEET_V3_ONNX);
-        }
         // A fresh nightly or dev install stays on its channel instead of jumping to stable.
-        if !store::exists("settings.json") {
+        if fresh {
             settings.update_channel = host.build_channel().into();
+        }
+        // Whoever dictated with those files keeps dictating with them; the model list offers the
+        // GGUF build as the recommended download.
+        if models::retarget_legacy_parakeet(&mut settings) {
+            store::save("settings.json", &settings);
+            log::info!("models: Parakeet v3's ONNX files are now {}", models::PARAKEET_V3_ONNX);
         }
         // A saved key this build can't use is replaced, not kept: every later settings save sends it
         // back and would be refused for it.
@@ -1723,6 +1717,57 @@ mod tests {
         assert_eq!(rx.try_recv(), Ok(Ok("F13".to_string())));
         store::set_data_dir(None);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The Parakeet v3 move saves settings.json on a first start too. The fresh-install check ran after that save,
+    /// saw a file and left a nightly build on stable.
+    #[test]
+    fn a_fresh_nightly_install_with_old_onnx_files_stays_on_nightly() {
+        struct Nightly;
+        impl Host for Nightly {
+            fn emit(&self, _: &str, _: serde_json::Value) {}
+            fn level(&self, _: f32) {}
+            fn status_changed(&self, _: Status, _: bool) {}
+            fn show_main(&self) {}
+            fn listener_returned(&self) {}
+            fn is_nightly(&self) -> bool {
+                true
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("pc-fresh-move-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _store = STORE_LOCK.lock();
+        store::set_data_dir(Some(dir.clone()));
+        let old = models::model_path("parakeet-v3");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join(".complete"), b"ok").unwrap();
+        let core = Core::new(Arc::new(Nightly));
+        let (live, model) = { let s = core.settings.lock(); (s.update_channel.clone(), s.model.clone()) };
+        let saved: Settings = store::load("settings.json");
+        store::set_data_dir(None);
+        let _ = std::fs::remove_dir_all(dir);
+        assert_eq!(model, models::PARAKEET_V3_ONNX);
+        assert_eq!((live.as_str(), saved.update_channel.as_str()), ("nightly", "nightly"));
+    }
+
+    /// A start that moved the ONNX files and quit before saving settings: the next start moves nothing, and used
+    /// to leave the user on a GGUF model they don't have.
+    #[test]
+    fn a_restart_after_an_unsaved_move_finishes_it() {
+        let dir = std::env::temp_dir().join(format!("pc-unsaved-move-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _store = STORE_LOCK.lock();
+        store::set_data_dir(Some(dir.clone()));
+        let onnx = models::model_path(models::PARAKEET_V3_ONNX);
+        std::fs::create_dir_all(&onnx).unwrap();
+        std::fs::write(onnx.join(".complete"), b"ok").unwrap();
+        std::fs::write(store::data_dir().join("settings.json"), r#"{"model":"parakeet-v3","onboarded":true}"#).unwrap();
+        let core = Core::new(Arc::new(NullHost));
+        let live = core.settings.lock().model.clone();
+        let saved: Settings = store::load("settings.json");
+        store::set_data_dir(None);
+        let _ = std::fs::remove_dir_all(dir);
+        assert_eq!((live.as_str(), saved.model.as_str()), (models::PARAKEET_V3_ONNX, models::PARAKEET_V3_ONNX));
     }
 
     /// Records what the engine tells the interface.

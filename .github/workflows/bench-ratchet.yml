@@ -7,6 +7,8 @@ on:
     paths:
       - core/voice/**
       - bench/**
+      - .cargo/config.toml # the engine's build flags
+      - vendor/** # the patched transcribe-rs
       - .github/workflows/bench-ratchet.yml
       - README.md # the setup gate reads it
 permissions:

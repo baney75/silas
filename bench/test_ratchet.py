@@ -153,6 +153,8 @@ class EndToEnd(unittest.TestCase):
             self.main("--results", str(self.bad), "--cpu", "Intel", "--allow-worse", "new engine")  # no --update
         with self.assertRaises(SystemExit):
             self.main("--results", str(self.bad), "--cpu", "Intel", "--update", "--allow-worse", " ")
+        with self.assertRaises(SystemExit):  # it would record the CPU as "unknown"
+            self.main("--results", str(self.bad), "--update", "--allow-worse", "new engine")
         self.assertEqual(self.cfg.read_text(), before)
         self.assertEqual(self.main("--results", str(self.bad), "--cpu", "Intel", "--update", "--allow-worse", "new engine"), 0)
         local = json.loads(self.cfg.read_text())["baselines"]["local"]

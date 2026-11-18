@@ -179,6 +179,8 @@ def main(argv=None):
     base = group.get(key)
     candidates = {key: base} if base is not None else group
 
+    if a.allow_worse and not cpu:
+        p.error("--allow-worse records one CPU's baseline: name it with --cpu")
     print(json.dumps({**new, "cpu": cpu}, indent=2))
     if a.new_cpu:
         if base is not None or not cpu:

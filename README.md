@@ -49,7 +49,7 @@ release carries them. Pick any channel later in Settings › Updates.
 
 ### First run
 
-1. Silas opens a short setup. The speech model (478 MB) starts downloading right away.
+1. Silas opens a short setup. The speech model (485 MB) starts downloading right away.
 2. On macOS, click **Allow** for **Microphone**, then turn on Silas under **Accessibility**.
    Silas moves on by itself once both are on. Windows asks for nothing. On Linux the installer
    already granted keyboard access; if setup says it can't see your key, log out and back in once.

@@ -199,22 +199,32 @@ pub fn move_legacy_parakeet() -> anyhow::Result<bool> {
     Ok(true)
 }
 
-/// After `move_legacy_parakeet`: settings and this computer's benchmark report that said
-/// `parakeet-v3` meant the ONNX files, so they now say `parakeet-v3-onnx`. Who chose the model stays
-/// as it was. The report's pick is dropped rather than moved: it was made before the GGUF build
-/// existed, and kept it would mark the ONNX build "best for this computer" over it.
-pub fn retarget_legacy_parakeet(settings: &mut crate::store::Settings, report: Option<&mut benchmark::Report>) {
-    if settings.model == "parakeet-v3" {
+/// Run at every start, after `move_legacy_parakeet`. While the ONNX build is installed and the GGUF
+/// build is not, settings and this computer's benchmark report that say `parakeet-v3` meant the ONNX
+/// files, so they now say `parakeet-v3-onnx`. It looks at the files, not at whether a move just
+/// happened, so a start that moved them and quit before saving finishes the job on the next one.
+/// Who chose the model stays as it was. The report's pick is dropped rather than moved: it was made
+/// before the GGUF build existed, and kept it would mark the ONNX build "best for this computer" over
+/// it. The report is saved here; true when settings changed, for the caller to save.
+pub fn retarget_legacy_parakeet(settings: &mut crate::store::Settings) -> bool {
+    if installed("parakeet-v3") || !installed(PARAKEET_V3_ONNX) {
+        return false;
+    }
+    if crate::store::exists(benchmark::REPORT_FILE) {
+        let mut r: benchmark::Report = crate::store::load(benchmark::REPORT_FILE);
+        if r.results.iter().any(|x| x.model == "parakeet-v3") || r.pick.as_deref() == Some("parakeet-v3") {
+            for x in r.results.iter_mut().filter(|x| x.model == "parakeet-v3") {
+                x.model = PARAKEET_V3_ONNX.into();
+            }
+            r.pick = r.pick.filter(|p| p != "parakeet-v3");
+            benchmark::save_report(&r);
+        }
+    }
+    let legacy = settings.model == "parakeet-v3";
+    if legacy {
         settings.model = PARAKEET_V3_ONNX.into();
     }
-    if let Some(r) = report {
-        for x in r.results.iter_mut().filter(|x| x.model == "parakeet-v3") {
-            x.model = PARAKEET_V3_ONNX.into();
-        }
-        if r.pick.as_deref() == Some("parakeet-v3") {
-            r.pick = None;
-        }
-    }
+    legacy
 }
 
 #[derive(Serialize, Clone)]
@@ -275,6 +285,12 @@ pub fn download(
     cancelled: &dyn Fn() -> bool,
 ) -> anyhow::Result<()> {
     let spec = spec(id).ok_or_else(|| anyhow::anyhow!("unknown model {id}"))?;
+    if id == "parakeet-v3" {
+        // ONNX files an older Silas left in this folder would be deleted below; they move aside first.
+        move_legacy_parakeet().map_err(|e| {
+            anyhow::anyhow!("Couldn't move the older Parakeet v3 files aside, so the new build won't download over them: {e}")
+        })?;
+    }
     let dest = model_path(id);
     let staging = models_dir().join(format!(".{id}.staging"));
     let part = models_dir().join(format!(".{id}.tar.gz.part"));
@@ -477,10 +493,21 @@ pub enum Engine {
     Cohere(CohereModel),
 }
 
+static GGUF_THREADS: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+/// `silas-bench --threads`: this process's GGUF engine uses `n` threads; 0 goes back to `gguf_threads`'s count.
+pub fn set_gguf_threads(n: i32) {
+    GGUF_THREADS.store(n, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// CPU threads for the GGUF engine: one per physical core this process may run on, at most 8.
 /// ggml's own default counts hyperthreads, and two threads on one core only slow it down; the
 /// smaller of the two counts respects a CPU affinity (taskset, a container's cpuset).
 pub fn gguf_threads() -> i32 {
+    let set = GGUF_THREADS.load(std::sync::atomic::Ordering::Relaxed);
+    if set > 0 {
+        return set;
+    }
     let allowed = std::thread::available_parallelism().map_or(4, |n| n.get());
     let cores = sysinfo::System::physical_core_count().unwrap_or(allowed);
     allowed.min(cores).clamp(1, 8) as i32
@@ -610,6 +637,8 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(pick["model"].as_str().unwrap(), format!("handy-computer/parakeet-tdt-0.6b-v3-gguf {}", files[0].name));
         assert_eq!(files[0].sha256, pick["sha256"].as_str());
+        let mb = m.size_mb as u64 * 1_048_576 / 1_000_000;
+        assert!(include_str!("../../../README.md").contains(&format!("The speech model ({mb} MB)")), "README's First run");
         // Pinned: a commit, not a branch, so the file can't change under its hash.
         let rev = base.rsplit('/').next().unwrap();
         assert!(base.starts_with("https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/"), "{base}");
@@ -618,10 +647,8 @@ mod tests {
         assert!(matches!(spec(PARAKEET_V3_ONNX).unwrap().source, Source::Archive { url, .. } if url.contains("baney75/silas/releases")));
     }
 
-    #[test]
-    fn old_onnx_files_move_to_the_fallback_and_keep_their_user() {
-        let _store = crate::store::TEST_DIR.lock();
-        let dir = std::env::temp_dir().join(format!("pc-legacy-{}", std::process::id()));
+    fn legacy_onnx_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("pc-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         crate::store::set_data_dir(Some(dir.clone()));
         let old = model_path("parakeet-v3");
@@ -629,33 +656,62 @@ mod tests {
         for f in ["encoder-model.int8.onnx", "decoder_joint-model.int8.onnx", "vocab.txt", ".complete"] {
             std::fs::write(old.join(f), b"x").unwrap();
         }
+        dir
+    }
+
+    #[test]
+    fn old_onnx_files_move_to_the_fallback_and_keep_their_user() {
+        let _store = crate::store::TEST_DIR.lock();
+        let dir = legacy_onnx_dir("legacy");
+        let old = model_path("parakeet-v3");
         assert!(!installed("parakeet-v3"), "ONNX files are not the GGUF model");
         let moved = move_legacy_parakeet().unwrap();
         let (onnx, gguf) = (installed(PARAKEET_V3_ONNX), installed("parakeet-v3"));
+        // That start quit before saving: the next one moves nothing and must still retarget.
         let again = move_legacy_parakeet().unwrap();
-        // A finished GGUF install is never moved.
+        let r = |m: &str| ModelResult { model: m.into(), speed: 20.0, wer: 0.01, audio_seconds: 1.0, compute_seconds: 0.05, clips: 9 };
+        let mut report = benchmark::Report::new(benchmark::detect(), vec![r("parakeet-v3"), r("cohere-int4")]);
+        report.pick = Some("parakeet-v3".into());
+        benchmark::save_report(&report);
+        let mut s = crate::store::Settings { model_source: "default".into(), ..Default::default() };
+        let retargeted = retarget_legacy_parakeet(&mut s);
+        let report: benchmark::Report = crate::store::load(benchmark::REPORT_FILE);
+        let mut chose_cohere = crate::store::Settings { model: "cohere-int4".into(), ..Default::default() };
+        let cohere_changed = retarget_legacy_parakeet(&mut chose_cohere);
+        // A finished GGUF install is never moved, and a user on it stays there.
         std::fs::create_dir_all(&old).unwrap();
         std::fs::write(old.join(PARAKEET_V3_GGUF), b"x").unwrap();
         std::fs::write(old.join(".complete"), b"ok").unwrap();
         let gguf_moved = move_legacy_parakeet().unwrap();
         let gguf_after = installed("parakeet-v3");
+        let mut on_gguf = crate::store::Settings::default();
+        let gguf_retargeted = retarget_legacy_parakeet(&mut on_gguf);
         crate::store::set_data_dir(None);
         let _ = std::fs::remove_dir_all(dir);
         assert!(moved && onnx && !gguf, "moved {moved}, onnx {onnx}, gguf {gguf}");
         assert!(!again && !gguf_moved && gguf_after);
-
-        let mut s = crate::store::Settings { model_source: "default".into(), ..Default::default() };
-        let r = |m: &str| ModelResult { model: m.into(), speed: 20.0, wer: 0.01, audio_seconds: 1.0, compute_seconds: 0.05, clips: 9 };
-        let mut report = benchmark::Report::new(benchmark::detect(), vec![r("parakeet-v3"), r("cohere-int4")]);
-        report.pick = Some("parakeet-v3".into());
-        retarget_legacy_parakeet(&mut s, Some(&mut report));
+        assert!(retargeted);
         assert_eq!((s.model.as_str(), s.model_source.as_str()), (PARAKEET_V3_ONNX, "default"));
         let ids: Vec<_> = report.results.iter().map(|x| x.model.as_str()).collect();
         assert_eq!(ids, [PARAKEET_V3_ONNX, "cohere-int4"]);
         assert_eq!(report.pick, None, "the ONNX build must not be marked best over the GGUF one");
-        let mut chose_cohere = crate::store::Settings { model: "cohere-int4".into(), ..Default::default() };
-        retarget_legacy_parakeet(&mut chose_cohere, None);
-        assert_eq!(chose_cohere.model, "cohere-int4");
+        assert!(!cohere_changed && chose_cohere.model == "cohere-int4");
+        assert!(!gguf_retargeted && on_gguf.model == "parakeet-v3");
+    }
+
+    #[test]
+    fn a_failed_move_never_lets_the_gguf_download_delete_the_onnx_files() {
+        let _store = crate::store::TEST_DIR.lock();
+        let dir = legacy_onnx_dir("legacy-stuck");
+        // A file where the fallback's folder goes makes the rename fail.
+        std::fs::create_dir_all(models_dir()).unwrap();
+        std::fs::write(model_path(PARAKEET_V3_ONNX), b"in the way").unwrap();
+        let err = download("parakeet-v3", &|_, _, _| {}, &|| true).unwrap_err().to_string();
+        let kept = model_path("parakeet-v3").join("encoder-model.int8.onnx").exists();
+        crate::store::set_data_dir(None);
+        let _ = std::fs::remove_dir_all(dir);
+        assert!(err.contains("move the older Parakeet v3 files aside"), "{err}");
+        assert!(kept, "the ONNX install was deleted");
     }
 
     #[test]
@@ -663,6 +719,10 @@ mod tests {
         let n = gguf_threads();
         assert!((1..=8).contains(&n), "{n}");
         assert!(n as usize <= std::thread::available_parallelism().map_or(8, |p| p.get()));
+        set_gguf_threads(11);
+        let set = gguf_threads();
+        set_gguf_threads(0);
+        assert_eq!((set, gguf_threads()), (11, n), "silas-bench --threads reaches the engine and its rows");
     }
 
     /// Transcribes the first clip of the bundled set with a real model. Models are big, so this runs
