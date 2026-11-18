@@ -112,6 +112,8 @@ def main():
         for clip in clips:
             w.clip(clip, lambda clip: (transcribe(clip), {"hex_version": VERSION}))
         return
+    # A file left by a killed run would end the wait below before this service is listening.
+    (HOME / ".local/share/hex/local-api.json").unlink(missing_ok=True)
     service = subprocess.Popen([str(BIN), "service"], env=env(), cwd=HOME, stdin=subprocess.DEVNULL,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:

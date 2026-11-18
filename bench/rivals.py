@@ -192,11 +192,13 @@ def winner(better, silas, rival, tie=0.0):
     return "tie" if abs(m) <= tie else ("silas" if m > 0 else "rival")
 
 
-def check(results, current, gates, cpu):
-    """Messages for every metric where Silas's margin over the scored rival got worse than its slack allows."""
+def check(results, current, gates, cpu, new_rival=None):
+    """Messages for every metric where Silas's margin over the scored rival got worse than its slack allows.
+    A gated metric these rows don't measure fails: leaving out --silas or --typing must not pass. With
+    `new_rival` (--record), the margin now is against the rival's new numbers and is held to the recorded one."""
     fails = []
     for key, m in results["metrics"].items():
-        if m["gate"] not in gates or key not in current:
+        if m["gate"] not in gates:
             continue
         if m["gate"] in ("latency", "typing") and cpu != results["machine"]["cpu"]:
             print(f"skip {key}: recorded on {results['machine']['cpu']}, this is {cpu}")
@@ -204,7 +206,12 @@ def check(results, current, gates, cpu):
         rival = m["rival"]
         if rival is None or m["silas"] is None:
             continue
-        now, then = margin(m["better"], current[key], rival), margin(m["better"], m["silas"], rival)
+        if current.get(key) is None:
+            fails.append(f"{key}: not measured by these rows (gate {m['gate']!r} asked for it)")
+            continue
+        if new_rival and m.get("rival_source", "measured") == "measured" and new_rival.get(key) is not None:
+            rival = new_rival[key]
+        now, then = margin(m["better"], current[key], rival), margin(m["better"], m["silas"], m["rival"])
         verdict = winner(m["better"], current[key], rival, m.get("tie", 0.0))
         line = f"{key}: Silas {current[key]} vs {results['scored']} {rival} ({verdict}; margin {now:+.4g}, recorded {then:+.4g})"
         if now < then - m["slack"]:
@@ -246,7 +253,7 @@ def main(argv=None):
         if not (a.silas and a.rival_rows):
             p.error("--record needs --silas and --rival")
         rival = best([measure(load(f), manifest) for f in a.rival_rows], results["metrics"])
-        fails = [] if a.allow_worse else check(results, current, gates, cpu)
+        fails = [] if a.allow_worse else check(results, current, gates, cpu, new_rival=rival)
         if fails or problems:
             print("\n".join(fails + problems))
             print("not recorded: Silas fell behind (pass --allow-worse to record a known loss)")
@@ -259,7 +266,8 @@ def main(argv=None):
             m["silas"] = current[key]
             m["winner"] = winner(m["better"], m["silas"], m["rival"], m.get("tie", 0.0)) if m["rival"] is not None else "not scored"
             m["margin"] = round(margin(m["better"], m["silas"], m["rival"]), 6) if m["rival"] is not None else None
-        results["machine"]["cpu"] = cpu
+        if gates & {"latency", "typing"}:  # an accuracy-only record keeps the CPU the timings came from
+            results["machine"]["cpu"] = cpu
         results["recorded"] = date.today().isoformat()
         path.write_text(json.dumps(results, indent=2) + "\n")
         print(f"recorded {path.relative_to(ROOT)}")

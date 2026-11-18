@@ -79,6 +79,23 @@ class Check(unittest.TestCase):
         self.assertEqual(len(quiet(rivals.check, RESULTS, now, {"latency"}, CPU)), 1)
         self.assertEqual(quiet(rivals.check, RESULTS, now, {"latency"}, "another CPU"), [])
 
+    def test_a_gated_metric_the_rows_dont_measure_fails(self):
+        now = recorded()
+        del now["wer"]
+        fails = quiet(rivals.check, RESULTS, now, {"accuracy"}, CPU)
+        self.assertTrue(any("wer" in f and "not measured" in f for f in fails))
+        self.assertTrue(quiet(rivals.check, RESULTS, {"setup_steps": 1}, {"accuracy"}, CPU))
+        now = recorded()
+        del now["typing_ms"]
+        self.assertTrue(quiet(rivals.check, RESULTS, now, {"typing"}, CPU))
+
+    def test_record_holds_silas_to_the_rivals_new_numbers(self):
+        m = RESULTS["metrics"]["wer"]
+        better_rival = {"wer": m["rival"] - m["slack"] - 0.01}  # the rival improved; Silas did not
+        self.assertEqual(quiet(rivals.check, RESULTS, recorded(), {"accuracy"}, CPU), [])
+        fails = quiet(rivals.check, RESULTS, recorded(), {"accuracy"}, CPU, new_rival=better_rival)
+        self.assertTrue(any("wer" in f for f in fails))
+
     def test_a_metric_outside_the_gates_is_not_checked(self):
         now = recorded()
         now["wer"] = 1.0
