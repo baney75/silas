@@ -3,7 +3,8 @@
 //! enigo typed about 108 characters a second here, not the pace's 700. For every key it listed the
 //! input devices and waited on a round trip, and it had the server hold each press and release at
 //! least 1 ms; once a capital or symbol came back, every key after it waited 12 ms until the next
-//! one. This writes a run's events at once and waits on the server only when typing ends.
+//! one. This writes a run's events at once and waits on the server only when typing ends, after a
+//! Return, and around a key that has to wait.
 
 use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::xkb::{self, ConnectionExt as _};
@@ -15,7 +16,7 @@ use x11rb::wrapper::ConnectionExt as _;
 const RETURN: u32 = 0xff0d;
 const TAB: u32 = 0xff09;
 
-/// How long the server holds a press of the key just released, in ms. Qt's xcb plugin reads a
+/// How long the typer waits before a press of the key just released, in ms. Qt's xcb plugin reads a
 /// press of the same keycode within 10 ms of its release as autorepeat, and SDL one within 2 ms; a
 /// game can drop the repeat. 11 ms clears both, so the second "e" in "needs" is a new key. Other
 /// keys go at once.
@@ -115,7 +116,7 @@ impl Spares {
     }
 }
 
-/// One XTest event: a keycode, down or up, and how long the server holds it first.
+/// One XTest event: a keycode, down or up, and how long the typer waits before it.
 #[derive(Debug, PartialEq)]
 pub(super) struct Event {
     pub keycode: u8,
@@ -124,6 +125,31 @@ pub(super) struct Event {
 }
 
 /// The events that type one key, given the key typed before it. Shift wraps a key that needs it.
+/// What the typer does for a key: send an event, wait on the server to take everything sent, or sleep.
+#[derive(Debug, PartialEq)]
+pub(super) enum Step {
+    Key(u8, bool),
+    Sync,
+    Sleep(u32),
+}
+
+/// The steps that send `events`. A wait is the typer's own, after the server has caught up, and
+/// the server catches up again after the key: XTest's delay would hold the server while the typer
+/// kept sending, so events would bunch up behind it and land after focus moved.
+pub(super) fn steps(events: &[Event]) -> Vec<Step> {
+    let mut out = vec![];
+    for e in events {
+        if e.hold_ms > 0 {
+            out.extend([Step::Sync, Step::Sleep(e.hold_ms)]);
+        }
+        out.push(Step::Key(e.keycode, e.down));
+    }
+    if events.iter().any(|e| e.hold_ms > 0) {
+        out.push(Step::Sync);
+    }
+    out
+}
+
 pub(super) fn strokes(keycode: u8, shift: Option<u8>, last: Option<u8>) -> Vec<Event> {
     let mut out = vec![];
     let press = |keycode: u8, out: &mut Vec<Event>| {
@@ -158,6 +184,8 @@ pub(super) struct Keys {
     spares: Spares,
     /// The next press is of a keycode just bound to a new keysym.
     rebound: bool,
+    /// The last event waited inside itself.
+    held: bool,
     last: Option<u8>,
 }
 
@@ -180,14 +208,17 @@ impl Keys {
         // The modifier map's first row is Shift.
         let mods = conn.get_modifier_mapping()?.reply()?;
         let shift = mods.keycodes[..mods.keycodes.len() / 8].iter().copied().find(|&k| k != 0);
-        let (group, locks) = if conn.xkb_use_extension(1, 0)?.reply()?.supported {
+        // A server started without XKB (`-kb`) refuses its requests: one group, no locks.
+        let xkb = conn.extension_information(xkb::X11_EXTENSION_NAME)?.is_some();
+        let (group, locks) = if xkb && conn.xkb_use_extension(1, 0)?.reply()?.supported {
             let state = conn.xkb_get_state(xkb::ID::USE_CORE_KBD.into())?.reply()?;
             (u8::from(state.group), level_locks(state.locked_mods))
         } else {
             (0, ModMask::from(0u16))
         };
         let spares = Spares { free: map.spare(), bound: vec![] };
-        let keys = Self { conn, root, map, shift, group, locks, spares, rebound: false, last: None };
+        let (rebound, held, last) = (false, false, None);
+        let keys = Self { conn, root, map, shift, group, locks, spares, rebound, held, last };
         // Under Caps Lock a letter's bare key types its capital; with the lock lifted, every key
         // types the column it is found in. Drop locks it again.
         keys.lock(ModMask::from(0u16))?;
@@ -236,15 +267,32 @@ impl Keys {
     }
 
     fn send(&mut self, keycode: u8, shift: Option<u8>) -> anyhow::Result<()> {
-        for mut e in strokes(keycode, shift, self.last) {
+        let mut events = strokes(keycode, shift, self.last);
+        for e in &mut events {
             if e.down && e.keycode == keycode && std::mem::take(&mut self.rebound) {
                 e.hold_ms = e.hold_ms.max(REBIND_HOLD_MS);
             }
-            let kind = if e.down { xproto::KEY_PRESS_EVENT } else { xproto::KEY_RELEASE_EVENT };
-            self.conn.xtest_fake_input(kind, e.keycode, e.hold_ms, self.root, 0, 0, 0)?;
-            self.last = Some(e.keycode);
+        }
+        for step in steps(&events) {
+            match step {
+                Step::Key(k, down) => {
+                    let kind = if down { xproto::KEY_PRESS_EVENT } else { xproto::KEY_RELEASE_EVENT };
+                    self.conn.xtest_fake_input(kind, k, 0, self.root, 0, 0, 0)?;
+                    self.last = Some(k);
+                }
+                Step::Sync => self.conn.sync()?,
+                Step::Sleep(ms) => {
+                    std::thread::sleep(std::time::Duration::from_millis(ms.into()));
+                    self.held = true;
+                }
+            }
         }
         Ok(())
+    }
+
+    /// Whether an event since the last ask waited inside itself, so the next gap runs from its end.
+    pub fn held(&mut self) -> bool {
+        std::mem::take(&mut self.held)
     }
 
     pub fn text(&mut self, t: &str) -> anyhow::Result<()> {
@@ -264,7 +312,8 @@ impl Keys {
             None
         };
         self.send(k, shift)?;
-        self.conn.flush()?;
+        // A Return may move focus on purpose; the next focus check sees where it went.
+        self.conn.sync()?;
         Ok(())
     }
 
@@ -386,6 +435,17 @@ mod tests {
         // A different key goes at once.
         assert_eq!(strokes(27, None, Some(26))[0].hold_ms, 0);
         assert_eq!(strokes(27, None, None)[0].hold_ms, 0);
+    }
+
+    #[test]
+    fn a_wait_starts_after_the_server_caught_up_and_the_server_catches_up_after_the_key() {
+        let held = steps(&strokes(26, None, Some(26)));
+        let want = [Step::Sync, Step::Sleep(REPEAT_HOLD_MS), Step::Key(26, true), Step::Key(26, false)];
+        assert_eq!(held[..4], want);
+        assert_eq!(held.last(), Some(&Step::Sync), "nothing is in flight at the next focus check");
+        // A key with no wait is one write: no round trip.
+        let plain = steps(&strokes(27, Some(50), Some(26)));
+        assert!(plain.iter().all(|s| matches!(s, Step::Key(..))), "{plain:?}");
     }
 
     #[test]

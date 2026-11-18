@@ -112,6 +112,11 @@ trait Keys {
     }
     fn text(&mut self, t: &str) -> anyhow::Result<()>;
     fn enter(&mut self, shift: bool) -> anyhow::Result<()>;
+    /// Whether the last event waited inside itself (an X11 key the app must see apart from the one
+    /// before it), so the gap to the next event runs from when it ended.
+    fn held(&mut self) -> bool {
+        false
+    }
     /// Waits until the last event has left, so a run counts as typed only once it has.
     fn finish(&mut self) -> anyhow::Result<()> {
         Ok(())
@@ -160,15 +165,21 @@ fn type_with(
                         return Ok(false);
                     }
                     k.text(&c)?;
+                    if k.held() {
+                        due = Instant::now() + p.gap;
+                    }
                 }
             }
             Piece::Newline => {
-                pace(&mut due, p.gap * 4);
+                pace(&mut due, p.gap);
                 if !still_here(after_focus_key) {
                     return Ok(false);
                 }
                 after_focus_key = true;
                 k.enter(shift_enter)?;
+                // Four gaps from when the Return landed, however long sending it took: the app may
+                // be busy with it (a new line, a sent message).
+                due = Instant::now() + p.gap * 4;
             }
             Piece::Tab => {
                 pace(&mut due, p.gap);
@@ -177,6 +188,9 @@ fn type_with(
                 }
                 after_focus_key = true;
                 k.text("\t")?;
+                if k.held() {
+                    due = Instant::now() + p.gap;
+                }
             }
         }
     }
@@ -304,6 +318,13 @@ impl Keys for Keyboard {
                 run(tool, &mut cmd)
             }
             Self::X11(x) => x.enter(shift),
+        }
+    }
+
+    fn held(&mut self) -> bool {
+        match self {
+            Self::Tool(_) => false,
+            Self::X11(x) => x.held(),
         }
     }
 
@@ -447,6 +468,11 @@ mod tests {
         /// How long the `cost` sleeps really took (a loaded CI runner oversleeps a lot).
         spent: Duration,
         finished: bool,
+        /// The text event (counted from 0) that waits inside itself, and for how long.
+        hold: Option<(usize, Duration)>,
+        held: bool,
+        /// When each event, Returns included, started and ended.
+        spans: Vec<(Instant, Instant)>,
     }
 
     impl Keys for Fake {
@@ -456,16 +482,40 @@ mod tests {
             let t0 = Instant::now();
             sleep(self.cost);
             self.spent += t0.elapsed();
+            if let Some((_, d)) = self.hold.filter(|&(n, _)| n == self.starts.len() - 1) {
+                sleep(d);
+                self.held = true;
+            }
+            self.spans.push((t0, Instant::now()));
             Ok(())
         }
         fn enter(&mut self, shift: bool) -> anyhow::Result<()> {
+            self.spans.push((Instant::now(), Instant::now()));
             self.log.push(if shift { "Shift+Return" } else { "Return" }.into());
             Ok(())
+        }
+        fn held(&mut self) -> bool {
+            std::mem::take(&mut self.held)
         }
         fn finish(&mut self) -> anyhow::Result<()> {
             self.finished = true;
             Ok(())
         }
+    }
+
+    #[test]
+    fn the_gap_after_a_key_that_waited_and_after_a_return_runs_from_when_it_ended() {
+        // "Hello\nWorld" at steady, where the second "l" waits 11 ms inside itself, as a doubled
+        // X11 key does. Before, "o" and the Return came right behind it in one burst.
+        let p = Pace::from_setting("steady");
+        let mut k = Fake { hold: Some((3, Duration::from_millis(11))), ..Fake::default() };
+        assert!(type_with(&mut k, "Hello\nWorld", p, false, &|_| true).unwrap());
+        assert_eq!(k.log[3..7], ["l", "o", "Return", "W"]);
+        let s = &k.spans;
+        assert!(s[3].1 - s[3].0 >= Duration::from_millis(11));
+        assert!(s[4].0 - s[3].1 >= p.gap, "o came {:?} after the wait", s[4].0 - s[3].1);
+        assert!(s[5].0 - s[4].0 >= p.gap, "Return came {:?} after o", s[5].0 - s[4].0);
+        assert!(s[6].0 - s[5].1 >= p.gap * 4, "W came {:?} after Return", s[6].0 - s[5].1);
     }
 
     const NO_GAP: Pace = Pace { chunk: 1, gap: Duration::ZERO };
