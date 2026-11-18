@@ -1333,27 +1333,14 @@ impl Core {
         let done = pieces.map(|p| p.finish()).unwrap_or_default();
         let rest = rec.finish_from(done.raw_samples);
         let language = me.settings.lock().language.clone();
-        // After a piece, what's left can be nothing but the end of a pause.
-        let rest = if !done.text.is_empty() && crate::pieces::is_silence(&rest) {
-            Ok(String::new())
-        } else {
+        let raw = match crate::pieces::transcript(done, &rest, |audio| {
             let mut engine = me.engine.lock();
             match engine.as_mut() {
-                Some((_, e)) => e.transcribe(&rest, &language),
+                Some((_, e)) => e.transcribe(audio, &language),
                 None => Err(anyhow::anyhow!("No model is loaded")),
             }
-        };
-        let raw = match rest {
-            Ok(t) => {
-                let mut all = done.text;
-                crate::pieces::join(&mut all, &t);
-                all
-            }
-            // What was already transcribed is still worth typing.
-            Err(e) if !done.text.is_empty() => {
-                log::warn!("transcribing the end of a dictation failed: {e}");
-                done.text
-            }
+        }) {
+            Ok(t) => t,
             Err(e) => {
                 me.fail(format!("Transcription failed: {e}"));
                 return;

@@ -7,6 +7,8 @@
 //! and the link that would share it. Progress goes to stderr.
 //! Set SILAS_DICT=<dictionary.json> to also print the text after the dictionary.
 //! Prints load time, then per-file seconds of audio, seconds to transcribe and the text.
+//! To score Silas through the whole dictation path on a test set, use the `silas-bench run` in
+//! core/voice instead (bench/HARNESS.md).
 
 use std::path::PathBuf;
 use std::time::Instant;

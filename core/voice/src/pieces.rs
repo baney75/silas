@@ -6,7 +6,7 @@ use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::audio::{resample, RATE};
 
@@ -21,7 +21,7 @@ const IMPATIENT_PAUSE_SECONDS: f32 = 0.3;
 const SILENCE_RMS: f32 = 0.003;
 const FRAME_SECONDS: f32 = 0.02;
 /// How often the worker looks at the microphone's buffer.
-const POLL: Duration = Duration::from_millis(100);
+pub const POLL: Duration = Duration::from_millis(100);
 
 /// Where to cut this audio: the middle of its longest pause at least `MIN_PIECE_SECONDS` in, the latest of equals, or
 /// None to wait for more. Longest because people pause longer between sentences than inside them.
@@ -80,6 +80,8 @@ pub struct Done {
     pub text: String,
     /// How many samples of the microphone's buffer that text covers.
     pub raw_samples: usize,
+    /// When the first piece's text was ready.
+    pub first: Option<Instant>,
 }
 
 /// Whether audio holds nothing to transcribe.
@@ -147,6 +149,80 @@ pub fn join(text: &mut String, piece: &str) {
     }
 }
 
+/// The worker's decisions without its thread or clock, so a replay on simulated time cuts exactly where the
+/// worker would.
+pub struct Cutter {
+    rate: u32,
+    /// With no pause found, half a second of new audio before copying the buffer again.
+    next_look: usize,
+    pub done: Done,
+}
+
+impl Cutter {
+    pub fn new(rate: u32) -> Self {
+        Self {
+            rate,
+            next_look: 0,
+            done: Done::default(),
+        }
+    }
+
+    /// Whether a buffer this long is worth a look now, and if so where the unprocessed audio starts.
+    pub fn look_from(&mut self, len: usize) -> Option<usize> {
+        let need = (MIN_PIECE_SECONDS * self.rate as f32) as usize;
+        if len < self.done.raw_samples + need || len < self.next_look {
+            return None;
+        }
+        self.next_look = len + self.rate as usize / 2;
+        Some(self.done.raw_samples)
+    }
+
+    /// The next piece of the unprocessed audio: 16 kHz samples up to the cut, and how many buffer samples that covers.
+    pub fn piece(&self, pending: &[f32]) -> Option<(Vec<f32>, usize)> {
+        let mut audio = resample(pending, self.rate, RATE);
+        let cut = find_cut(&audio, RATE)?;
+        audio.truncate(cut);
+        Some((
+            audio,
+            (cut as u64 * self.rate as u64 / RATE as u64) as usize,
+        ))
+    }
+
+    pub fn add(&mut self, text: &str, raw_samples: usize) {
+        join(&mut self.done.text, text);
+        self.done.raw_samples += raw_samples;
+        if !text.trim().is_empty() {
+            self.done.first.get_or_insert_with(Instant::now);
+        }
+    }
+}
+
+/// The whole dictation's text: what the pieces got through, then `rest`, the audio after them. After a piece, a rest
+/// that is only the end of a pause isn't transcribed; if the rest fails, the pieces' text is still worth typing.
+pub fn transcript(
+    done: Done,
+    rest: &[f32],
+    transcribe: impl FnOnce(&[f32]) -> anyhow::Result<String>,
+) -> anyhow::Result<String> {
+    let tail = if !done.text.is_empty() && is_silence(rest) {
+        Ok(String::new())
+    } else {
+        transcribe(rest)
+    };
+    match tail {
+        Ok(t) => {
+            let mut all = done.text;
+            join(&mut all, &t);
+            Ok(all)
+        }
+        Err(e) if !done.text.is_empty() => {
+            log::warn!("transcribing the end of a dictation failed: {e}");
+            Ok(done.text)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 pub struct Pieces {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<Done>>,
@@ -162,10 +238,7 @@ impl Pieces {
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
         let thread = std::thread::spawn(move || {
-            let mut done = Done::default();
-            let need = (MIN_PIECE_SECONDS * rate as f32) as usize;
-            // With no pause found, half a second of new audio before copying the buffer again.
-            let mut next_look = 0;
+            let mut cutter = Cutter::new(rate);
             while !stopping.load(Ordering::Relaxed) {
                 // A release wakes this at once, so it never adds to the wait.
                 std::thread::park_timeout(POLL);
@@ -174,21 +247,16 @@ impl Pieces {
                 }
                 let pending: Vec<f32> = {
                     let buffer = raw.lock();
-                    if buffer.len() < done.raw_samples + need || buffer.len() < next_look {
+                    let Some(from) = cutter.look_from(buffer.len()) else {
                         continue;
-                    }
-                    next_look = buffer.len() + rate as usize / 2;
-                    buffer[done.raw_samples..].to_vec()
+                    };
+                    buffer[from..].to_vec()
                 };
-                let audio = resample(&pending, rate, RATE);
-                let Some(cut) = find_cut(&audio, RATE) else {
+                let Some((audio, covers)) = cutter.piece(&pending) else {
                     continue;
                 };
-                match transcribe(&audio[..cut]) {
-                    Ok(piece) => {
-                        join(&mut done.text, &piece);
-                        done.raw_samples += (cut as u64 * rate as u64 / RATE as u64) as usize;
-                    }
+                match transcribe(&audio) {
+                    Ok(piece) => cutter.add(&piece, covers),
                     // Whatever's left goes through at release, the ordinary way.
                     Err(e) => {
                         log::warn!("transcribing a piece failed: {e}");
@@ -196,7 +264,7 @@ impl Pieces {
                     }
                 }
             }
-            done
+            cutter.done
         });
         Self {
             stop,

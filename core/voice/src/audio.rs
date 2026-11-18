@@ -142,6 +142,36 @@ impl Recording {
         })
     }
 
+    /// A recording of audio already in hand, delivered the way a microphone would: 10 ms at a time in real time
+    /// from now, then silence (a quiet room) until stopped. Benchmarks replay test clips through this.
+    pub fn replay(audio: Vec<f32>, rate: u32) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let samples = Arc::new(Mutex::new(Vec::with_capacity(audio.len() + rate as usize)));
+        let first = Arc::new(OnceLock::new());
+        let (stop2, samples2, first2) = (stop.clone(), samples.clone(), first.clone());
+        let thread = std::thread::spawn(move || {
+            let start = Instant::now();
+            first2.get_or_init(|| start);
+            let mut fed = 0;
+            while !stop2.load(Ordering::Relaxed) {
+                let due = (start.elapsed().as_secs_f64() * rate as f64) as usize;
+                if due > fed {
+                    let mut buf = samples2.lock();
+                    buf.extend((fed..due).map(|i| audio.get(i).copied().unwrap_or(0.0)));
+                    fed = due;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        });
+        Self {
+            stop,
+            samples,
+            rate,
+            thread: Some(thread),
+            first,
+        }
+    }
+
     /// When the microphone delivered its first sample, if it has.
     pub fn first_sample(&self) -> Option<Instant> {
         self.first.get().copied()

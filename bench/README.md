@@ -5,6 +5,9 @@ A fixed speech test set that Silas and rival dictation apps are scored on: 250 c
 reference. Audio is not in git. It lives in the `bench-set-v1` release of this repo
 and is checked file by file against `bench/checksums.sha256`.
 
+To score Silas and rival engines on it, and the ratchet that fails when Silas gets worse,
+see [HARNESS.md](HARNESS.md).
+
 ```sh
 python3 -I bench/tools/fetch.py              # download and verify into ~/.cache/silas-bench/bench-set-v1
 python3 -I bench/tools/check.py              # counts, minutes, format and duration of every clip
