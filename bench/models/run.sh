@@ -4,7 +4,7 @@
 #   bench/models/run.sh <id>=<model> ...
 # <model> is an app model id (parakeet-v3), gguf:<file> (transcribe.cpp), or whisper:<ggml name> (starts a
 # whisper-server with 3 threads on the same cores and adds its CPU and memory to each row). Rows go to
-# bench/models/$RUN/<id>.jsonl; a finished file (250 rows) is skipped.
+# bench/models/$RUN/<id>.jsonl; a finished file (250 rows, or a committed .jsonl.gz) is skipped.
 set -u
 WT=$(cd "$(dirname "$0")/../.." && pwd)
 BIN=${BIN:-$WT/core/voice/target/release/silas-bench}
@@ -24,6 +24,7 @@ hold() {
 
 for item in "$@"; do
   id=${item%%=*}; model=${item#*=}
+  [ -s "$OUT/$id.jsonl.gz" ] && continue
   [ -s "$OUT/$id.jsonl" ] && [ "$(wc -l < "$OUT/$id.jsonl")" -ge 250 ] && continue
   if [[ $model == gguf:* ]]; then
     until [ -s "${model#gguf:}" ]; do sleep 30; done  # still downloading

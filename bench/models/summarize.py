@@ -10,6 +10,7 @@ peak memory, CPU seconds per audio minute and model load time.
 """
 
 import argparse
+import gzip
 import json
 import random
 import sys
@@ -51,8 +52,14 @@ def rounded(x, n=4):
     return None if x is None else round(x, n)
 
 
+def read_rows(path):
+    """Rows from a `silas-bench run` file, gzipped (`.jsonl.gz`, as committed) or not."""
+    text = gzip.decompress(path.read_bytes()).decode() if path.suffix == ".gz" else path.read_text()
+    return [json.loads(l) for l in text.splitlines() if l.strip()]
+
+
 def candidate(c, manifest, base):
-    rows = [json.loads(l) for l in (base / c["rows"]).read_text().splitlines() if l.strip()]
+    rows = read_rows(base / c["rows"])
     s = score.summarize(rows, manifest, score.normalize_silas, random.Random(score.SEED))
     o, cats = s["overall"], s["categories"]
     wer = {k: rounded(cats[k]["wer"]) for k in CATEGORIES if k in cats and k != "command"}

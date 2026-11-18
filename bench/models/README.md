@@ -3,7 +3,8 @@
 Candidate speech models for Silas, scored on the bench set (`../README.md`) through Silas's own dictation path, so
 every model is timed and scored the way the app would run it. Each study has a results page (`<run>.md`), its
 numbers (`<run>.json`), the candidates file it was made from (`<run>.candidates.json`) and the per-clip rows
-(`<run>/<id>.jsonl`). Models and audio are not in git.
+(`<run>/<id>.jsonl.gz`; `run.sh` writes `.jsonl`, and `gzip -n` it before committing so the rows stay small and out
+of review diffs). Models and audio are not in git.
 
 | Study | Question |
 | --- | --- |
