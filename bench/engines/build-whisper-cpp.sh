@@ -14,10 +14,11 @@ if [ ! -d "$SRC" ]; then
 fi
 test "$(git -C "$SRC" describe --tags --exact-match)" = "$TAG"
 
-cmake() { if command -v cmake >/dev/null; then command cmake "$@"; else uvx --from 'cmake==3.31.6' cmake "$@"; fi; }
+# An array, not a shell function: `nice` runs only executables.
+if command -v cmake >/dev/null; then CMAKE=(cmake); else CMAKE=(uvx --from 'cmake==3.31.6' cmake); fi
 if [ ! -x "$SRC/build/bin/whisper-server" ]; then
-  cmake -S "$SRC" -B "$SRC/build" -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_SERVER=ON -DWHISPER_BUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
-  nice -n 10 cmake --build "$SRC/build" -j "$JOBS" --target whisper-server whisper-cli
+  "${CMAKE[@]}" -S "$SRC" -B "$SRC/build" -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_SERVER=ON -DWHISPER_BUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
+  nice -n 10 "${CMAKE[@]}" --build "$SRC/build" -j "$JOBS" --target whisper-server whisper-cli
 fi
 
 mkdir -p "$MODELS"

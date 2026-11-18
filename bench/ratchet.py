@@ -58,6 +58,23 @@ def metrics(rows, manifest):
     }
 
 
+def incomplete(rows, manifest):
+    """Why `rows` are not exactly one result per expected clip, as readable lines. Empty means complete.
+    A results file that drops a failing clip could otherwise pass on the clips left in its category."""
+    ids = [r.get("id") for r in rows]
+    bad = []
+    dup = sorted({i for i in ids if ids.count(i) > 1}, key=str)
+    missing = sorted(set(manifest) - set(ids))
+    extra = sorted({i for i in ids if i not in manifest}, key=str)
+    if missing:
+        bad.append(f"results miss {len(missing)} clip(s): {', '.join(missing[:5])}")
+    if dup:
+        bad.append(f"results repeat {len(dup)} clip(s): {', '.join(map(str, dup[:5]))}")
+    if extra:
+        bad.append(f"results hold {len(extra)} clip(s) outside the subset: {', '.join(map(str, extra[:5]))}")
+    return bad
+
+
 def check(base, new, gate="all"):
     """Regressions of `new` against `base` beyond the slack, as readable lines. Empty means it passes."""
     bad = []
@@ -140,6 +157,11 @@ def main(argv=None):
         results.parent.mkdir(exist_ok=True)
         run_silas(cfg, binary, not a.real_time, results)
     rows = [json.loads(l) for l in results.read_text().splitlines() if l.strip()]
+    gaps = incomplete(rows, manifest)
+    for g in gaps:
+        print("INCOMPLETE", g)
+    if gaps:
+        return 1
     new = metrics(rows, manifest)
     group = cfg.get("baselines", {}).get(a.baseline, {})
     key = cpu or "unknown"
@@ -164,6 +186,9 @@ def main(argv=None):
         if base is None:
             print(f"note: no {a.baseline!r} baseline for {key}; comparing with the CPUs recorded ({', '.join(group)}). "
                   "Text differs by a few words across CPUs, so passing against any one of them passes.")
+            if os.environ.get("GITHUB_ACTIONS"):
+                print(f"::warning title=ratchet: unrecorded CPU::{key} has no {a.baseline!r} baseline; "
+                      "compared with the closest recorded CPU, which is looser than its own baseline would be")
         found = {k: check(b, new, a.gate) for k, b in candidates.items()}
         nearest = min(found, key=lambda k: len(found[k]))
         bad = found[nearest]
@@ -179,6 +204,10 @@ def main(argv=None):
     if a.update:
         if base is not None and not no_worse(base, new):
             print("not updated: some metric is worse than the ratchet (within the slack), so it stays put")
+            return 0
+        if base is None and candidates and not no_worse(candidates[nearest], new):
+            print(f"not recorded: {key} is worse than {nearest} on some metric (within the slack); "
+                  "seed it with --new-cpu from a run of code that already passed")
             return 0
         cfg.setdefault("baselines", {}).setdefault(a.baseline, {})[key] = {**new, "updated": date.today().isoformat()}
         a.ratchet.write_text(json.dumps(cfg, indent=2) + "\n")

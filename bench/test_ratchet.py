@@ -84,10 +84,10 @@ class EndToEnd(unittest.TestCase):
         self.cfg = self.dir / "ratchet.json"
         self.cfg.write_text(json.dumps({"model": "m", "manifest": str(manifest)}))
 
-    def results(self, name, hyps):
+    def results(self, name, hyps, ids="ab", t_final_ms=300):
         p = self.dir / f"{name}.jsonl"
-        rows = [{"id": i, "engine": "silas", "model": "m", "hypothesis": h, "t_final_ms": 300, "audio_seconds": 2,
-                 "peak_rss_mb": 500, "paced": True} for i, h in zip("ab", hyps)]
+        rows = [{"id": i, "engine": "silas", "model": "m", "hypothesis": h, "t_final_ms": t_final_ms, "audio_seconds": 2,
+                 "peak_rss_mb": 500, "paced": True} for i, h in zip(ids, hyps)]
         p.write_text("".join(json.dumps(r) + "\n" for r in rows))
         return p
 
@@ -121,6 +121,25 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(self.main("--results", str(self.bad), "--baseline", "local", "--cpu", "Slow", "--new-cpu"), 0)
         self.assertEqual(self.main("--results", str(self.bad), "--baseline", "local", "--cpu", "Slow", "--new-cpu"), 1)
         self.assertEqual(self.main("--results", str(self.bad), "--baseline", "local", "--cpu", "Slow"), 0)
+
+    def test_results_must_hold_every_clip_once(self):
+        self.assertEqual(self.main("--results", str(self.good), "--update"), 0)
+        recorded = self.cfg.read_text()
+        # Dropping the failing clip leaves its category measured on the rest; that must not pass or update.
+        dropped = self.results("dropped", ["A dog ran."], ids="b")
+        self.assertEqual(self.main("--results", str(dropped)), 1)
+        self.assertEqual(self.main("--results", str(dropped), "--update"), 1)
+        twice = self.results("twice", ["The cat sat on the mat.", "A dog ran.", "A dog ran."], ids="abb")
+        self.assertEqual(self.main("--results", str(twice)), 1)
+        extra = self.results("extra", ["The cat sat on the mat.", "A dog ran.", "Hi."], ids="abz")
+        self.assertEqual(self.main("--results", str(extra)), 1)
+        self.assertEqual(self.cfg.read_text(), recorded)
+
+    def test_an_unrecorded_cpu_records_only_when_no_worse(self):
+        self.assertEqual(self.main("--results", str(self.good), "--baseline", "ci", "--cpu", "Intel", "--update"), 0)
+        slower = self.results("slower", ["The cat sat on the mat.", "A dog ran."], t_final_ms=330)  # within +15%
+        self.assertEqual(self.main("--results", str(slower), "--baseline", "ci", "--cpu", "AMD", "--update"), 0)
+        self.assertEqual(set(json.loads(self.cfg.read_text())["baselines"]["ci"]), {"Intel"})
 
 
 class Scoring(unittest.TestCase):
