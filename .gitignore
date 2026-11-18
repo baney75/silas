@@ -9,3 +9,7 @@ migration/
 *.part
 .DS_Store
 __pycache__/
+# Core dumps (qemu writes qemu_*.core) hold the crashed process environment, secrets included
+*.core
+core.[0-9]*
+vgcore.*
