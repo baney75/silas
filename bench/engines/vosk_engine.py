@@ -65,7 +65,7 @@ def main():
         words = []
         compute = 0.0
         for i in range(0, len(raw), block):
-            arrives = (i + block) / 2 / 16000
+            arrives = min(i + block, len(raw)) / 2 / 16000  # a short last block arrives when the clip ends
             start = max(arrives, busy)
             t = time.perf_counter()
             if rec.AcceptWaveform(raw[i:i + block]):

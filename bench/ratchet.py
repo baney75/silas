@@ -89,7 +89,9 @@ def check(base, new, gate="all"):
     if gate == "all" and base.get("timing") == new.get("timing"):
         if new["t_final_ms_median"] > base["t_final_ms_median"] * (1 + LATENCY_SLACK):
             bad.append(f"median t_final: {base['t_final_ms_median']:.0f} ms -> {new['t_final_ms_median']:.0f} ms (limit +15%)")
-    if gate == "all" and base.get("peak_rss_mb") and new.get("peak_rss_mb"):
+    if gate == "all" and base.get("peak_rss_mb") and not new.get("peak_rss_mb"):
+        bad.append("peak memory: measured in the baseline, missing from this run")
+    elif gate == "all" and base.get("peak_rss_mb"):
         if new["peak_rss_mb"] > base["peak_rss_mb"] * (1 + MEMORY_SLACK):
             bad.append(f"peak memory: {base['peak_rss_mb']:.0f} MB -> {new['peak_rss_mb']:.0f} MB (limit +10%)")
     return bad
@@ -105,7 +107,7 @@ def no_worse(base, new):
         all(new["wer"][c] <= v for c, v in base["wer"].items())
         and new["formatted_error"] <= base["formatted_error"]
         and new["t_final_ms_median"] <= base["t_final_ms_median"]
-        and (base.get("peak_rss_mb") is None or (new.get("peak_rss_mb") or 0) <= base["peak_rss_mb"])
+        and (base.get("peak_rss_mb") is None or (new.get("peak_rss_mb") is not None and new["peak_rss_mb"] <= base["peak_rss_mb"]))
     )
 
 

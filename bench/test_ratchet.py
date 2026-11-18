@@ -55,6 +55,10 @@ class Ratchet(unittest.TestCase):
         self.assertTrue(ratchet.check(BASE, worse(peak_rss_mb=1101.0)))
         self.assertEqual(ratchet.check(BASE, worse(peak_rss_mb=1099.0)), [])
 
+    def test_memory_missing_from_a_run_fails_and_never_updates(self):
+        self.assertTrue(ratchet.check(BASE, worse(peak_rss_mb=None)))
+        self.assertFalse(ratchet.no_worse(BASE, worse(peak_rss_mb=None)))
+
     def test_the_accuracy_gate_ignores_timing_and_memory(self):
         self.assertEqual(ratchet.check(BASE, worse(t_final_ms_median=9000.0, peak_rss_mb=9000.0), gate="accuracy"), [])
         self.assertTrue(ratchet.check(BASE, worse(wer_clean=0.5), gate="accuracy"))
