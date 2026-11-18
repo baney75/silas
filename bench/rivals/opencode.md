@@ -18,7 +18,7 @@ Against Hex, Silas wins 4 of the 7 metrics scored and loses 3:
 - Hex wins: word accuracy (mostly on accented speech), formatted error, and typing time.
 - Not scored: time to first word and both waits after key up. Hex's times through `hex transcribe` come in whole steps of about 612 ms whatever the clip length (a 3.1 s clip and a 4.4 s clip both took 615 ms, a 122 s clip about 30 steps), so they measure the CLI's polling, not Hex's decoding. They stay unmeasured until Hex is timed through its local API.
 
-The typing loss was the largest: Silas typed its text key by key at about 108 characters a second, while Hex pastes it in one step. Its typer now sends X11 keys straight through XTest at about 800 a second, so the median clip takes 91.6 ms to type instead of 349.9 ms; Hex still wins it, since a paste is one key.
+The typing loss was the largest: Silas typed its text key by key at about 108 characters a second, while Hex pastes it in one step. Its typer now sends X11 keys straight through XTest at about 680 a second, so the median clip takes 104.2 ms to type instead of 349.9 ms; Hex still wins it, since a paste is one key.
 
 ## What OpenCode's voice is
 
@@ -84,7 +84,7 @@ Hex:
 | WER, pooled | 8.2% | 5.3% | **Hex** by 2.9 pts | accuracy |
 | Punctuation F1 | 0.725 | 0.694 | **Silas** by 0.030 | accuracy |
 | Formatted error | 19.8% | 18.0% | **Hex** by 1.8 pts | accuracy |
-| Typing time into the app, median | 91.6 ms | 2.0 ms (modeled) | **Hex** by 90 ms | typing |
+| Typing time into the app, median | 104.2 ms | 2.0 ms (modeled) | **Hex** by 102 ms | typing |
 | Setup steps on Linux | 1 | 2 (OpenCode voice: 6) | **Silas** by 1 | setup |
 | Peak memory | 1213 MB | 2162 MB | **Silas** by 949 MB | latency |
 | CPU s per audio minute | 24.3 | 54.9 | **Silas**, 2.3x less | latency |
@@ -95,7 +95,7 @@ How each was measured:
 - **Hex** ran its pinned 3.4.0 release binary through `hex transcribe` against a warm `hex service`, and again one-shot with no service. Each metric keeps Hex's better run (`--rival` twice). The two differ in text: the service drops a final period on `clean-0011` that one-shot keeps.
 - **Hex picked its CPU engine** on chapel1 ("GPU failed or ran slower"). So its file path is batch, and its time to first word is the clip length plus its wait.
 - **Silas's first piece** arrives while you speak. Its median first word is still later than Hex's batch result because the median clip is about 6 s long.
-- **Typing:** Silas's figure is measured by `xvfb-run -a -s "-screen 0 1280x1024x24 -noreset" silas-bench type`, its typer at the default "fast" pace on X11. Hex's figure is modeled, not measured: one Ctrl+V after a clipboard write, timed as one key event by the old typer. Hex's 100 ms settle runs after the paste, so it is not counted. Silas typed 4745 characters in 5.9 s, about 800 a second (it was 43.9 s, about 108 a second, before the typer wrote to XTest itself); the 122 s longform clip took 2.4 s to type (it was 24.6 s). Without `-noreset`, Xvfb resets each time the typer's connection closes and the next row waits for it, which adds about 36 ms a row.
+- **Typing:** Silas's figure is measured by `xvfb-run -a -s "-screen 0 1280x1024x24 -noreset" silas-bench type`, its typer at the default "fast" pace on X11. Hex's figure is modeled, not measured: one Ctrl+V after a clipboard write, timed as one key event by the old typer. Hex's 100 ms settle runs after the paste, so it is not counted. Silas typed 4745 characters in 7.0 s, about 680 a second (it was 43.9 s, about 108 a second, before the typer wrote to XTest itself); the 122 s longform clip took 2.9 s to type (it was 24.6 s). Keys with no wait go at about 803 a second: the 40 clips have 87 doubled keys, and the typer waits 11 ms before the second press of each so Qt (10 ms) and SDL (2 ms) don't read it as autorepeat, about 1 s in all. Without `-noreset`, Xvfb resets each time the typer's connection closes and the next row waits for it, which adds about 36 ms a row.
 
 ### WER by category (lower is better)
 
@@ -117,7 +117,7 @@ Paired bootstrap, Hex service against Silas real time ([report.json](opencode-ch
 
 ### What it would take to win
 
-- **Typing:** Silas never pastes (AGENTS.md: text goes out as keystrokes and the clipboard is never touched), so typing stays key by key. It went from 349.9 ms to 91.6 ms a clip on X11. On Wayland it types through `wtype`, which waits 2 ms after every press and every release and tops out near 210 characters a second; a Wayland virtual keyboard of Silas's own would lift that.
+- **Typing:** Silas never pastes (AGENTS.md: text goes out as keystrokes and the clipboard is never touched), so typing stays key by key. It went from 349.9 ms to 104.2 ms a clip on X11. On Wayland it types through `wtype`, which waits 2 ms after every press and every release and tops out near 210 characters a second; a Wayland virtual keyboard of Silas's own would lift that.
 - **Accent and noise WER:** this is where Hex's newer Parakeet build wins most.
 - **Wait after key up:** about 225 ms behind at the median, but ahead at p95, and far ahead on long dictation.
 
