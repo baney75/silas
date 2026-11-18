@@ -13,6 +13,8 @@ use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 
+mod keysyms;
+
 const RETURN: u32 = 0xff0d;
 const TAB: u32 = 0xff09;
 
@@ -44,6 +46,15 @@ pub(super) fn keysym(c: char) -> u32 {
     }
 }
 
+/// The legacy keysym for a Unicode keysym, if X has one. Layouts for Cyrillic, Greek, Hebrew,
+/// Central European Latin and others give their keys these (Cyrillic_ef is 0x6c6, not 0x1000444),
+/// so a letter on the layout is only found under this form.
+pub(super) fn legacy(sym: u32) -> Option<u32> {
+    let cp = u16::try_from(sym.checked_sub(0x0100_0000)?).ok()?;
+    let i = keysyms::LEGACY.binary_search_by_key(&cp, |&(c, _)| c).ok()?;
+    Some(keysyms::LEGACY[i].1.into())
+}
+
 /// The server's keyboard map: `per` keysyms for each keycode from `min`. Under XKB a key's first
 /// four keysyms are group 1 level 1 and 2, then group 2 level 1 and 2.
 pub(super) struct Map {
@@ -53,8 +64,8 @@ pub(super) struct Map {
 }
 
 impl Map {
-    /// The keycode that types `sym` in the active `group` (0 for the first layout), and whether it
-    /// needs Shift. Level 1 needs no modifier and level 2 needs Shift, with no level lock held.
+    /// The keycode that types `sym` (or its legacy keysym) in the active `group` (0 for the first
+    /// layout), and whether it needs Shift. Level 1 needs no modifier and level 2 needs Shift, with no level lock held.
     /// Groups past the second, and keysyms not in the active group, get a spare keycode of their own.
     pub fn find(&self, sym: u32, group: u8, shift_ok: bool) -> Option<(u8, bool)> {
         let first = match group {
@@ -62,10 +73,11 @@ impl Map {
             _ => return None,
         };
         let cols = first..first + if shift_ok { 2 } else { 1 };
+        let old = legacy(sym);
         cols.filter(|&col| col < self.per).find_map(|col| {
             self.syms
                 .chunks(self.per)
-                .position(|keys| keys[col] == sym)
+                .position(|keys| keys[col] == sym || Some(keys[col]) == old)
                 .map(|i| (self.min + i as u8, col == first + 1))
         })
     }
@@ -413,6 +425,36 @@ mod tests {
         assert_eq!(m.find(0x61, 2, true), None);
         // A map with one group has no second group's columns.
         assert_eq!(us().find(0x61, 1, true), None);
+    }
+
+    #[test]
+    fn letters_of_cyrillic_greek_and_central_european_layouts_have_legacy_keysyms() {
+        assert_eq!(legacy(keysym('ф')), Some(0x6c6), "Cyrillic_ef");
+        assert_eq!(legacy(keysym('α')), Some(0x7e1), "Greek_alpha");
+        assert_eq!(legacy(keysym('ą')), Some(0x1b1), "aogonek");
+        assert_eq!(legacy(keysym('א')), Some(0xce0), "hebrew_aleph");
+        // Latin-1 keysyms are already the code point, and most of Unicode has no legacy keysym.
+        assert_eq!(legacy(keysym('a')), None);
+        assert_eq!(legacy(keysym('😀')), None);
+        assert!(keysyms::LEGACY.windows(2).all(|w| w[0].0 < w[1].0), "sorted for binary search");
+    }
+
+    #[test]
+    fn a_russian_layout_types_russian_on_its_own_keys() {
+        // setxkbmap ru: pe, er, i, ve, ie, te with their capitals, as the legacy keysyms
+        // xkeyboard-config gives them. Before, each letter took a spare keycode.
+        let m = Map {
+            min: 30,
+            per: 2,
+            syms: vec![0x6d0, 0x6f0, 0x6d2, 0x6f2, 0x6c9, 0x6e9, 0x6d7, 0x6f7, 0x6c5, 0x6e5, 0x6d4, 0x6f4],
+        };
+        let bare = |k| Some((k, false));
+        let want = vec![bare(30), bare(31), bare(32), bare(33), bare(34), bare(35)];
+        assert_eq!(keys(&m, 0, "привет"), want);
+        assert_eq!(keys(&m, 0, "П")[0], Some((30, true)), "a capital is Shift");
+        // The Unicode form still matches where a layout uses it.
+        let unicode = Map { min: 30, per: 2, syms: vec![0x0100_043f, 0x0100_041f] };
+        assert_eq!(keys(&unicode, 0, "пП"), vec![Some((30, false)), Some((30, true))]);
     }
 
     #[test]

@@ -133,11 +133,11 @@
       "gate": "typing",
       "slack": 30,
       "tie": 5,
-      "silas": 91.6,
+      "silas": 104.2,
       "rival": 2.0,
       "rival_source": "modeled",
       "winner": "rival",
-      "margin": -89.6,
+      "margin": -102.2,
       "opencode_voice": null,
       "opencode_voice_note": "none: a call never puts text in another app; its delegate sends messages to OpenCode sessions only"
     },
