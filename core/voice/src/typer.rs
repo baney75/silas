@@ -444,6 +444,8 @@ mod tests {
         log: Vec<String>,
         starts: Vec<Instant>,
         cost: Duration,
+        /// How long the `cost` sleeps really took (a loaded CI runner oversleeps a lot).
+        spent: Duration,
         finished: bool,
     }
 
@@ -451,7 +453,9 @@ mod tests {
         fn text(&mut self, t: &str) -> anyhow::Result<()> {
             self.starts.push(Instant::now());
             self.log.push(t.into());
+            let t0 = Instant::now();
             sleep(self.cost);
+            self.spent += t0.elapsed();
             Ok(())
         }
         fn enter(&mut self, shift: bool) -> anyhow::Result<()> {
@@ -491,14 +495,16 @@ mod tests {
 
     #[test]
     fn the_gap_runs_from_one_event_to_the_next_instead_of_after_each() {
-        // Each event takes as long as the gap. Sleeping a gap after each event, as the typer did,
-        // takes 10 x 20 ms; counting the event's own time inside the gap takes about 10 x 10 ms.
+        // Each event takes at least the gap. Sleeping a gap after each event, as the typer did,
+        // adds 10 more gaps on top of the events' own time; counting the event inside the gap adds
+        // none. The bound is relative to what the events really took, since a loaded macOS runner
+        // stretched a 10 ms sleep to about 31 ms (2026-11-18) and a fixed bound failed there.
         let gap = Duration::from_millis(10);
         let mut k = Fake { cost: gap, ..Fake::default() };
         let t = Instant::now();
         assert!(type_with(&mut k, "abcdefghij", Pace { chunk: 1, gap }, false, &|_| true).unwrap());
         let took = t.elapsed();
-        assert!(took < Duration::from_millis(170), "{took:?}");
+        assert!(took < k.spent + gap * 5, "{took:?} for events that took {:?}", k.spent);
         // Never closer together than the gap.
         assert!(k.starts.windows(2).all(|w| w[1] - w[0] >= gap), "{:?}", k.starts);
     }
