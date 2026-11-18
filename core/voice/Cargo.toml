@@ -32,6 +32,8 @@ flate2 = "1"
 hound = "3.5"
 chrono = { version = "0.4", features = ["serde"] }
 sysinfo = { version = "0.38", default-features = false, features = ["system"] }
+# Bench only: GGUF candidate models through transcribe.cpp (bench/models). CPU build, no Metal.
+transcribe-cpp = { version = "=0.4.2", default-features = false, optional = true }
 
 [target.'cfg(not(any(target_os = "macos", target_os = "linux")))'.dependencies]
 enigo = "0.6"
@@ -51,3 +53,4 @@ objc2-foundation = "0.3"
 
 [features]
 bench = []
+gguf = ["bench", "dep:transcribe-cpp"]

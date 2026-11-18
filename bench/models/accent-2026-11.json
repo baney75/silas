@@ -1,0 +1,3464 @@
+{
+  "run": "accent-2026-11",
+  "date": "2026-11-18",
+  "machine": "chapel1: Intel Core i5-10210U (4 cores, 8 threads), 23 GB RAM, Linux, no GPU used",
+  "set": "bench-set-v1, all 250 clips (62.2 min)",
+  "method": "silas-bench run --fast --threads 3 under `nice -n 10 taskset -c 1,2,3` (bench/models/run.sh): every model goes through the same dictation path (pieces cut at pauses while the clip plays, the 200 ms tail, the rest at key up, the default dictionary). --fast keeps model time real and simulates the waiting, so the wait after key up is what a real-time run would see on this machine at 3 cores. transcribe.cpp models run in process on its CPU backend with 3 threads; ONNX models run in process through transcribe-rs (onnxruntime's own thread count, held to 3 cores by taskset); whisper.cpp runs as whisper-server with 3 threads on the same cores, its CPU and peak memory added to each row.",
+  "candidates": [
+    {
+      "id": "parakeet-v3-int8-onnx",
+      "label": "Parakeet TDT 0.6B v3, int8 ONNX (Silas today)",
+      "group": "a",
+      "model": "parakeet-v3",
+      "runtime": "transcribe-rs 0.3.12 (onnxruntime via ort 2.0.0-rc.13)",
+      "size_mb": 670,
+      "download_mb": 478,
+      "license": "CC-BY-4.0",
+      "languages": "English + 24 European",
+      "embed": "Already in Silas: the transcribe-rs crate with its onnx feature; onnxruntime ships prebuilt for macOS, Windows and Linux.",
+      "source": "https://github.com/baney75/silas/releases/download/models-v1/parakeet-v3-int8.tar.gz (sha256 43d37191602727524a7d8c6da0eef11c4ba24320f5b4730f1a2497befc2efa77)",
+      "rows": "accent-2026-11/parakeet-v3-int8-onnx.jsonl",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0647,
+      "wer_ci": [
+        0.0502,
+        0.0865
+      ],
+      "wer_by_category": {
+        "clean": 0.0224,
+        "noise": 0.0415,
+        "accent": 0.2602,
+        "dictation": 0.0703,
+        "code": 0.1975,
+        "longform": 0.029,
+        "command": 0.0
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0129,
+          0.0326
+        ],
+        "noise": [
+          0.0299,
+          0.0547
+        ],
+        "accent": [
+          0.1846,
+          0.3702
+        ],
+        "dictation": [
+          0.0379,
+          0.1082
+        ],
+        "code": [
+          0.1086,
+          0.3032
+        ],
+        "longform": [
+          0.0195,
+          0.0375
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0224,
+        "noise": 0.0415,
+        "accent": 0.2231,
+        "dictation": 0.0711,
+        "code": 0.1975,
+        "command": 0.0,
+        "longform": 0.029,
+        "all": 0.0598
+      },
+      "formatted_error": 0.1515,
+      "punctuation_f1": 0.7372,
+      "wait_after_key_up_ms": {
+        "median": 1089.8,
+        "p95": 1720.2
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 1006.6,
+          "p95": 1692.0
+        },
+        "clean": {
+          "median": 1025.9,
+          "p95": 1709.2
+        },
+        "code": {
+          "median": 886.7,
+          "p95": 1124.0
+        },
+        "command": {
+          "median": 457.8,
+          "p95": 697.6
+        },
+        "dictation": {
+          "median": 1086.2,
+          "p95": 1515.1
+        },
+        "longform": {
+          "median": 783.9,
+          "p95": 1398.2
+        },
+        "noise": {
+          "median": 1473.0,
+          "p95": 1908.6
+        }
+      },
+      "time_to_first_text_ms_median": 8861.4,
+      "rtf_median": 0.12,
+      "peak_rss_mb": 1366.1,
+      "cpu_s_per_audio_min": 19.63,
+      "load_ms": 1200,
+      "paced": false,
+      "load1_median": 3.55,
+      "load1_max": 4.3
+    },
+    {
+      "id": "parakeet-v3-int8-onnx-tdtfix",
+      "label": "Parakeet TDT 0.6B v3, int8 ONNX, TDT durations honored (same files, decoder patched)",
+      "group": "a",
+      "model": "parakeet-v3",
+      "runtime": "transcribe-rs 0.3.12 with bench/models/transcribe-rs-tdt-durations.patch (greedy TDT: advance by the predicted duration), built through `cargo --config patch.crates-io` into a separate target",
+      "size_mb": 670,
+      "download_mb": 478,
+      "license": "CC-BY-4.0",
+      "languages": "English + 24 European",
+      "embed": "Silas's current engine and model with a 15-line decoder fix: upstream it to transcribe-rs, or carry it as a [patch] until a release has it.",
+      "source": "the same files as parakeet-v3-int8-onnx",
+      "rows": "accent-2026-11/parakeet-v3-int8-onnx-tdtfix.jsonl",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0576,
+      "wer_ci": [
+        0.047,
+        0.073
+      ],
+      "wer_by_category": {
+        "clean": 0.0216,
+        "noise": 0.0432,
+        "accent": 0.1979,
+        "dictation": 0.0734,
+        "code": 0.1881,
+        "longform": 0.0288,
+        "command": 0.0
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0123,
+          0.0317
+        ],
+        "noise": [
+          0.0306,
+          0.0579
+        ],
+        "accent": [
+          0.1521,
+          0.261
+        ],
+        "dictation": [
+          0.0409,
+          0.1116
+        ],
+        "code": [
+          0.1056,
+          0.2845
+        ],
+        "longform": [
+          0.0202,
+          0.0371
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0216,
+        "noise": 0.0432,
+        "accent": 0.1907,
+        "dictation": 0.0742,
+        "code": 0.1881,
+        "command": 0.0,
+        "longform": 0.0288,
+        "all": 0.0563
+      },
+      "formatted_error": 0.1564,
+      "punctuation_f1": 0.7313,
+      "wait_after_key_up_ms": {
+        "median": 1044.1,
+        "p95": 1638.6
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 966.5,
+          "p95": 1619.3
+        },
+        "clean": {
+          "median": 934.1,
+          "p95": 1586.2
+        },
+        "code": {
+          "median": 847.1,
+          "p95": 1026.4
+        },
+        "command": {
+          "median": 445.8,
+          "p95": 669.7
+        },
+        "dictation": {
+          "median": 1030.8,
+          "p95": 1434.5
+        },
+        "longform": {
+          "median": 726.7,
+          "p95": 1307.5
+        },
+        "noise": {
+          "median": 1351.7,
+          "p95": 1776.8
+        }
+      },
+      "time_to_first_text_ms_median": 8821.9,
+      "rtf_median": 0.1122,
+      "peak_rss_mb": 1369.6,
+      "cpu_s_per_audio_min": 18.36,
+      "load_ms": 1127,
+      "paced": false,
+      "load1_median": 3.93,
+      "load1_max": 4.49
+    },
+    {
+      "id": "parakeet-unified-en-q8",
+      "label": "Parakeet Unified English 0.6B, Q8_0 GGUF (Hex's model)",
+      "group": "b",
+      "model": "handy-computer/parakeet-unified-en-0.6b-gguf parakeet-unified-en-0.6b-Q8_0.gguf",
+      "sha256": "4b50b6dd862bf6e346929aaf4f5eaacec003bfa3f56462d6c874b41ef2f38795",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend, 3 threads",
+      "size_mb": 731,
+      "license": "NVIDIA Open Model License (commercial use and derivatives allowed)",
+      "languages": "English",
+      "embed": "transcribe-cpp crate (MIT), which builds transcribe.cpp and ggml from vendored source with CMake and links them statically; CPU everywhere, Metal, Vulkan, CUDA or ROCm by feature. Hex ships it on macOS, Windows and Linux.",
+      "rows": "accent-2026-11/parakeet-unified-en-q8.jsonl",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0476,
+      "wer_ci": [
+        0.0375,
+        0.0626
+      ],
+      "wer_by_category": {
+        "clean": 0.0168,
+        "noise": 0.0216,
+        "accent": 0.18,
+        "dictation": 0.0609,
+        "code": 0.2351,
+        "longform": 0.0199,
+        "command": 0.0189
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0097,
+          0.0243
+        ],
+        "noise": [
+          0.0141,
+          0.03
+        ],
+        "accent": [
+          0.1563,
+          0.2099
+        ],
+        "dictation": [
+          0.0283,
+          0.097
+        ],
+        "code": [
+          0.142,
+          0.3422
+        ],
+        "longform": [
+          0.0123,
+          0.0277
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0168,
+        "noise": 0.0216,
+        "accent": 0.1556,
+        "dictation": 0.06,
+        "code": 0.2351,
+        "command": 0.0189,
+        "longform": 0.0197,
+        "all": 0.0442
+      },
+      "formatted_error": 0.1556,
+      "punctuation_f1": 0.6556,
+      "wait_after_key_up_ms": {
+        "median": 1082.5,
+        "p95": 1728.6
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 978.1,
+          "p95": 1711.9
+        },
+        "clean": {
+          "median": 961.2,
+          "p95": 1671.5
+        },
+        "code": {
+          "median": 873.9,
+          "p95": 1108.1
+        },
+        "command": {
+          "median": 422.3,
+          "p95": 665.6
+        },
+        "dictation": {
+          "median": 1089.1,
+          "p95": 1511.5
+        },
+        "longform": {
+          "median": 719.0,
+          "p95": 1366.0
+        },
+        "noise": {
+          "median": 1437.5,
+          "p95": 1875.2
+        }
+      },
+      "time_to_first_text_ms_median": 8851.7,
+      "rtf_median": 0.1175,
+      "peak_rss_mb": 1248.9,
+      "cpu_s_per_audio_min": 20.52,
+      "load_ms": 0,
+      "paced": false,
+      "load1_median": 3.59,
+      "load1_max": 4.46
+    },
+    {
+      "id": "parakeet-unified-en-q4km",
+      "label": "Parakeet Unified English 0.6B, Q4_K_M GGUF",
+      "group": "b",
+      "model": "handy-computer/parakeet-unified-en-0.6b-gguf parakeet-unified-en-0.6b-Q4_K_M.gguf",
+      "sha256": "a8bf3de2b393bd14ead5a858c3748d5e3b07a20fdeabdd3b498fba4f463fa929",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend, 3 threads",
+      "size_mb": 477,
+      "license": "NVIDIA Open Model License (commercial use and derivatives allowed)",
+      "languages": "English",
+      "embed": "As Parakeet Unified Q8_0.",
+      "rows": "accent-2026-11/parakeet-unified-en-q4km.jsonl",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0474,
+      "wer_ci": [
+        0.0373,
+        0.0621
+      ],
+      "wer_by_category": {
+        "clean": 0.0168,
+        "noise": 0.0222,
+        "accent": 0.1863,
+        "dictation": 0.0563,
+        "code": 0.232,
+        "longform": 0.0186,
+        "command": 0.0189
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0097,
+          0.0243
+        ],
+        "noise": [
+          0.0143,
+          0.0305
+        ],
+        "accent": [
+          0.1609,
+          0.2186
+        ],
+        "dictation": [
+          0.0241,
+          0.0932
+        ],
+        "code": [
+          0.1385,
+          0.339
+        ],
+        "longform": [
+          0.012,
+          0.0248
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0168,
+        "noise": 0.0222,
+        "accent": 0.1593,
+        "dictation": 0.0553,
+        "code": 0.232,
+        "command": 0.0189,
+        "longform": 0.0184,
+        "all": 0.0437
+      },
+      "formatted_error": 0.1573,
+      "punctuation_f1": 0.6499,
+      "wait_after_key_up_ms": {
+        "median": 1084.0,
+        "p95": 1674.1
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 947.3,
+          "p95": 1607.6
+        },
+        "clean": {
+          "median": 986.9,
+          "p95": 1661.8
+        },
+        "code": {
+          "median": 858.8,
+          "p95": 1004.7
+        },
+        "command": {
+          "median": 437.8,
+          "p95": 627.6
+        },
+        "dictation": {
+          "median": 1084.0,
+          "p95": 1474.0
+        },
+        "longform": {
+          "median": 697.6,
+          "p95": 1298.5
+        },
+        "noise": {
+          "median": 1422.6,
+          "p95": 1754.0
+        }
+      },
+      "time_to_first_text_ms_median": 8864.5,
+      "rtf_median": 0.114,
+      "peak_rss_mb": 1004.0,
+      "cpu_s_per_audio_min": 19.49,
+      "load_ms": 0,
+      "paced": false,
+      "load1_median": 3.48,
+      "load1_max": 4.08
+    },
+    {
+      "id": "parakeet-v3-q8-gguf",
+      "label": "Parakeet TDT 0.6B v3, Q8_0 GGUF",
+      "group": "c",
+      "model": "handy-computer/parakeet-tdt-0.6b-v3-gguf parakeet-tdt-0.6b-v3-Q8_0.gguf",
+      "sha256": "5859f77944efcd8eafa23a6350731960b2b55b2203df51f319665c807d802cc7",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend, 3 threads",
+      "size_mb": 740,
+      "license": "CC-BY-4.0",
+      "languages": "English + 24 European",
+      "embed": "As Parakeet Unified Q8_0.",
+      "rows": "accent-2026-11/parakeet-v3-q8-gguf.jsonl",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0434,
+      "wer_ci": [
+        0.0354,
+        0.0546
+      ],
+      "wer_by_category": {
+        "clean": 0.0192,
+        "noise": 0.0245,
+        "accent": 0.1185,
+        "dictation": 0.0688,
+        "code": 0.2069,
+        "longform": 0.0248,
+        "command": 0.0189
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0114,
+          0.0281
+        ],
+        "noise": [
+          0.0162,
+          0.0342
+        ],
+        "accent": [
+          0.0942,
+          0.1465
+        ],
+        "dictation": [
+          0.04,
+          0.1088
+        ],
+        "code": [
+          0.1132,
+          0.3208
+        ],
+        "longform": [
+          0.0164,
+          0.0331
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0192,
+        "noise": 0.0245,
+        "accent": 0.112,
+        "dictation": 0.0695,
+        "code": 0.2069,
+        "command": 0.0189,
+        "longform": 0.0248,
+        "all": 0.0424
+      },
+      "formatted_error": 0.1355,
+      "punctuation_f1": 0.754,
+      "wait_after_key_up_ms": {
+        "median": 1110.9,
+        "p95": 1758.8
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 996.9,
+          "p95": 1778.5
+        },
+        "clean": {
+          "median": 993.0,
+          "p95": 1722.5
+        },
+        "code": {
+          "median": 879.0,
+          "p95": 1071.1
+        },
+        "command": {
+          "median": 420.7,
+          "p95": 733.6
+        },
+        "dictation": {
+          "median": 1116.2,
+          "p95": 1543.7
+        },
+        "longform": {
+          "median": 740.0,
+          "p95": 1408.4
+        },
+        "noise": {
+          "median": 1450.5,
+          "p95": 1906.9
+        }
+      },
+      "time_to_first_text_ms_median": 8854.8,
+      "rtf_median": 0.1203,
+      "peak_rss_mb": 1305.3,
+      "cpu_s_per_audio_min": 21.01,
+      "load_ms": 0,
+      "paced": false,
+      "load1_median": 3.37,
+      "load1_max": 3.82
+    },
+    {
+      "id": "parakeet-v3-q4km-gguf",
+      "label": "Parakeet TDT 0.6B v3, Q4_K_M GGUF",
+      "group": "c",
+      "model": "handy-computer/parakeet-tdt-0.6b-v3-gguf parakeet-tdt-0.6b-v3-Q4_K_M.gguf",
+      "sha256": "b68557be1e3c40207fd7c4bd9d63f1d3316b963f15325bfb0cc16a8bb0ffd181",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend, 3 threads",
+      "size_mb": 485,
+      "license": "CC-BY-4.0",
+      "languages": "English + 24 European",
+      "embed": "As Parakeet Unified Q8_0.",
+      "rows": "accent-2026-11/parakeet-v3-q4km-gguf.jsonl",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0438,
+      "wer_ci": [
+        0.0353,
+        0.0552
+      ],
+      "wer_by_category": {
+        "clean": 0.0192,
+        "noise": 0.0234,
+        "accent": 0.1203,
+        "dictation": 0.0734,
+        "code": 0.2069,
+        "longform": 0.025,
+        "command": 0.0189
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0114,
+          0.0281
+        ],
+        "noise": [
+          0.0149,
+          0.033
+        ],
+        "accent": [
+          0.0958,
+          0.1507
+        ],
+        "dictation": [
+          0.0429,
+          0.1133
+        ],
+        "code": [
+          0.1111,
+          0.3208
+        ],
+        "longform": [
+          0.0162,
+          0.0338
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0192,
+        "noise": 0.0234,
+        "accent": 0.1148,
+        "dictation": 0.0742,
+        "code": 0.2069,
+        "command": 0.0189,
+        "longform": 0.0251,
+        "all": 0.0429
+      },
+      "formatted_error": 0.1361,
+      "punctuation_f1": 0.7544,
+      "wait_after_key_up_ms": {
+        "median": 1062.9,
+        "p95": 1705.5
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 954.3,
+          "p95": 1593.5
+        },
+        "clean": {
+          "median": 971.0,
+          "p95": 1721.0
+        },
+        "code": {
+          "median": 876.3,
+          "p95": 994.3
+        },
+        "command": {
+          "median": 442.7,
+          "p95": 635.6
+        },
+        "dictation": {
+          "median": 1067.8,
+          "p95": 1444.3
+        },
+        "longform": {
+          "median": 714.3,
+          "p95": 1341.6
+        },
+        "noise": {
+          "median": 1379.3,
+          "p95": 1788.5
+        }
+      },
+      "time_to_first_text_ms_median": 8839.8,
+      "rtf_median": 0.1146,
+      "peak_rss_mb": 1064.1,
+      "cpu_s_per_audio_min": 19.77,
+      "load_ms": 0,
+      "paced": false,
+      "load1_median": 3.43,
+      "load1_max": 3.65
+    },
+    {
+      "id": "whisper-large-v3-turbo-q5_0",
+      "label": "Whisper large-v3-turbo, q5_0 (whisper.cpp)",
+      "group": "d",
+      "model": "ggerganov/whisper.cpp ggml-large-v3-turbo-q5_0.bin",
+      "runtime": "whisper.cpp v1.9.5 whisper-server, 3 threads, server defaults (beam search)",
+      "size_mb": 574,
+      "license": "MIT",
+      "languages": "99 languages",
+      "embed": "whisper.cpp (MIT, C/C++) through whisper-rs, which transcribe-rs wraps behind its whisper-cpp feature; or transcribe.cpp, which also loads Whisper GGUFs. macOS, Windows, Linux.",
+      "scope": "240 clips: stopped before the 10 longform clips (29.7 min of audio), which would have taken about 90 more minutes at its real-time factor of 3.6; its All column leaves longform out",
+      "rows": "accent-2026-11/whisper-large-v3-turbo-q5_0.jsonl",
+      "clips": 240,
+      "missing": [
+        "longform-0001",
+        "longform-0002",
+        "longform-0003",
+        "longform-0004",
+        "longform-0005",
+        "longform-0006",
+        "longform-0007",
+        "longform-0008",
+        "longform-0009",
+        "longform-0010"
+      ],
+      "wer": 0.084,
+      "wer_ci": [
+        0.0687,
+        0.1004
+      ],
+      "wer_by_category": {
+        "clean": 0.0232,
+        "noise": 0.031,
+        "accent": 0.1961,
+        "dictation": 0.0953,
+        "code": 0.1912,
+        "command": 0.0189
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0149,
+          0.0325
+        ],
+        "noise": [
+          0.0203,
+          0.0436
+        ],
+        "accent": [
+          0.1632,
+          0.2383
+        ],
+        "dictation": [
+          0.0585,
+          0.1385
+        ],
+        "code": [
+          0.0915,
+          0.3116
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0232,
+        "noise": 0.031,
+        "accent": 0.1676,
+        "dictation": 0.0948,
+        "code": 0.1912,
+        "command": 0.0189,
+        "all": 0.0769
+      },
+      "formatted_error": 0.2092,
+      "punctuation_f1": 0.6216,
+      "wait_after_key_up_ms": {
+        "median": 27642.3,
+        "p95": 47275.2
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 27720.4,
+          "p95": 53034.3
+        },
+        "clean": {
+          "median": 27654.4,
+          "p95": 28041.3
+        },
+        "code": {
+          "median": 27464.6,
+          "p95": 27649.8
+        },
+        "command": {
+          "median": 27362.1,
+          "p95": 27516.6
+        },
+        "dictation": {
+          "median": 27548.8,
+          "p95": 40050.0
+        },
+        "noise": {
+          "median": 27807.9,
+          "p95": 28212.7
+        }
+      },
+      "time_to_first_text_ms_median": 35418.9,
+      "rtf_median": 3.641,
+      "peak_rss_mb": 828.7,
+      "cpu_s_per_audio_min": 640.59,
+      "load_ms": 0,
+      "paced": false,
+      "load1_median": 3.11,
+      "load1_max": 3.73
+    },
+    {
+      "id": "whisper-small.en",
+      "label": "Whisper small.en (whisper.cpp)",
+      "group": "d",
+      "model": "ggerganov/whisper.cpp ggml-small.en.bin",
+      "runtime": "whisper.cpp v1.9.5 whisper-server, 3 threads, server defaults (beam search)",
+      "size_mb": 488,
+      "license": "MIT",
+      "languages": "English",
+      "embed": "As Whisper large-v3-turbo.",
+      "rows": "accent-2026-11/whisper-small.en.jsonl",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0749,
+      "wer_ci": [
+        0.062,
+        0.0916
+      ],
+      "wer_by_category": {
+        "clean": 0.028,
+        "noise": 0.0584,
+        "accent": 0.2246,
+        "dictation": 0.0938,
+        "code": 0.2853,
+        "longform": 0.0418,
+        "command": 0.0
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0174,
+          0.0381
+        ],
+        "noise": [
+          0.0401,
+          0.0788
+        ],
+        "accent": [
+          0.1896,
+          0.2653
+        ],
+        "dictation": [
+          0.0598,
+          0.1332
+        ],
+        "code": [
+          0.1863,
+          0.391
+        ],
+        "longform": [
+          0.0235,
+          0.0589
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.028,
+        "noise": 0.0584,
+        "accent": 0.2,
+        "dictation": 0.0932,
+        "code": 0.2853,
+        "command": 0.0,
+        "longform": 0.0418,
+        "all": 0.0715
+      },
+      "formatted_error": 0.1688,
+      "punctuation_f1": 0.7141,
+      "wait_after_key_up_ms": {
+        "median": 4795.4,
+        "p95": 5456.1
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 4817.2,
+          "p95": 7140.3
+        },
+        "clean": {
+          "median": 4738.3,
+          "p95": 5259.6
+        },
+        "code": {
+          "median": 4597.0,
+          "p95": 4845.4
+        },
+        "command": {
+          "median": 4411.9,
+          "p95": 4554.5
+        },
+        "dictation": {
+          "median": 4769.0,
+          "p95": 5071.5
+        },
+        "longform": {
+          "median": 6359.8,
+          "p95": 8352.0
+        },
+        "noise": {
+          "median": 4943.0,
+          "p95": 5268.0
+        }
+      },
+      "time_to_first_text_ms_median": 12470.2,
+      "rtf_median": 0.5912,
+      "peak_rss_mb": 763.2,
+      "cpu_s_per_audio_min": 97.8,
+      "load_ms": 0,
+      "paced": false,
+      "load1_median": 2.99,
+      "load1_max": 3.22
+    },
+    {
+      "id": "parakeet-ultra-q8",
+      "label": "Parakeet Ultra (Moondream's post-trained v3), Q8_0 GGUF",
+      "group": "e",
+      "model": "handy-computer/parakeet-ultra-gguf parakeet-ultra-Q8_0.gguf (from moondream/parakeet-ultra)",
+      "sha256": "007a59761e9258779f189df396b50d12b83bb5b79e66df4b955c230d2f2a0a59",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend, 3 threads",
+      "size_mb": 740,
+      "license": "CC-BY-4.0",
+      "languages": "English + 24 European",
+      "embed": "As Parakeet Unified Q8_0. Same architecture and size as v3; no ONNX export found.",
+      "rows": "accent-2026-11/parakeet-ultra-q8.jsonl",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0427,
+      "wer_ci": [
+        0.0342,
+        0.0551
+      ],
+      "wer_by_category": {
+        "clean": 0.0184,
+        "noise": 0.0239,
+        "accent": 0.1176,
+        "dictation": 0.0828,
+        "code": 0.2038,
+        "longform": 0.0223,
+        "command": 0.0
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0112,
+          0.0264
+        ],
+        "noise": [
+          0.0164,
+          0.0319
+        ],
+        "accent": [
+          0.0931,
+          0.1465
+        ],
+        "dictation": [
+          0.0464,
+          0.1276
+        ],
+        "code": [
+          0.1079,
+          0.3136
+        ],
+        "longform": [
+          0.0145,
+          0.0314
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0184,
+        "noise": 0.0239,
+        "accent": 0.1074,
+        "dictation": 0.0837,
+        "code": 0.2038,
+        "command": 0.0,
+        "longform": 0.0224,
+        "all": 0.0413
+      },
+      "formatted_error": 0.1299,
+      "punctuation_f1": 0.7613,
+      "wait_after_key_up_ms": {
+        "median": 1112.0,
+        "p95": 1760.5
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 1003.8,
+          "p95": 1739.8
+        },
+        "clean": {
+          "median": 1026.1,
+          "p95": 1744.2
+        },
+        "code": {
+          "median": 877.2,
+          "p95": 1181.0
+        },
+        "command": {
+          "median": 473.3,
+          "p95": 668.3
+        },
+        "dictation": {
+          "median": 1104.9,
+          "p95": 1563.6
+        },
+        "longform": {
+          "median": 757.3,
+          "p95": 1411.1
+        },
+        "noise": {
+          "median": 1508.1,
+          "p95": 1989.3
+        }
+      },
+      "time_to_first_text_ms_median": 8887.1,
+      "rtf_median": 0.1208,
+      "peak_rss_mb": 1288.0,
+      "cpu_s_per_audio_min": 21.21,
+      "load_ms": 0,
+      "paced": false,
+      "load1_median": 3.77,
+      "load1_max": 4.44
+    },
+    {
+      "id": "nemotron-3.5-asr-q8",
+      "label": "Nemotron 3.5 ASR Streaming 0.6B, Q8_0 GGUF",
+      "group": "e",
+      "model": "handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf nemotron-3.5-asr-streaming-0.6b-Q8_0.gguf",
+      "sha256": "b94545b313b3223fda7b2857a52681da813935c2127643d1e9ff0c23d988089c",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend, 3 threads, offline run (not its streaming mode)",
+      "size_mb": 751,
+      "license": "OpenMDW-1.1 (permissive)",
+      "languages": "40 language-locales",
+      "embed": "As Parakeet Unified Q8_0.",
+      "rows": "accent-2026-11/nemotron-3.5-asr-q8.jsonl",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.071,
+      "wer_ci": [
+        0.0589,
+        0.0881
+      ],
+      "wer_by_category": {
+        "clean": 0.0343,
+        "noise": 0.0532,
+        "accent": 0.2255,
+        "dictation": 0.0703,
+        "code": 0.2759,
+        "longform": 0.0375,
+        "command": 0.0377
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0227,
+          0.0476
+        ],
+        "noise": [
+          0.0384,
+          0.0691
+        ],
+        "accent": [
+          0.1909,
+          0.2651
+        ],
+        "dictation": [
+          0.0387,
+          0.1065
+        ],
+        "code": [
+          0.1931,
+          0.365
+        ],
+        "longform": [
+          0.0255,
+          0.0479
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0343,
+        "noise": 0.0532,
+        "accent": 0.2083,
+        "dictation": 0.0695,
+        "code": 0.2759,
+        "command": 0.0377,
+        "longform": 0.0373,
+        "all": 0.0683
+      },
+      "formatted_error": 0.1963,
+      "punctuation_f1": 0.5966,
+      "wait_after_key_up_ms": {
+        "median": 1274.7,
+        "p95": 2020.2
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 1159.0,
+          "p95": 1959.8
+        },
+        "clean": {
+          "median": 1131.7,
+          "p95": 1981.4
+        },
+        "code": {
+          "median": 983.2,
+          "p95": 1216.7
+        },
+        "command": {
+          "median": 474.4,
+          "p95": 751.3
+        },
+        "dictation": {
+          "median": 1311.7,
+          "p95": 1763.4
+        },
+        "longform": {
+          "median": 833.8,
+          "p95": 1793.2
+        },
+        "noise": {
+          "median": 1755.2,
+          "p95": 2250.0
+        }
+      },
+      "time_to_first_text_ms_median": 9010.0,
+      "rtf_median": 0.1415,
+      "peak_rss_mb": 1324.2,
+      "cpu_s_per_audio_min": 24.8,
+      "load_ms": 0,
+      "paced": false,
+      "load1_median": 3.21,
+      "load1_max": 3.33
+    },
+    {
+      "id": "granite-speech-5-q8",
+      "label": "Granite Speech 5.0 470M TurboCTC, Q8_0 GGUF",
+      "group": "e",
+      "model": "handy-computer/granite-speech-5.0-470m-turboctc-gguf granite-speech-5.0-470m-turboctc-Q8_0.gguf",
+      "sha256": "0408fe0b33be19af5be423d8ba6b43768608b6f065e1ac97b78c84b55c140738",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend, 3 threads",
+      "size_mb": 506,
+      "license": "Apache-2.0",
+      "languages": "7 languages",
+      "embed": "As Parakeet Unified Q8_0.",
+      "rows": "accent-2026-11/granite-speech-5-q8.jsonl",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0766,
+      "wer_ci": [
+        0.0636,
+        0.0954
+      ],
+      "wer_by_category": {
+        "clean": 0.0216,
+        "noise": 0.0251,
+        "accent": 0.2531,
+        "dictation": 0.1469,
+        "code": 0.3605,
+        "longform": 0.0401,
+        "command": 0.0189
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0134,
+          0.031
+        ],
+        "noise": [
+          0.0182,
+          0.0334
+        ],
+        "accent": [
+          0.2197,
+          0.2961
+        ],
+        "dictation": [
+          0.1065,
+          0.1968
+        ],
+        "code": [
+          0.2547,
+          0.4615
+        ],
+        "longform": [
+          0.0322,
+          0.0488
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0216,
+        "noise": 0.0251,
+        "accent": 0.2287,
+        "dictation": 0.1422,
+        "code": 0.3605,
+        "command": 0.0189,
+        "longform": 0.0395,
+        "all": 0.0726
+      },
+      "formatted_error": 0.296,
+      "punctuation_f1": 0.0,
+      "wait_after_key_up_ms": {
+        "median": 952.4,
+        "p95": 1529.5
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 917.8,
+          "p95": 1498.7
+        },
+        "clean": {
+          "median": 872.0,
+          "p95": 1473.7
+        },
+        "code": {
+          "median": 790.9,
+          "p95": 942.0
+        },
+        "command": {
+          "median": 467.4,
+          "p95": 644.1
+        },
+        "dictation": {
+          "median": 963.4,
+          "p95": 1389.4
+        },
+        "longform": {
+          "median": 695.2,
+          "p95": 1212.2
+        },
+        "noise": {
+          "median": 1285.8,
+          "p95": 1602.7
+        }
+      },
+      "time_to_first_text_ms_median": 8716.4,
+      "rtf_median": 0.1021,
+      "peak_rss_mb": 726.9,
+      "cpu_s_per_audio_min": 17.77,
+      "load_ms": 0,
+      "paced": false,
+      "load1_median": 3.2,
+      "load1_max": 3.55
+    },
+    {
+      "id": "canary-1b-flash-q8",
+      "label": "Canary 1B Flash, Q8_0 GGUF",
+      "group": "e",
+      "model": "handy-computer/canary-1b-flash-gguf canary-1b-flash-Q8_0.gguf",
+      "sha256": "b23202a996d716c8d90c2c0da708ef72c9d340eda0e90c9e4a4436064de980ea",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend, 3 threads",
+      "size_mb": 1048,
+      "license": "CC-BY-4.0",
+      "languages": "English, German, French, Spanish",
+      "embed": "As Parakeet Unified Q8_0; transcribe-rs also runs Canary from ONNX (istupakov/canary-1b-flash-onnx).",
+      "rows": "accent-2026-11/canary-1b-flash-q8.jsonl",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0494,
+      "wer_ci": [
+        0.0375,
+        0.069
+      ],
+      "wer_by_category": {
+        "clean": 0.0136,
+        "noise": 0.052,
+        "accent": 0.1872,
+        "dictation": 0.0469,
+        "code": 0.2257,
+        "longform": 0.0145,
+        "command": 0.0
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0074,
+          0.021
+        ],
+        "noise": [
+          0.0215,
+          0.0954
+        ],
+        "accent": [
+          0.1597,
+          0.2206
+        ],
+        "dictation": [
+          0.0242,
+          0.0722
+        ],
+        "code": [
+          0.149,
+          0.3127
+        ],
+        "longform": [
+          0.0096,
+          0.0189
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0136,
+        "noise": 0.052,
+        "accent": 0.163,
+        "dictation": 0.0427,
+        "code": 0.2257,
+        "command": 0.0,
+        "longform": 0.0145,
+        "all": 0.0459
+      },
+      "formatted_error": 0.1418,
+      "punctuation_f1": 0.7624,
+      "wait_after_key_up_ms": {
+        "median": 1540.9,
+        "p95": 2505.1
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 1447.5,
+          "p95": 2450.6
+        },
+        "clean": {
+          "median": 1390.7,
+          "p95": 2451.8
+        },
+        "code": {
+          "median": 1222.4,
+          "p95": 1504.6
+        },
+        "command": {
+          "median": 551.4,
+          "p95": 900.6
+        },
+        "dictation": {
+          "median": 1635.2,
+          "p95": 2257.3
+        },
+        "longform": {
+          "median": 1105.6,
+          "p95": 2079.7
+        },
+        "noise": {
+          "median": 2101.9,
+          "p95": 2811.3
+        }
+      },
+      "time_to_first_text_ms_median": 9320.3,
+      "rtf_median": 0.1785,
+      "peak_rss_mb": 1859.3,
+      "cpu_s_per_audio_min": 31.15,
+      "load_ms": 0,
+      "paced": false,
+      "load1_median": 2.96,
+      "load1_max": 3.38
+    },
+    {
+      "id": "qwen3-asr-0.6b-q8",
+      "label": "Qwen3-ASR 0.6B, Q8_0 GGUF",
+      "group": "e",
+      "model": "handy-computer/Qwen3-ASR-0.6B-gguf Qwen3-ASR-0.6B-Q8_0.gguf",
+      "sha256": "f081b2d5e23bd669d92cc331d722a8a0681943b8e6f34b48996fd5c319b5acd8",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend, 3 threads",
+      "size_mb": 850,
+      "license": "Apache-2.0",
+      "languages": "52 languages and dialects",
+      "embed": "As Parakeet Unified Q8_0.",
+      "rows": "accent-2026-11/qwen3-asr-0.6b-q8.jsonl",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.051,
+      "wer_ci": [
+        0.0417,
+        0.0647
+      ],
+      "wer_by_category": {
+        "clean": 0.02,
+        "noise": 0.0275,
+        "accent": 0.1524,
+        "dictation": 0.0641,
+        "code": 0.2978,
+        "longform": 0.0259,
+        "command": 0.0
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0124,
+          0.029
+        ],
+        "noise": [
+          0.0173,
+          0.0386
+        ],
+        "accent": [
+          0.126,
+          0.1857
+        ],
+        "dictation": [
+          0.0351,
+          0.0994
+        ],
+        "code": [
+          0.1801,
+          0.4224
+        ],
+        "longform": [
+          0.0178,
+          0.0328
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.02,
+        "noise": 0.0275,
+        "accent": 0.1315,
+        "dictation": 0.0632,
+        "code": 0.2978,
+        "command": 0.0,
+        "longform": 0.0259,
+        "all": 0.0482
+      },
+      "formatted_error": 0.1555,
+      "punctuation_f1": 0.6952,
+      "wait_after_key_up_ms": {
+        "median": 2202.4,
+        "p95": 3839.9
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 1987.2,
+          "p95": 3484.5
+        },
+        "clean": {
+          "median": 1970.2,
+          "p95": 3841.5
+        },
+        "code": {
+          "median": 1620.0,
+          "p95": 1993.9
+        },
+        "command": {
+          "median": 740.3,
+          "p95": 1213.1
+        },
+        "dictation": {
+          "median": 2317.7,
+          "p95": 3199.2
+        },
+        "longform": {
+          "median": 2360.7,
+          "p95": 3238.0
+        },
+        "noise": {
+          "median": 2948.1,
+          "p95": 4269.9
+        }
+      },
+      "time_to_first_text_ms_median": 9933.7,
+      "rtf_median": 0.2657,
+      "peak_rss_mb": 1466.5,
+      "cpu_s_per_audio_min": 47.42,
+      "load_ms": 0,
+      "paced": false,
+      "load1_median": 3.04,
+      "load1_max": 3.15
+    },
+    {
+      "id": "cohere-int4-onnx",
+      "label": "Cohere Transcribe 2B, int4 ONNX (Silas's \"best\" option)",
+      "group": "e",
+      "model": "cohere-int4",
+      "runtime": "transcribe-rs 0.3.12 (onnxruntime via ort 2.0.0-rc.13)",
+      "size_mb": 2000,
+      "license": "Apache-2.0",
+      "languages": "English + 13",
+      "embed": "Already in Silas as an optional download (cstr/cohere-transcribe-onnx-int4, pinned revision).",
+      "rows": "accent-2026-11/cohere-int4-onnx.jsonl",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0458,
+      "wer_ci": [
+        0.0358,
+        0.0603
+      ],
+      "wer_by_category": {
+        "clean": 0.0104,
+        "noise": 0.0129,
+        "accent": 0.2023,
+        "dictation": 0.0844,
+        "code": 0.1379,
+        "longform": 0.019,
+        "command": 0.0
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0049,
+          0.0172
+        ],
+        "noise": [
+          0.0079,
+          0.0185
+        ],
+        "accent": [
+          0.1731,
+          0.2355
+        ],
+        "dictation": [
+          0.0468,
+          0.1309
+        ],
+        "code": [
+          0.0719,
+          0.2107
+        ],
+        "longform": [
+          0.0119,
+          0.0269
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0104,
+        "noise": 0.0129,
+        "accent": 0.1731,
+        "dictation": 0.0837,
+        "code": 0.1379,
+        "command": 0.0,
+        "longform": 0.019,
+        "all": 0.0418
+      },
+      "formatted_error": 0.1607,
+      "punctuation_f1": 0.6317,
+      "wait_after_key_up_ms": {
+        "median": 4533.9,
+        "p95": 7689.1
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 4132.4,
+          "p95": 7266.0
+        },
+        "clean": {
+          "median": 3830.3,
+          "p95": 7271.9
+        },
+        "code": {
+          "median": 3678.8,
+          "p95": 4610.7
+        },
+        "command": {
+          "median": 1498.5,
+          "p95": 2622.4
+        },
+        "dictation": {
+          "median": 4456.1,
+          "p95": 7034.2
+        },
+        "longform": {
+          "median": 6416.4,
+          "p95": 8171.6
+        },
+        "noise": {
+          "median": 6116.2,
+          "p95": 8693.3
+        }
+      },
+      "time_to_first_text_ms_median": 12228.7,
+      "rtf_median": 0.5747,
+      "peak_rss_mb": 2820.7,
+      "cpu_s_per_audio_min": 92.33,
+      "load_ms": 1689,
+      "paced": false,
+      "load1_median": 3.96,
+      "load1_max": 5.32
+    },
+    {
+      "id": "moonshine-base-q8",
+      "label": "Moonshine Base, Q8_0 GGUF",
+      "group": "e",
+      "model": "handy-computer/moonshine-base-gguf moonshine-base-Q8_0.gguf (from UsefulSensors/moonshine-base)",
+      "sha256": "7f0027dfd857d310b63a85ef57cadf183da712cc374f85a648f8bc18aaa2efc8",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend, 3 threads",
+      "size_mb": 77,
+      "license": "MIT",
+      "languages": "English",
+      "embed": "As Parakeet Unified Q8_0; transcribe-rs also runs Moonshine from ONNX.",
+      "rows": "accent-2026-11/moonshine-base-q8.jsonl",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0829,
+      "wer_ci": [
+        0.0663,
+        0.1064
+      ],
+      "wer_by_category": {
+        "clean": 0.0351,
+        "noise": 0.0829,
+        "accent": 0.2665,
+        "dictation": 0.0547,
+        "code": 0.326,
+        "longform": 0.0403,
+        "command": 0.1132
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0237,
+          0.048
+        ],
+        "noise": [
+          0.054,
+          0.1191
+        ],
+        "accent": [
+          0.2259,
+          0.3173
+        ],
+        "dictation": [
+          0.0254,
+          0.0896
+        ],
+        "code": [
+          0.2181,
+          0.429
+        ],
+        "longform": [
+          0.0238,
+          0.0581
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0351,
+        "noise": 0.0829,
+        "accent": 0.2472,
+        "dictation": 0.0521,
+        "code": 0.326,
+        "command": 0.1132,
+        "longform": 0.04,
+        "all": 0.0797
+      },
+      "formatted_error": 0.1864,
+      "punctuation_f1": 0.6876,
+      "wait_after_key_up_ms": {
+        "median": 519.7,
+        "p95": 979.1
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 480.5,
+          "p95": 871.6
+        },
+        "clean": {
+          "median": 518.3,
+          "p95": 992.1
+        },
+        "code": {
+          "median": 420.2,
+          "p95": 521.1
+        },
+        "command": {
+          "median": 262.1,
+          "p95": 342.4
+        },
+        "dictation": {
+          "median": 528.2,
+          "p95": 774.1
+        },
+        "longform": {
+          "median": 397.0,
+          "p95": 645.9
+        },
+        "noise": {
+          "median": 721.3,
+          "p95": 1135.4
+        }
+      },
+      "time_to_first_text_ms_median": 8280.3,
+      "rtf_median": 0.0452,
+      "peak_rss_mb": 288.3,
+      "cpu_s_per_audio_min": 8.56,
+      "load_ms": 0,
+      "paced": false,
+      "load1_median": 2.37,
+      "load1_max": 3.08
+    },
+    {
+      "id": "moonshine-streaming-medium-q8",
+      "label": "Moonshine Streaming Medium, Q8_0 GGUF",
+      "group": "e",
+      "model": "handy-computer/moonshine-streaming-medium-gguf moonshine-streaming-medium-Q8_0.gguf (from UsefulSensors/moonshine-streaming-medium)",
+      "sha256": "f7c9564249b508f6012927ec4f9e536087da53a7047f858ca9975bea5f75299e",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend, 3 threads, offline run (not its streaming mode)",
+      "size_mb": 296,
+      "license": "MIT",
+      "languages": "English",
+      "embed": "As Parakeet Unified Q8_0.",
+      "rows": "accent-2026-11/moonshine-streaming-medium-q8.jsonl",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0632,
+      "wer_ci": [
+        0.0509,
+        0.0813
+      ],
+      "wer_by_category": {
+        "clean": 0.0168,
+        "noise": 0.0537,
+        "accent": 0.2219,
+        "dictation": 0.0547,
+        "code": 0.2853,
+        "longform": 0.0281,
+        "command": 0.0189
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0097,
+          0.0246
+        ],
+        "noise": [
+          0.0368,
+          0.0723
+        ],
+        "accent": [
+          0.1911,
+          0.2593
+        ],
+        "dictation": [
+          0.0255,
+          0.0906
+        ],
+        "code": [
+          0.1865,
+          0.402
+        ],
+        "longform": [
+          0.0182,
+          0.0369
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0168,
+        "noise": 0.0537,
+        "accent": 0.1981,
+        "dictation": 0.0537,
+        "code": 0.2853,
+        "command": 0.0189,
+        "longform": 0.028,
+        "all": 0.0597
+      },
+      "formatted_error": 0.1964,
+      "punctuation_f1": 0.6216,
+      "wait_after_key_up_ms": {
+        "median": 1145.9,
+        "p95": 1968.1
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 1038.8,
+          "p95": 1862.5
+        },
+        "clean": {
+          "median": 1034.0,
+          "p95": 1961.3
+        },
+        "code": {
+          "median": 904.8,
+          "p95": 1094.3
+        },
+        "command": {
+          "median": 427.6,
+          "p95": 682.7
+        },
+        "dictation": {
+          "median": 1165.7,
+          "p95": 1720.0
+        },
+        "longform": {
+          "median": 781.2,
+          "p95": 1537.0
+        },
+        "noise": {
+          "median": 1589.6,
+          "p95": 2257.6
+        }
+      },
+      "time_to_first_text_ms_median": 8897.6,
+      "rtf_median": 0.1292,
+      "peak_rss_mb": 907.4,
+      "cpu_s_per_audio_min": 22.67,
+      "load_ms": 0,
+      "paced": false,
+      "load1_median": 3.05,
+      "load1_max": 3.16
+    },
+    {
+      "id": "parakeet-v3-fp32-onnx",
+      "label": "Diagnostic: Parakeet v3 fp32 ONNX, stock decoder",
+      "model": "parakeet-onnx:<dir> with encoder-model.onnx(.data), decoder_joint-model.onnx",
+      "source": "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx at 8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce",
+      "size_mb": 2550,
+      "runtime": "transcribe-rs 0.3.12, Quantization::FP32",
+      "group": "diagnostic",
+      "license": "CC-BY-4.0",
+      "languages": "English + 24 European",
+      "scope": "the 50 accent clips only, same settings; a diagnostic of the ONNX gap, not a candidate",
+      "rows": "accent-2026-11-fp32/parakeet-v3-fp32-onnx-stock.jsonl",
+      "clips": 50,
+      "missing": [
+        "clean-0001",
+        "clean-0002",
+        "clean-0003",
+        "clean-0004",
+        "clean-0005",
+        "clean-0006",
+        "clean-0007",
+        "clean-0008",
+        "clean-0009",
+        "clean-0010",
+        "clean-0011",
+        "clean-0012",
+        "clean-0013",
+        "clean-0014",
+        "clean-0015",
+        "clean-0016",
+        "clean-0017",
+        "clean-0018",
+        "clean-0019",
+        "clean-0020",
+        "clean-0021",
+        "clean-0022",
+        "clean-0023",
+        "clean-0024",
+        "clean-0025",
+        "clean-0026",
+        "clean-0027",
+        "clean-0028",
+        "clean-0029",
+        "clean-0030",
+        "clean-0031",
+        "clean-0032",
+        "clean-0033",
+        "clean-0034",
+        "clean-0035",
+        "clean-0036",
+        "clean-0037",
+        "clean-0038",
+        "clean-0039",
+        "clean-0040",
+        "clean-0041",
+        "clean-0042",
+        "clean-0043",
+        "clean-0044",
+        "clean-0045",
+        "clean-0046",
+        "clean-0047",
+        "clean-0048",
+        "clean-0049",
+        "clean-0050",
+        "clean-0051",
+        "clean-0052",
+        "clean-0053",
+        "clean-0054",
+        "clean-0055",
+        "clean-0056",
+        "clean-0057",
+        "clean-0058",
+        "clean-0059",
+        "clean-0060",
+        "code-0001",
+        "code-0002",
+        "code-0003",
+        "code-0004",
+        "code-0005",
+        "code-0006",
+        "code-0007",
+        "code-0008",
+        "code-0009",
+        "code-0010",
+        "code-0011",
+        "code-0012",
+        "code-0013",
+        "code-0014",
+        "code-0015",
+        "code-0016",
+        "code-0017",
+        "code-0018",
+        "code-0019",
+        "code-0020",
+        "code-0021",
+        "code-0022",
+        "code-0023",
+        "code-0024",
+        "code-0025",
+        "command-0001",
+        "command-0002",
+        "command-0003",
+        "command-0004",
+        "command-0005",
+        "command-0006",
+        "command-0007",
+        "command-0008",
+        "command-0009",
+        "command-0010",
+        "command-0011",
+        "command-0012",
+        "command-0013",
+        "command-0014",
+        "command-0015",
+        "dictation-0001",
+        "dictation-0002",
+        "dictation-0003",
+        "dictation-0004",
+        "dictation-0005",
+        "dictation-0006",
+        "dictation-0007",
+        "dictation-0008",
+        "dictation-0009",
+        "dictation-0010",
+        "dictation-0011",
+        "dictation-0012",
+        "dictation-0013",
+        "dictation-0014",
+        "dictation-0015",
+        "dictation-0016",
+        "dictation-0017",
+        "dictation-0018",
+        "dictation-0019",
+        "dictation-0020",
+        "dictation-0021",
+        "dictation-0022",
+        "dictation-0023",
+        "dictation-0024",
+        "dictation-0025",
+        "dictation-0026",
+        "dictation-0027",
+        "dictation-0028",
+        "dictation-0029",
+        "dictation-0030",
+        "longform-0001",
+        "longform-0002",
+        "longform-0003",
+        "longform-0004",
+        "longform-0005",
+        "longform-0006",
+        "longform-0007",
+        "longform-0008",
+        "longform-0009",
+        "longform-0010",
+        "noise-0001",
+        "noise-0002",
+        "noise-0003",
+        "noise-0004",
+        "noise-0005",
+        "noise-0006",
+        "noise-0007",
+        "noise-0008",
+        "noise-0009",
+        "noise-0010",
+        "noise-0011",
+        "noise-0012",
+        "noise-0013",
+        "noise-0014",
+        "noise-0015",
+        "noise-0016",
+        "noise-0017",
+        "noise-0018",
+        "noise-0019",
+        "noise-0020",
+        "noise-0021",
+        "noise-0022",
+        "noise-0023",
+        "noise-0024",
+        "noise-0025",
+        "noise-0026",
+        "noise-0027",
+        "noise-0028",
+        "noise-0029",
+        "noise-0030",
+        "noise-0031",
+        "noise-0032",
+        "noise-0033",
+        "noise-0034",
+        "noise-0035",
+        "noise-0036",
+        "noise-0037",
+        "noise-0038",
+        "noise-0039",
+        "noise-0040",
+        "noise-0041",
+        "noise-0042",
+        "noise-0043",
+        "noise-0044",
+        "noise-0045",
+        "noise-0046",
+        "noise-0047",
+        "noise-0048",
+        "noise-0049",
+        "noise-0050",
+        "noise-0051",
+        "noise-0052",
+        "noise-0053",
+        "noise-0054",
+        "noise-0055",
+        "noise-0056",
+        "noise-0057",
+        "noise-0058",
+        "noise-0059",
+        "noise-0060"
+      ],
+      "wer": 0.2389,
+      "wer_ci": [
+        0.1465,
+        0.3595
+      ],
+      "wer_by_category": {
+        "accent": 0.2389,
+        "command": null
+      },
+      "wer_ci_by_category": {
+        "accent": [
+          0.1468,
+          0.363
+        ]
+      },
+      "wer_without_fillers": {
+        "accent": 0.2028,
+        "all": 0.2028
+      },
+      "formatted_error": 0.2623,
+      "punctuation_f1": 0.591,
+      "wait_after_key_up_ms": {
+        "median": 1156.1,
+        "p95": 2087.7
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 1156.1,
+          "p95": 2087.7
+        }
+      },
+      "time_to_first_text_ms_median": 8542.8,
+      "rtf_median": 0.1437,
+      "peak_rss_mb": 2665.1,
+      "cpu_s_per_audio_min": 24.71,
+      "load_ms": 0,
+      "paced": false,
+      "load1_median": 3.17,
+      "load1_max": 3.38
+    },
+    {
+      "id": "parakeet-v3-fp32-onnx-tdtfix",
+      "label": "Diagnostic: Parakeet v3 fp32 ONNX, TDT durations honored",
+      "model": "as above",
+      "source": "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx at 8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce",
+      "size_mb": 2550,
+      "runtime": "transcribe-rs 0.3.12 + transcribe-rs-tdt-durations.patch, Quantization::FP32",
+      "group": "diagnostic",
+      "license": "CC-BY-4.0",
+      "languages": "English + 24 European",
+      "scope": "the 50 accent clips only, same settings; a diagnostic of the ONNX gap, not a candidate",
+      "rows": "accent-2026-11-fp32/parakeet-v3-fp32-onnx-tdtfix.jsonl",
+      "clips": 50,
+      "missing": [
+        "clean-0001",
+        "clean-0002",
+        "clean-0003",
+        "clean-0004",
+        "clean-0005",
+        "clean-0006",
+        "clean-0007",
+        "clean-0008",
+        "clean-0009",
+        "clean-0010",
+        "clean-0011",
+        "clean-0012",
+        "clean-0013",
+        "clean-0014",
+        "clean-0015",
+        "clean-0016",
+        "clean-0017",
+        "clean-0018",
+        "clean-0019",
+        "clean-0020",
+        "clean-0021",
+        "clean-0022",
+        "clean-0023",
+        "clean-0024",
+        "clean-0025",
+        "clean-0026",
+        "clean-0027",
+        "clean-0028",
+        "clean-0029",
+        "clean-0030",
+        "clean-0031",
+        "clean-0032",
+        "clean-0033",
+        "clean-0034",
+        "clean-0035",
+        "clean-0036",
+        "clean-0037",
+        "clean-0038",
+        "clean-0039",
+        "clean-0040",
+        "clean-0041",
+        "clean-0042",
+        "clean-0043",
+        "clean-0044",
+        "clean-0045",
+        "clean-0046",
+        "clean-0047",
+        "clean-0048",
+        "clean-0049",
+        "clean-0050",
+        "clean-0051",
+        "clean-0052",
+        "clean-0053",
+        "clean-0054",
+        "clean-0055",
+        "clean-0056",
+        "clean-0057",
+        "clean-0058",
+        "clean-0059",
+        "clean-0060",
+        "code-0001",
+        "code-0002",
+        "code-0003",
+        "code-0004",
+        "code-0005",
+        "code-0006",
+        "code-0007",
+        "code-0008",
+        "code-0009",
+        "code-0010",
+        "code-0011",
+        "code-0012",
+        "code-0013",
+        "code-0014",
+        "code-0015",
+        "code-0016",
+        "code-0017",
+        "code-0018",
+        "code-0019",
+        "code-0020",
+        "code-0021",
+        "code-0022",
+        "code-0023",
+        "code-0024",
+        "code-0025",
+        "command-0001",
+        "command-0002",
+        "command-0003",
+        "command-0004",
+        "command-0005",
+        "command-0006",
+        "command-0007",
+        "command-0008",
+        "command-0009",
+        "command-0010",
+        "command-0011",
+        "command-0012",
+        "command-0013",
+        "command-0014",
+        "command-0015",
+        "dictation-0001",
+        "dictation-0002",
+        "dictation-0003",
+        "dictation-0004",
+        "dictation-0005",
+        "dictation-0006",
+        "dictation-0007",
+        "dictation-0008",
+        "dictation-0009",
+        "dictation-0010",
+        "dictation-0011",
+        "dictation-0012",
+        "dictation-0013",
+        "dictation-0014",
+        "dictation-0015",
+        "dictation-0016",
+        "dictation-0017",
+        "dictation-0018",
+        "dictation-0019",
+        "dictation-0020",
+        "dictation-0021",
+        "dictation-0022",
+        "dictation-0023",
+        "dictation-0024",
+        "dictation-0025",
+        "dictation-0026",
+        "dictation-0027",
+        "dictation-0028",
+        "dictation-0029",
+        "dictation-0030",
+        "longform-0001",
+        "longform-0002",
+        "longform-0003",
+        "longform-0004",
+        "longform-0005",
+        "longform-0006",
+        "longform-0007",
+        "longform-0008",
+        "longform-0009",
+        "longform-0010",
+        "noise-0001",
+        "noise-0002",
+        "noise-0003",
+        "noise-0004",
+        "noise-0005",
+        "noise-0006",
+        "noise-0007",
+        "noise-0008",
+        "noise-0009",
+        "noise-0010",
+        "noise-0011",
+        "noise-0012",
+        "noise-0013",
+        "noise-0014",
+        "noise-0015",
+        "noise-0016",
+        "noise-0017",
+        "noise-0018",
+        "noise-0019",
+        "noise-0020",
+        "noise-0021",
+        "noise-0022",
+        "noise-0023",
+        "noise-0024",
+        "noise-0025",
+        "noise-0026",
+        "noise-0027",
+        "noise-0028",
+        "noise-0029",
+        "noise-0030",
+        "noise-0031",
+        "noise-0032",
+        "noise-0033",
+        "noise-0034",
+        "noise-0035",
+        "noise-0036",
+        "noise-0037",
+        "noise-0038",
+        "noise-0039",
+        "noise-0040",
+        "noise-0041",
+        "noise-0042",
+        "noise-0043",
+        "noise-0044",
+        "noise-0045",
+        "noise-0046",
+        "noise-0047",
+        "noise-0048",
+        "noise-0049",
+        "noise-0050",
+        "noise-0051",
+        "noise-0052",
+        "noise-0053",
+        "noise-0054",
+        "noise-0055",
+        "noise-0056",
+        "noise-0057",
+        "noise-0058",
+        "noise-0059",
+        "noise-0060"
+      ],
+      "wer": 0.1283,
+      "wer_ci": [
+        0.1037,
+        0.1595
+      ],
+      "wer_by_category": {
+        "accent": 0.1283,
+        "command": null
+      },
+      "wer_ci_by_category": {
+        "accent": [
+          0.1017,
+          0.1586
+        ]
+      },
+      "wer_without_fillers": {
+        "accent": 0.1213,
+        "all": 0.1213
+      },
+      "formatted_error": 0.2584,
+      "punctuation_f1": 0.613,
+      "wait_after_key_up_ms": {
+        "median": 1009.9,
+        "p95": 1786.9
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 1009.9,
+          "p95": 1786.9
+        }
+      },
+      "time_to_first_text_ms_median": 8393.7,
+      "rtf_median": 0.1213,
+      "peak_rss_mb": 2689.6,
+      "cpu_s_per_audio_min": 20.89,
+      "load_ms": 0,
+      "paced": false,
+      "load1_median": 3.66,
+      "load1_max": 3.9
+    },
+    {
+      "id": "parakeet-v3-int8enc-fp32dec-onnx-tdtfix",
+      "label": "Diagnostic: int8 encoder + fp32 decoder_joint, TDT durations honored",
+      "model": "Silas's encoder-model.int8.onnx with the fp32 decoder_joint-model.onnx",
+      "source": "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx at 8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce",
+      "size_mb": 743,
+      "runtime": "transcribe-rs 0.3.12 + transcribe-rs-tdt-durations.patch",
+      "group": "diagnostic",
+      "license": "CC-BY-4.0",
+      "languages": "English + 24 European",
+      "scope": "the 50 accent clips only, same settings; a diagnostic of the ONNX gap, not a candidate",
+      "rows": "accent-2026-11-fp32/parakeet-v3-int8enc-fp32dec-onnx-tdtfix.jsonl",
+      "clips": 50,
+      "missing": [
+        "clean-0001",
+        "clean-0002",
+        "clean-0003",
+        "clean-0004",
+        "clean-0005",
+        "clean-0006",
+        "clean-0007",
+        "clean-0008",
+        "clean-0009",
+        "clean-0010",
+        "clean-0011",
+        "clean-0012",
+        "clean-0013",
+        "clean-0014",
+        "clean-0015",
+        "clean-0016",
+        "clean-0017",
+        "clean-0018",
+        "clean-0019",
+        "clean-0020",
+        "clean-0021",
+        "clean-0022",
+        "clean-0023",
+        "clean-0024",
+        "clean-0025",
+        "clean-0026",
+        "clean-0027",
+        "clean-0028",
+        "clean-0029",
+        "clean-0030",
+        "clean-0031",
+        "clean-0032",
+        "clean-0033",
+        "clean-0034",
+        "clean-0035",
+        "clean-0036",
+        "clean-0037",
+        "clean-0038",
+        "clean-0039",
+        "clean-0040",
+        "clean-0041",
+        "clean-0042",
+        "clean-0043",
+        "clean-0044",
+        "clean-0045",
+        "clean-0046",
+        "clean-0047",
+        "clean-0048",
+        "clean-0049",
+        "clean-0050",
+        "clean-0051",
+        "clean-0052",
+        "clean-0053",
+        "clean-0054",
+        "clean-0055",
+        "clean-0056",
+        "clean-0057",
+        "clean-0058",
+        "clean-0059",
+        "clean-0060",
+        "code-0001",
+        "code-0002",
+        "code-0003",
+        "code-0004",
+        "code-0005",
+        "code-0006",
+        "code-0007",
+        "code-0008",
+        "code-0009",
+        "code-0010",
+        "code-0011",
+        "code-0012",
+        "code-0013",
+        "code-0014",
+        "code-0015",
+        "code-0016",
+        "code-0017",
+        "code-0018",
+        "code-0019",
+        "code-0020",
+        "code-0021",
+        "code-0022",
+        "code-0023",
+        "code-0024",
+        "code-0025",
+        "command-0001",
+        "command-0002",
+        "command-0003",
+        "command-0004",
+        "command-0005",
+        "command-0006",
+        "command-0007",
+        "command-0008",
+        "command-0009",
+        "command-0010",
+        "command-0011",
+        "command-0012",
+        "command-0013",
+        "command-0014",
+        "command-0015",
+        "dictation-0001",
+        "dictation-0002",
+        "dictation-0003",
+        "dictation-0004",
+        "dictation-0005",
+        "dictation-0006",
+        "dictation-0007",
+        "dictation-0008",
+        "dictation-0009",
+        "dictation-0010",
+        "dictation-0011",
+        "dictation-0012",
+        "dictation-0013",
+        "dictation-0014",
+        "dictation-0015",
+        "dictation-0016",
+        "dictation-0017",
+        "dictation-0018",
+        "dictation-0019",
+        "dictation-0020",
+        "dictation-0021",
+        "dictation-0022",
+        "dictation-0023",
+        "dictation-0024",
+        "dictation-0025",
+        "dictation-0026",
+        "dictation-0027",
+        "dictation-0028",
+        "dictation-0029",
+        "dictation-0030",
+        "longform-0001",
+        "longform-0002",
+        "longform-0003",
+        "longform-0004",
+        "longform-0005",
+        "longform-0006",
+        "longform-0007",
+        "longform-0008",
+        "longform-0009",
+        "longform-0010",
+        "noise-0001",
+        "noise-0002",
+        "noise-0003",
+        "noise-0004",
+        "noise-0005",
+        "noise-0006",
+        "noise-0007",
+        "noise-0008",
+        "noise-0009",
+        "noise-0010",
+        "noise-0011",
+        "noise-0012",
+        "noise-0013",
+        "noise-0014",
+        "noise-0015",
+        "noise-0016",
+        "noise-0017",
+        "noise-0018",
+        "noise-0019",
+        "noise-0020",
+        "noise-0021",
+        "noise-0022",
+        "noise-0023",
+        "noise-0024",
+        "noise-0025",
+        "noise-0026",
+        "noise-0027",
+        "noise-0028",
+        "noise-0029",
+        "noise-0030",
+        "noise-0031",
+        "noise-0032",
+        "noise-0033",
+        "noise-0034",
+        "noise-0035",
+        "noise-0036",
+        "noise-0037",
+        "noise-0038",
+        "noise-0039",
+        "noise-0040",
+        "noise-0041",
+        "noise-0042",
+        "noise-0043",
+        "noise-0044",
+        "noise-0045",
+        "noise-0046",
+        "noise-0047",
+        "noise-0048",
+        "noise-0049",
+        "noise-0050",
+        "noise-0051",
+        "noise-0052",
+        "noise-0053",
+        "noise-0054",
+        "noise-0055",
+        "noise-0056",
+        "noise-0057",
+        "noise-0058",
+        "noise-0059",
+        "noise-0060"
+      ],
+      "wer": 0.1979,
+      "wer_ci": [
+        0.1512,
+        0.2608
+      ],
+      "wer_by_category": {
+        "accent": 0.1979,
+        "command": null
+      },
+      "wer_ci_by_category": {
+        "accent": [
+          0.1487,
+          0.2556
+        ]
+      },
+      "wer_without_fillers": {
+        "accent": 0.1917,
+        "all": 0.1917
+      },
+      "formatted_error": 0.3264,
+      "punctuation_f1": 0.55,
+      "wait_after_key_up_ms": {
+        "median": 1027.7,
+        "p95": 1703.6
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 1027.7,
+          "p95": 1703.6
+        }
+      },
+      "time_to_first_text_ms_median": 8404.4,
+      "rtf_median": 0.1241,
+      "peak_rss_mb": 1299.3,
+      "cpu_s_per_audio_min": 20.17,
+      "load_ms": 0,
+      "paced": false,
+      "load1_median": 3.26,
+      "load1_max": 3.47
+    },
+    {
+      "id": "paced-parakeet-v3-int8-onnx",
+      "label": "Real time: Parakeet v3 int8 ONNX (Silas today)",
+      "group": "paced",
+      "model": "parakeet-v3",
+      "scope": "the 40 ratchet clips (bench/subsets/ratchet.txt) in real time (no --fast), to check the simulated wait",
+      "rows": "accent-2026-11-paced/parakeet-v3-int8-onnx.jsonl",
+      "clips": 40,
+      "missing": [
+        "accent-0001",
+        "accent-0002",
+        "accent-0003",
+        "accent-0004",
+        "accent-0006",
+        "accent-0007",
+        "accent-0008",
+        "accent-0009",
+        "accent-0010",
+        "accent-0011",
+        "accent-0012",
+        "accent-0013",
+        "accent-0015",
+        "accent-0016",
+        "accent-0017",
+        "accent-0018",
+        "accent-0020",
+        "accent-0021",
+        "accent-0023",
+        "accent-0024",
+        "accent-0025",
+        "accent-0026",
+        "accent-0027",
+        "accent-0028",
+        "accent-0029",
+        "accent-0031",
+        "accent-0033",
+        "accent-0034",
+        "accent-0035",
+        "accent-0037",
+        "accent-0038",
+        "accent-0039",
+        "accent-0040",
+        "accent-0041",
+        "accent-0042",
+        "accent-0043",
+        "accent-0044",
+        "accent-0045",
+        "accent-0046",
+        "accent-0047",
+        "accent-0048",
+        "accent-0049",
+        "accent-0050",
+        "clean-0001",
+        "clean-0002",
+        "clean-0003",
+        "clean-0004",
+        "clean-0005",
+        "clean-0006",
+        "clean-0007",
+        "clean-0008",
+        "clean-0009",
+        "clean-0010",
+        "clean-0012",
+        "clean-0013",
+        "clean-0014",
+        "clean-0016",
+        "clean-0017",
+        "clean-0018",
+        "clean-0019",
+        "clean-0020",
+        "clean-0022",
+        "clean-0023",
+        "clean-0024",
+        "clean-0025",
+        "clean-0026",
+        "clean-0027",
+        "clean-0028",
+        "clean-0029",
+        "clean-0030",
+        "clean-0031",
+        "clean-0032",
+        "clean-0033",
+        "clean-0034",
+        "clean-0036",
+        "clean-0037",
+        "clean-0038",
+        "clean-0039",
+        "clean-0040",
+        "clean-0042",
+        "clean-0043",
+        "clean-0044",
+        "clean-0045",
+        "clean-0046",
+        "clean-0048",
+        "clean-0049",
+        "clean-0050",
+        "clean-0051",
+        "clean-0052",
+        "clean-0054",
+        "clean-0055",
+        "clean-0056",
+        "clean-0057",
+        "clean-0058",
+        "clean-0059",
+        "clean-0060",
+        "code-0001",
+        "code-0003",
+        "code-0005",
+        "code-0007",
+        "code-0008",
+        "code-0009",
+        "code-0010",
+        "code-0011",
+        "code-0013",
+        "code-0014",
+        "code-0016",
+        "code-0017",
+        "code-0018",
+        "code-0019",
+        "code-0020",
+        "code-0022",
+        "code-0023",
+        "code-0024",
+        "code-0025",
+        "command-0002",
+        "command-0003",
+        "command-0006",
+        "command-0007",
+        "command-0008",
+        "command-0010",
+        "command-0012",
+        "command-0013",
+        "command-0014",
+        "command-0015",
+        "dictation-0001",
+        "dictation-0002",
+        "dictation-0003",
+        "dictation-0004",
+        "dictation-0005",
+        "dictation-0006",
+        "dictation-0007",
+        "dictation-0009",
+        "dictation-0011",
+        "dictation-0012",
+        "dictation-0015",
+        "dictation-0016",
+        "dictation-0017",
+        "dictation-0018",
+        "dictation-0019",
+        "dictation-0020",
+        "dictation-0021",
+        "dictation-0023",
+        "dictation-0024",
+        "dictation-0025",
+        "dictation-0028",
+        "dictation-0029",
+        "dictation-0030",
+        "longform-0001",
+        "longform-0002",
+        "longform-0003",
+        "longform-0004",
+        "longform-0005",
+        "longform-0006",
+        "longform-0007",
+        "longform-0008",
+        "longform-0009",
+        "noise-0003",
+        "noise-0004",
+        "noise-0005",
+        "noise-0006",
+        "noise-0008",
+        "noise-0009",
+        "noise-0010",
+        "noise-0011",
+        "noise-0013",
+        "noise-0014",
+        "noise-0015",
+        "noise-0016",
+        "noise-0017",
+        "noise-0018",
+        "noise-0019",
+        "noise-0020",
+        "noise-0021",
+        "noise-0022",
+        "noise-0023",
+        "noise-0024",
+        "noise-0025",
+        "noise-0026",
+        "noise-0027",
+        "noise-0028",
+        "noise-0029",
+        "noise-0030",
+        "noise-0031",
+        "noise-0032",
+        "noise-0034",
+        "noise-0035",
+        "noise-0036",
+        "noise-0037",
+        "noise-0038",
+        "noise-0039",
+        "noise-0040",
+        "noise-0041",
+        "noise-0042",
+        "noise-0043",
+        "noise-0044",
+        "noise-0045",
+        "noise-0046",
+        "noise-0047",
+        "noise-0048",
+        "noise-0049",
+        "noise-0050",
+        "noise-0051",
+        "noise-0053",
+        "noise-0054",
+        "noise-0055",
+        "noise-0056",
+        "noise-0057",
+        "noise-0059",
+        "noise-0060"
+      ],
+      "wer": 0.0778,
+      "wer_ci": [
+        0.0395,
+        0.1639
+      ],
+      "wer_by_category": {
+        "clean": 0.0111,
+        "noise": 0.0753,
+        "accent": 0.2869,
+        "dictation": 0.0645,
+        "code": 0.2105,
+        "longform": 0.013,
+        "command": 0.0
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0,
+          0.038
+        ],
+        "noise": [
+          0.0318,
+          0.1322
+        ],
+        "accent": [
+          0.1342,
+          0.4783
+        ],
+        "dictation": [
+          0.0169,
+          0.121
+        ],
+        "code": [
+          0.0714,
+          0.3774
+        ],
+        "longform": [
+          0.013,
+          0.013
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0111,
+        "noise": 0.0753,
+        "accent": 0.2917,
+        "dictation": 0.0645,
+        "code": 0.2105,
+        "command": 0.0,
+        "longform": 0.0131,
+        "all": 0.0783
+      },
+      "formatted_error": 0.1946,
+      "punctuation_f1": 0.7338,
+      "wait_after_key_up_ms": {
+        "median": 1009.2,
+        "p95": 1367.4
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 1087.9,
+          "p95": 1352.2
+        },
+        "clean": {
+          "median": 877.8,
+          "p95": 1299.5
+        },
+        "code": {
+          "median": 718.4,
+          "p95": 850.8
+        },
+        "command": {
+          "median": 446.2,
+          "p95": 528.9
+        },
+        "dictation": {
+          "median": 1087.6,
+          "p95": 1309.1
+        },
+        "longform": {
+          "median": 455.2,
+          "p95": 455.2
+        },
+        "noise": {
+          "median": 1175.5,
+          "p95": 1331.4
+        }
+      },
+      "time_to_first_text_ms_median": 6564.4,
+      "rtf_median": 0.1333,
+      "peak_rss_mb": 1201.9,
+      "cpu_s_per_audio_min": 21.41,
+      "load_ms": 1177,
+      "paced": true,
+      "load1_median": 1.7,
+      "load1_max": 2.79
+    },
+    {
+      "id": "paced-parakeet-v3-q4km-gguf",
+      "label": "Real time: Parakeet v3 Q4_K_M GGUF",
+      "group": "paced",
+      "model": "gguf:parakeet-tdt-0.6b-v3-Q4_K_M.gguf",
+      "scope": "the 40 ratchet clips (bench/subsets/ratchet.txt) in real time (no --fast), to check the simulated wait",
+      "rows": "accent-2026-11-paced/parakeet-v3-q4km-gguf.jsonl",
+      "clips": 40,
+      "missing": [
+        "accent-0001",
+        "accent-0002",
+        "accent-0003",
+        "accent-0004",
+        "accent-0006",
+        "accent-0007",
+        "accent-0008",
+        "accent-0009",
+        "accent-0010",
+        "accent-0011",
+        "accent-0012",
+        "accent-0013",
+        "accent-0015",
+        "accent-0016",
+        "accent-0017",
+        "accent-0018",
+        "accent-0020",
+        "accent-0021",
+        "accent-0023",
+        "accent-0024",
+        "accent-0025",
+        "accent-0026",
+        "accent-0027",
+        "accent-0028",
+        "accent-0029",
+        "accent-0031",
+        "accent-0033",
+        "accent-0034",
+        "accent-0035",
+        "accent-0037",
+        "accent-0038",
+        "accent-0039",
+        "accent-0040",
+        "accent-0041",
+        "accent-0042",
+        "accent-0043",
+        "accent-0044",
+        "accent-0045",
+        "accent-0046",
+        "accent-0047",
+        "accent-0048",
+        "accent-0049",
+        "accent-0050",
+        "clean-0001",
+        "clean-0002",
+        "clean-0003",
+        "clean-0004",
+        "clean-0005",
+        "clean-0006",
+        "clean-0007",
+        "clean-0008",
+        "clean-0009",
+        "clean-0010",
+        "clean-0012",
+        "clean-0013",
+        "clean-0014",
+        "clean-0016",
+        "clean-0017",
+        "clean-0018",
+        "clean-0019",
+        "clean-0020",
+        "clean-0022",
+        "clean-0023",
+        "clean-0024",
+        "clean-0025",
+        "clean-0026",
+        "clean-0027",
+        "clean-0028",
+        "clean-0029",
+        "clean-0030",
+        "clean-0031",
+        "clean-0032",
+        "clean-0033",
+        "clean-0034",
+        "clean-0036",
+        "clean-0037",
+        "clean-0038",
+        "clean-0039",
+        "clean-0040",
+        "clean-0042",
+        "clean-0043",
+        "clean-0044",
+        "clean-0045",
+        "clean-0046",
+        "clean-0048",
+        "clean-0049",
+        "clean-0050",
+        "clean-0051",
+        "clean-0052",
+        "clean-0054",
+        "clean-0055",
+        "clean-0056",
+        "clean-0057",
+        "clean-0058",
+        "clean-0059",
+        "clean-0060",
+        "code-0001",
+        "code-0003",
+        "code-0005",
+        "code-0007",
+        "code-0008",
+        "code-0009",
+        "code-0010",
+        "code-0011",
+        "code-0013",
+        "code-0014",
+        "code-0016",
+        "code-0017",
+        "code-0018",
+        "code-0019",
+        "code-0020",
+        "code-0022",
+        "code-0023",
+        "code-0024",
+        "code-0025",
+        "command-0002",
+        "command-0003",
+        "command-0006",
+        "command-0007",
+        "command-0008",
+        "command-0010",
+        "command-0012",
+        "command-0013",
+        "command-0014",
+        "command-0015",
+        "dictation-0001",
+        "dictation-0002",
+        "dictation-0003",
+        "dictation-0004",
+        "dictation-0005",
+        "dictation-0006",
+        "dictation-0007",
+        "dictation-0009",
+        "dictation-0011",
+        "dictation-0012",
+        "dictation-0015",
+        "dictation-0016",
+        "dictation-0017",
+        "dictation-0018",
+        "dictation-0019",
+        "dictation-0020",
+        "dictation-0021",
+        "dictation-0023",
+        "dictation-0024",
+        "dictation-0025",
+        "dictation-0028",
+        "dictation-0029",
+        "dictation-0030",
+        "longform-0001",
+        "longform-0002",
+        "longform-0003",
+        "longform-0004",
+        "longform-0005",
+        "longform-0006",
+        "longform-0007",
+        "longform-0008",
+        "longform-0009",
+        "noise-0003",
+        "noise-0004",
+        "noise-0005",
+        "noise-0006",
+        "noise-0008",
+        "noise-0009",
+        "noise-0010",
+        "noise-0011",
+        "noise-0013",
+        "noise-0014",
+        "noise-0015",
+        "noise-0016",
+        "noise-0017",
+        "noise-0018",
+        "noise-0019",
+        "noise-0020",
+        "noise-0021",
+        "noise-0022",
+        "noise-0023",
+        "noise-0024",
+        "noise-0025",
+        "noise-0026",
+        "noise-0027",
+        "noise-0028",
+        "noise-0029",
+        "noise-0030",
+        "noise-0031",
+        "noise-0032",
+        "noise-0034",
+        "noise-0035",
+        "noise-0036",
+        "noise-0037",
+        "noise-0038",
+        "noise-0039",
+        "noise-0040",
+        "noise-0041",
+        "noise-0042",
+        "noise-0043",
+        "noise-0044",
+        "noise-0045",
+        "noise-0046",
+        "noise-0047",
+        "noise-0048",
+        "noise-0049",
+        "noise-0050",
+        "noise-0051",
+        "noise-0053",
+        "noise-0054",
+        "noise-0055",
+        "noise-0056",
+        "noise-0057",
+        "noise-0059",
+        "noise-0060"
+      ],
+      "wer": 0.053,
+      "wer_ci": [
+        0.025,
+        0.1212
+      ],
+      "wer_by_category": {
+        "clean": 0.0222,
+        "noise": 0.0479,
+        "accent": 0.1066,
+        "dictation": 0.0726,
+        "code": 0.2982,
+        "longform": 0.0026,
+        "command": 0.0
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0,
+          0.0759
+        ],
+        "noise": [
+          0.013,
+          0.0949
+        ],
+        "accent": [
+          0.0435,
+          0.1869
+        ],
+        "dictation": [
+          0.0168,
+          0.1404
+        ],
+        "code": [
+          0.1071,
+          0.5294
+        ],
+        "longform": [
+          0.0026,
+          0.0026
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0222,
+        "noise": 0.0479,
+        "accent": 0.1083,
+        "dictation": 0.0726,
+        "code": 0.2982,
+        "command": 0.0,
+        "longform": 0.0026,
+        "all": 0.0533
+      },
+      "formatted_error": 0.1663,
+      "punctuation_f1": 0.766,
+      "wait_after_key_up_ms": {
+        "median": 875.3,
+        "p95": 1149.9
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 884.7,
+          "p95": 1057.0
+        },
+        "clean": {
+          "median": 699.7,
+          "p95": 958.5
+        },
+        "code": {
+          "median": 709.8,
+          "p95": 832.4
+        },
+        "command": {
+          "median": 440.2,
+          "p95": 448.7
+        },
+        "dictation": {
+          "median": 974.8,
+          "p95": 1090.1
+        },
+        "longform": {
+          "median": 454.5,
+          "p95": 454.5
+        },
+        "noise": {
+          "median": 1108.7,
+          "p95": 1235.4
+        }
+      },
+      "time_to_first_text_ms_median": 6476.4,
+      "rtf_median": 0.1174,
+      "peak_rss_mb": 1004.0,
+      "cpu_s_per_audio_min": 20.1,
+      "load_ms": 0,
+      "paced": true,
+      "load1_median": 0.38,
+      "load1_max": 1.16
+    },
+    {
+      "id": "paced-parakeet-v3-q8-gguf",
+      "label": "Real time: Parakeet v3 Q8_0 GGUF",
+      "group": "paced",
+      "model": "gguf:parakeet-tdt-0.6b-v3-Q8_0.gguf",
+      "scope": "the 40 ratchet clips (bench/subsets/ratchet.txt) in real time (no --fast), to check the simulated wait",
+      "rows": "accent-2026-11-paced/parakeet-v3-q8-gguf.jsonl",
+      "clips": 40,
+      "missing": [
+        "accent-0001",
+        "accent-0002",
+        "accent-0003",
+        "accent-0004",
+        "accent-0006",
+        "accent-0007",
+        "accent-0008",
+        "accent-0009",
+        "accent-0010",
+        "accent-0011",
+        "accent-0012",
+        "accent-0013",
+        "accent-0015",
+        "accent-0016",
+        "accent-0017",
+        "accent-0018",
+        "accent-0020",
+        "accent-0021",
+        "accent-0023",
+        "accent-0024",
+        "accent-0025",
+        "accent-0026",
+        "accent-0027",
+        "accent-0028",
+        "accent-0029",
+        "accent-0031",
+        "accent-0033",
+        "accent-0034",
+        "accent-0035",
+        "accent-0037",
+        "accent-0038",
+        "accent-0039",
+        "accent-0040",
+        "accent-0041",
+        "accent-0042",
+        "accent-0043",
+        "accent-0044",
+        "accent-0045",
+        "accent-0046",
+        "accent-0047",
+        "accent-0048",
+        "accent-0049",
+        "accent-0050",
+        "clean-0001",
+        "clean-0002",
+        "clean-0003",
+        "clean-0004",
+        "clean-0005",
+        "clean-0006",
+        "clean-0007",
+        "clean-0008",
+        "clean-0009",
+        "clean-0010",
+        "clean-0012",
+        "clean-0013",
+        "clean-0014",
+        "clean-0016",
+        "clean-0017",
+        "clean-0018",
+        "clean-0019",
+        "clean-0020",
+        "clean-0022",
+        "clean-0023",
+        "clean-0024",
+        "clean-0025",
+        "clean-0026",
+        "clean-0027",
+        "clean-0028",
+        "clean-0029",
+        "clean-0030",
+        "clean-0031",
+        "clean-0032",
+        "clean-0033",
+        "clean-0034",
+        "clean-0036",
+        "clean-0037",
+        "clean-0038",
+        "clean-0039",
+        "clean-0040",
+        "clean-0042",
+        "clean-0043",
+        "clean-0044",
+        "clean-0045",
+        "clean-0046",
+        "clean-0048",
+        "clean-0049",
+        "clean-0050",
+        "clean-0051",
+        "clean-0052",
+        "clean-0054",
+        "clean-0055",
+        "clean-0056",
+        "clean-0057",
+        "clean-0058",
+        "clean-0059",
+        "clean-0060",
+        "code-0001",
+        "code-0003",
+        "code-0005",
+        "code-0007",
+        "code-0008",
+        "code-0009",
+        "code-0010",
+        "code-0011",
+        "code-0013",
+        "code-0014",
+        "code-0016",
+        "code-0017",
+        "code-0018",
+        "code-0019",
+        "code-0020",
+        "code-0022",
+        "code-0023",
+        "code-0024",
+        "code-0025",
+        "command-0002",
+        "command-0003",
+        "command-0006",
+        "command-0007",
+        "command-0008",
+        "command-0010",
+        "command-0012",
+        "command-0013",
+        "command-0014",
+        "command-0015",
+        "dictation-0001",
+        "dictation-0002",
+        "dictation-0003",
+        "dictation-0004",
+        "dictation-0005",
+        "dictation-0006",
+        "dictation-0007",
+        "dictation-0009",
+        "dictation-0011",
+        "dictation-0012",
+        "dictation-0015",
+        "dictation-0016",
+        "dictation-0017",
+        "dictation-0018",
+        "dictation-0019",
+        "dictation-0020",
+        "dictation-0021",
+        "dictation-0023",
+        "dictation-0024",
+        "dictation-0025",
+        "dictation-0028",
+        "dictation-0029",
+        "dictation-0030",
+        "longform-0001",
+        "longform-0002",
+        "longform-0003",
+        "longform-0004",
+        "longform-0005",
+        "longform-0006",
+        "longform-0007",
+        "longform-0008",
+        "longform-0009",
+        "noise-0003",
+        "noise-0004",
+        "noise-0005",
+        "noise-0006",
+        "noise-0008",
+        "noise-0009",
+        "noise-0010",
+        "noise-0011",
+        "noise-0013",
+        "noise-0014",
+        "noise-0015",
+        "noise-0016",
+        "noise-0017",
+        "noise-0018",
+        "noise-0019",
+        "noise-0020",
+        "noise-0021",
+        "noise-0022",
+        "noise-0023",
+        "noise-0024",
+        "noise-0025",
+        "noise-0026",
+        "noise-0027",
+        "noise-0028",
+        "noise-0029",
+        "noise-0030",
+        "noise-0031",
+        "noise-0032",
+        "noise-0034",
+        "noise-0035",
+        "noise-0036",
+        "noise-0037",
+        "noise-0038",
+        "noise-0039",
+        "noise-0040",
+        "noise-0041",
+        "noise-0042",
+        "noise-0043",
+        "noise-0044",
+        "noise-0045",
+        "noise-0046",
+        "noise-0047",
+        "noise-0048",
+        "noise-0049",
+        "noise-0050",
+        "noise-0051",
+        "noise-0053",
+        "noise-0054",
+        "noise-0055",
+        "noise-0056",
+        "noise-0057",
+        "noise-0059",
+        "noise-0060"
+      ],
+      "wer": 0.0541,
+      "wer_ci": [
+        0.0256,
+        0.1197
+      ],
+      "wer_by_category": {
+        "clean": 0.0222,
+        "noise": 0.0411,
+        "accent": 0.0984,
+        "dictation": 0.1129,
+        "code": 0.2632,
+        "longform": 0.0026,
+        "command": 0.0
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0,
+          0.0759
+        ],
+        "noise": [
+          0.0126,
+          0.0859
+        ],
+        "accent": [
+          0.0438,
+          0.177
+        ],
+        "dictation": [
+          0.0488,
+          0.1838
+        ],
+        "code": [
+          0.0893,
+          0.4808
+        ],
+        "longform": [
+          0.0026,
+          0.0026
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0222,
+        "noise": 0.0411,
+        "accent": 0.1,
+        "dictation": 0.1129,
+        "code": 0.2632,
+        "command": 0.0,
+        "longform": 0.0026,
+        "all": 0.0543
+      },
+      "formatted_error": 0.1698,
+      "punctuation_f1": 0.7376,
+      "wait_after_key_up_ms": {
+        "median": 845.4,
+        "p95": 1162.9
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 851.8,
+          "p95": 1036.6
+        },
+        "clean": {
+          "median": 665.8,
+          "p95": 964.4
+        },
+        "code": {
+          "median": 703.3,
+          "p95": 815.3
+        },
+        "command": {
+          "median": 415.4,
+          "p95": 422.4
+        },
+        "dictation": {
+          "median": 1046.2,
+          "p95": 1118.0
+        },
+        "longform": {
+          "median": 428.8,
+          "p95": 428.8
+        },
+        "noise": {
+          "median": 1111.0,
+          "p95": 1312.4
+        }
+      },
+      "time_to_first_text_ms_median": 6460.4,
+      "rtf_median": 0.1176,
+      "peak_rss_mb": 1245.0,
+      "cpu_s_per_audio_min": 20.56,
+      "load_ms": 0,
+      "paced": true,
+      "load1_median": 0.81,
+      "load1_max": 1.09
+    }
+  ]
+}
