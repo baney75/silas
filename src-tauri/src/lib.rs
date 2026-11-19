@@ -2,7 +2,6 @@ pub mod commands;
 pub mod host;
 #[cfg(test)]
 mod settings_bench;
-pub mod theme;
 pub mod tray;
 pub mod updates;
 
@@ -60,7 +59,6 @@ pub fn run() {
             core.start_device_pick();
             polycarp_voice::start_listener(core.clone());
             updates::schedule(handle.clone());
-            theme::watch(handle.clone());
 
             let background = std::env::args().any(|a| a == "--background");
             let onboarded = core.settings.lock().onboarded;
@@ -123,7 +121,6 @@ pub fn run() {
             commands::run_benchmark,
             commands::share_benchmark,
             commands::get_device,
-            commands::get_theme,
             commands::wait_device_pick,
             commands::check_update,
             commands::install_update,

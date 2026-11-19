@@ -52,15 +52,6 @@ pub trait Host: Send + Sync + 'static {
             "stable"
         }
     }
-    /// What messages call the app ("Silas" in the Tauri app, "Polycarp" in the native one).
-    fn product_name(&self) -> String {
-        "Silas".into()
-    }
-    /// Where this app's own permission buttons are, for messages that send the user there
-    /// ("Settings > Silas" in Polycarp). None: the Silas app's home screen and onboarding.
-    fn permission_place(&self) -> Option<String> {
-        None
-    }
 }
 
 /// A host that ignores everything. For tests and headless use.
@@ -196,51 +187,43 @@ const BUSY_EVERY: Duration = Duration::from_secs(1);
 /// The text `pc_last_error` and events carry when the user cancelled (a hotkey pick, a download).
 pub const CANCELLED: &str = "cancelled";
 
-pub fn key_access_message(product: &str, place: Option<&str>) -> String {
-    key_access_message_for(std::env::consts::OS, product, place)
+pub fn key_access_message() -> String {
+    key_access_message_for(std::env::consts::OS)
 }
 
 /// The macOS text also covers a stale grant: after a build with a different signature, the
 /// Accessibility switch can still look on for the old one while this build is not trusted.
 /// Turning that switch off and on keeps the old signature, so the text never suggests it:
 /// Fix Permission clears the entry, and removing and re-adding Silas by hand does the same.
-/// `place` is where the host's own permission buttons are; None is the Silas app's home screen.
-fn key_access_message_for(os: &str, p: &str, place: Option<&str>) -> String {
-    let by_hand = format!("open System Settings, Privacy & Security, Accessibility, select {p}, click the minus button to remove it, click plus and add {p} from Applications, then turn on its switch.");
-    match (os, place) {
-        ("macos", None) => format!("{p} can't hear your key yet. Click Fix Permission on the {p} home screen. If that doesn't work, {by_hand}"),
-        ("macos", Some(place)) => format!("{p} can't hear your key yet. Open {place} and click Open Accessibility Settings, then turn on {p}. If {p} is on there already, {by_hand}"),
-        ("linux", _) => format!("{p} can't read the keyboard. Reinstall the package, or add the udev rule from the README, then log out and back in."),
-        _ => format!("{p} couldn't start its keyboard listener. Restart {p}."),
+fn key_access_message_for(os: &str) -> String {
+    match os {
+        "macos" => "Silas can't hear your key yet. Click Fix Permission on the Silas home screen. If that doesn't work, open System Settings, Privacy & Security, Accessibility, select Silas, click the minus button to remove it, click plus and add Silas from Applications, then turn on its switch.".into(),
+        "linux" => "Silas can't read the keyboard. Reinstall the package, or add the udev rule from the README, then log out and back in.".into(),
+        _ => "Silas couldn't start its keyboard listener. Restart Silas.".into(),
     }
 }
 
-/// Why a press didn't record when the microphone isn't allowed. Undetermined and denied need
-/// different buttons: macOS asks only once, and after a no only its own list can say yes.
-pub fn mic_message(p: &str, place: Option<&str>, grant: crate::permissions::Grant) -> String {
-    use crate::permissions::Grant;
-    match (place, grant) {
-        (None, _) => format!("Microphone: not allowed yet. Open {p} and click Allow for the microphone."),
-        (Some(place), Grant::Denied) => format!("Microphone: not allowed. Open {place} and click Open Microphone Settings, then turn on {p}."),
-        (Some(place), _) => format!("Microphone: not allowed yet. Open {place} and click Allow on the Microphone line."),
-    }
+/// Why a press didn't record when the microphone isn't allowed. Onboarding and the home screen
+/// have the Allow button.
+pub fn mic_message() -> String {
+    "Microphone: not allowed yet. Open Silas and click Allow for the microphone.".into()
 }
 
 /// Said when a password field has the keyboard as a dictation starts. macOS hides every key
 /// from other apps then (secure input), and text typed there would land in a password.
-pub fn secure_start_message(p: &str) -> String {
-    format!("A password field has the keyboard, so {p} isn't listening. Click into another field and try again.")
+pub fn secure_start_message() -> String {
+    "A password field has the keyboard, so Silas isn't listening. Click into another field and try again.".into()
 }
 
 /// Said when a password field took the keyboard while the dictation was being written. The text
 /// is dropped: it is never typed, kept in History, or learned from.
-pub fn secure_finish_message(p: &str) -> String {
-    format!("A password field has the keyboard, so {p} didn't type what you said and didn't keep it.")
+pub fn secure_finish_message() -> String {
+    "A password field has the keyboard, so Silas didn't type what you said and didn't keep it.".into()
 }
 
 /// Said after a panic in the speech runtime or the key handling ended a dictation.
-pub fn crash_message(p: &str) -> String {
-    format!("Something went wrong inside {p}, so that dictation stopped. Press your key to try again.")
+pub fn crash_message() -> String {
+    "Something went wrong inside Silas, so that dictation stopped. Press your key to try again.".into()
 }
 
 /// A short line in the overlay: `kind` is error, busy or stopped.
@@ -248,7 +231,7 @@ pub fn crash_message(p: &str) -> String {
 pub enum Notice {
     /// Something failed; the status is Error for a few seconds.
     Error,
-    /// The press came while Polycarp was still busy, so it didn't start anything.
+    /// The press came while Silas was still busy, so it didn't start anything.
     Busy,
     /// The user stopped the typing with Escape.
     Stopped,
@@ -298,15 +281,15 @@ pub fn press(status: Status, detail: Option<&str>, model_loaded: bool, listener_
     }
 }
 
-/// What a key the user presses while Polycarp is typing means.
+/// What a key the user presses while Silas is typing means.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WhileTyping {
     /// Escape: stop typing; the rest of the text is in History.
     Stop,
-    /// A key Polycarp never sends (delete, arrows): the user changed the text, so Polycarp's copy
+    /// A key Silas never sends (delete, arrows): the user changed the text, so Silas's copy
     /// of it is off and edits aren't learned from.
     Edit,
-    /// Polycarp's own keystrokes, a key release, or anything else.
+    /// Silas's own keystrokes, a key release, or anything else.
     Other,
 }
 
@@ -330,7 +313,7 @@ pub fn key_while_typing(ev: &handy_keys::KeyEvent) -> WhileTyping {
 pub enum Delivery {
     /// Type it, then keep it in History.
     Type,
-    /// Focus went somewhere Polycarp couldn't bring back; typing would hit the wrong window.
+    /// Focus went somewhere Silas couldn't bring back; typing would hit the wrong window.
     HistoryOnly,
     /// A password field has the keyboard: drop the text.
     Drop,
@@ -503,9 +486,9 @@ impl Core {
         );
     }
 
-    /// The message for a key listener that can't start, worded for this host.
+    /// The message for a key listener that can't start.
     fn key_message(&self) -> String {
-        key_access_message(&self.host.product_name(), self.host.permission_place().as_deref())
+        key_access_message()
     }
 
     /// A short line for the overlay. Sent before the status it goes with, so the overlay shows the
@@ -539,7 +522,7 @@ impl Core {
             self.pieces.lock().take();
             self.target.lock().take();
         }
-        self.fail(crash_message(&self.host.product_name()));
+        self.fail(crash_message());
     }
 
     pub fn set_status(&self, s: Status, detail: Option<String>) {
@@ -973,7 +956,7 @@ impl Core {
     pub fn apply_settings(self: &Shared, settings: Settings) -> Result<(Settings, Settings), String> {
         let mut settings = settings;
         let trigger = Trigger::parse(&settings.hotkey)
-            .ok_or_else(|| format!("{} is not a key {} can use", settings.hotkey, self.host.product_name()))?;
+            .ok_or_else(|| format!("{} is not a key Silas can use", settings.hotkey))?;
         settings.update_channel = settings.effective_channel().into();
         let old = {
             let mut cur = self.settings.lock();
@@ -1020,7 +1003,7 @@ impl Core {
         }
     }
 
-    /// Swallow the dictation key only while it is doing Polycarp's work. Paused, the key goes
+    /// Swallow the dictation key only while it is doing Silas's work. Paused, the key goes
     /// back to the system.
     pub fn sync_blocked(&self) {
         let want = if self.is_enabled() {
@@ -1199,19 +1182,17 @@ impl Core {
                 return;
             }
         }
-        let p = self.host.product_name();
         // macOS hides every key from other apps while a password field has the keyboard, and
         // anything typed would land in the password: never start then.
         if crate::focus::secure_input() {
             self.machine.lock().reset();
-            self.fail(secure_start_message(&p));
+            self.fail(secure_start_message());
             return;
         }
         // The hotkey never shows the system mic prompt; only onboarding's Allow asks.
         if !crate::permissions::mic_ready_for_recording() {
             self.machine.lock().reset();
-            let grant = crate::permissions::check().microphone;
-            self.fail(mic_message(&p, self.host.permission_place().as_deref(), grant));
+            self.fail(mic_message());
             return;
         }
         // Note where the keyboard is now, at key-down. On Hyprland the overlay can take the
@@ -1373,12 +1354,11 @@ impl Core {
         use crate::focus::Restore;
         let restored = target.as_ref().map_or(Restore::Elsewhere, |t| t.restore());
         let latency = released.elapsed().as_millis() as u64;
-        let p = me.host.product_name();
         // Typing into the window that stole focus is the bug; keep the text in History. A
         // password field gets nothing, and the text isn't kept anywhere.
         let mut lost_focus = match delivery(crate::focus::secure_input(), restored) {
             Delivery::Drop => {
-                me.fail(secure_finish_message(&p));
+                me.fail(secure_finish_message());
                 return;
             }
             Delivery::HistoryOnly => true,
@@ -1463,7 +1443,7 @@ impl Core {
         if let Some(e) = typing_error {
             me.fail(format!("{e}. Your full text is in History."));
         } else if lost_focus {
-            me.fail(format!("Another window took the keyboard, so {p} stopped typing. Your full text is in History."));
+            me.fail("Another window took the keyboard, so Silas stopped typing. Your full text is in History.".into());
         } else if stopped {
             me.notice(Notice::Stopped, "Stopped typing. Your full text is in History.");
             me.set_status(Status::Ready, None);
@@ -1615,7 +1595,7 @@ mod tests {
 
     #[test]
     fn the_mac_key_message_explains_a_stale_grant() {
-        let m = key_access_message_for("macos", "Silas", None);
+        let m = key_access_message_for("macos");
         // home.ts finds the banner by this phrase.
         assert!(m.contains("can't hear your key"));
         assert!(m.contains("Privacy & Security, Accessibility"));
@@ -1648,7 +1628,7 @@ mod tests {
         let mut s = core.settings.lock().clone();
         s.hotkey = "Dictation".into();
         core.apply_settings(s.clone()).unwrap();
-        assert!(holds(&core), "chosen: Polycarp takes the press");
+        assert!(holds(&core), "chosen: Silas takes the press");
         core.set_enabled(false);
         assert!(!holds(&core), "paused: the key goes back to the system");
         core.set_enabled(true);
@@ -1787,12 +1767,6 @@ mod tests {
         fn status_changed(&self, _: Status, _: bool) {}
         fn show_main(&self) {}
         fn listener_returned(&self) {}
-        fn product_name(&self) -> String {
-            "Polycarp".into()
-        }
-        fn permission_place(&self) -> Option<String> {
-            Some("Settings > Silas".into())
-        }
     }
 
     impl Seen {
@@ -1841,19 +1815,11 @@ mod tests {
     }
 
     #[test]
-    fn polycarps_messages_send_you_to_its_settings_not_a_home_screen() {
-        let k = key_access_message_for("macos", "Polycarp", Some("Settings > Silas"));
-        assert!(k.contains("can't hear your key"), "home.ts and set_listener find it by this: {k}");
-        assert!(k.contains("Settings > Silas") && k.contains("Open Accessibility Settings"), "{k}");
-        assert!(!k.contains("home screen") && !k.contains("Fix Permission"), "Polycarp has neither: {k}");
-        use crate::permissions::Grant;
-        let unasked = mic_message("Polycarp", Some("Settings > Silas"), Grant::Unknown);
-        assert!(unasked.contains("Settings > Silas") && unasked.contains("Allow"), "{unasked}");
-        let denied = mic_message("Polycarp", Some("Settings > Silas"), Grant::Denied);
-        assert!(denied.contains("Open Microphone Settings"), "macOS asks only once: {denied}");
-        // The Silas app keeps its own words.
-        assert!(mic_message("Silas", None, Grant::Denied).contains("Open Silas and click Allow"));
-        for m in [k, unasked, denied, secure_start_message("Polycarp"), secure_finish_message("Polycarp"), crash_message("Polycarp")] {
+    fn messages_send_you_to_the_silas_app_and_use_no_dashes() {
+        assert!(mic_message().contains("Open Silas and click Allow"));
+        let mut all = vec![mic_message(), secure_start_message(), secure_finish_message(), crash_message()];
+        all.extend(["macos", "linux", "windows"].map(key_access_message_for));
+        for m in all {
             assert!(!m.contains(['\u{2014}', '\u{2013}']), "{m}");
         }
     }
@@ -1919,7 +1885,7 @@ mod tests {
         assert_eq!(key_while_typing(&key_down(Key::Escape)), WhileTyping::Stop);
         assert_eq!(key_while_typing(&key_down(Key::Delete)), WhileTyping::Edit);
         assert_eq!(key_while_typing(&key_down(Key::LeftArrow)), WhileTyping::Edit);
-        assert_eq!(key_while_typing(&key_down(Key::A)), WhileTyping::Other, "Polycarp's own text");
+        assert_eq!(key_while_typing(&key_down(Key::A)), WhileTyping::Other, "Silas's own text");
         let mut up = key_down(Key::Escape);
         up.is_key_down = false;
         assert_eq!(key_while_typing(&up), WhileTyping::Other);
@@ -1949,7 +1915,7 @@ mod tests {
         core.set_status(Status::Typing, None);
         core.typing.store(true, Ordering::Relaxed);
         core.survive(false, || panic!("the speech runtime crashed"));
-        assert_eq!(core.status(), (Status::Error, Some(crash_message("Polycarp"))));
+        assert_eq!(core.status(), (Status::Error, Some(crash_message())));
         assert!(!core.typing.load(Ordering::Relaxed), "the next keys are the user's again");
         assert_eq!(seen.notices()[0].0, "error");
         assert!(cleared(&core), "and it recovers");
@@ -1991,7 +1957,7 @@ mod tests {
         }
         assert_eq!(delivery(false, Restore::Failed), Delivery::HistoryOnly);
         assert_eq!(delivery(false, Restore::InPlace), Delivery::Type);
-        assert!(secure_start_message("Polycarp").starts_with("A password field has the keyboard"));
+        assert!(secure_start_message().starts_with("A password field has the keyboard"));
         assert!(!may_learn(Some(1), Some(1), true));
         assert!(may_learn(Some(1), Some(1), false));
         assert!(!may_learn(Some(1), Some(2), false), "focus moved");

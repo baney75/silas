@@ -2,8 +2,7 @@
 
 Tauri 2 app. The voice engine (audio, keys, typing, dictionary, permissions, models) is the
 `polycarp-voice` crate in `core/voice`, with no UI toolkit; the Tauri host is `src-tauri/src`;
-vanilla TypeScript UI in `src/`; contract in `docs/ipc.md`. Polycarp's apps share the same engine,
-so keep `core/voice` free of Tauri.
+vanilla TypeScript UI in `src/`; contract in `docs/ipc.md`. Keep `core/voice` free of Tauri.
 
 ## Done means
 
@@ -38,7 +37,6 @@ bun install --frozen-lockfile && bun run build && bun run check:theme && bun tes
   with CMake. `.cargo/config.toml` turns off `GGML_NATIVE` so a release built on a CI runner runs on other
   CPUs, and `models::runs_here` keeps CPUs below that floor on `parakeet-v3-onnx`; keep both. The ONNX
   models run on the vendored transcribe-rs (`vendor/transcribe-rs/VENDORED.md`), patched in both
-  `core/voice` and `src-tauri`. Any other crate that depends on `polycarp-voice` by path (Polycarp) links
+  `core/voice` and `src-tauri`. Any other crate that depends on `polycarp-voice` by path links
   the stock transcribe-rs unless its own Cargo.toml adds the same `[patch.crates-io]` entry.
-- Colours, radii, fonts and durations come from the theme (`src/theme-vars.ts`, applied by `src/theme.ts`). Write `var(--x)` in rule bodies; defaults live in the `:root` blocks. `bun run check:theme` fails on a hex, `rgb()` or named colour, a literal `border-radius` (other than `50%`), `font-family` or `transition` time (other than 0 and 1ms), and a colour given to a variable outside `:root`. The only exceptions are the files in `ALLOW` in `scripts/check-theme.mjs`, each with a reason.
-- Theme logic that `bun test` runs (`theme-vars.ts`, `theme-boot.ts`) must not touch `window` or `document`. `bun test` and `cargo test --lib` load the built-in themes from `tests/fixtures/themes`, the files Polycarp's `theme set` writes; refresh them with `node scripts/theme-fixtures.mjs --refresh` (needs a `polycarp` command on PATH or `POLYCARP_BIN`) when Polycarp's theme format changes.
+- Colours, radii, fonts and durations are CSS variables set in the `:root` blocks. Write `var(--x)` in rule bodies. `bun run check:theme` fails on a hex, `rgb()` or named colour, a literal `border-radius` (other than `50%`), `font-family` or `transition` time (other than 0 and 1ms), and a colour given to a variable outside `:root`. The only exceptions are the files in `ALLOW` in `scripts/check-theme.mjs`, each with a reason.

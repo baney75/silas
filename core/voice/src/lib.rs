@@ -1,4 +1,4 @@
-//! The Polycarp voice engine: record, transcribe, type, learn. No UI toolkit.
+//! The Silas voice engine: record, transcribe, type, learn. No UI toolkit.
 //!
 //! Interfaces implement [`core::Host`] to receive events and levels. The Tauri app
 //! (Windows, Linux, Android) and the native Mac app share this crate.
