@@ -25,7 +25,8 @@ add effects, or set the wordmark in another face.
 
 ## Color
 
-Diamond black and gold. Silas is dark only: it does not change with the system light or dark setting.
+Diamond black and gold, through and through: every screen, state and badge. Silas is dark only; it does not
+change with the system light or dark setting, and no green, blue or other accent appears anywhere.
 
 | Token | Hex | Role |
 | --- | --- | --- |
@@ -37,7 +38,8 @@ Diamond black and gold. Silas is dark only: it does not change with the system l
 | Gold hairline | `#D6AE45` at 30% | The hero card's border |
 | Sidebar edge | `#D6AE45` at 16% | The line between the sidebar and the page |
 | Facets | `#F6DE9C` `#DDB451` `#C49A36` `#8F6C22` | The nib's four faces, light to dark |
-| Green / red | `#86BF93` / `#EC7D65` | Saved and error states only |
+| Ok | `#E8C66C` | Ready, saved and allowed states: gold, never green |
+| Red | `#EC7D65` | Errors and the recording dot only |
 
 Every card carries one facet: a 1 px light line along the top edge (`--facet`). Surfaces have no
 gradients, glass or glow; the overlay's moving wave is the only gold that shimmers. Secondary badges

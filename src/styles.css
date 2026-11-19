@@ -24,8 +24,9 @@
   --gold-hair: rgba(214, 174, 69, 0.3);
   --gold-side: rgba(214, 174, 69, 0.16);
 
-  --green: #86bf93;
-  --green-soft: rgba(134, 191, 147, 0.12);
+  /* Ready, saved and allowed are gold too: Silas is black and gold through and through. Red is for errors only. */
+  --ok: #e8c66c;
+  --ok-soft: rgba(214, 174, 69, 0.12);
   --red: #ec7d65;
   --red-soft: rgba(236, 125, 101, 0.12);
   --primary-bg: #d6ae45;
@@ -48,7 +49,7 @@
   --toast-fg: #f3eee4;
   --toast-border: #2a2930;
   --toast-border-w: 1px;
-  --toast-ok: #86bf93;
+  --toast-ok: #e8c66c;
   --toast-learned: #e8c66c;
   --toast-error: #ec7d65;
 
@@ -379,7 +380,7 @@ button {
 }
 
 .live-ready .dot {
-  background: var(--green);
+  background: var(--ok);
 }
 .live-recording .dot {
   background: var(--red);
@@ -1250,8 +1251,8 @@ button {
   color: var(--text-2);
 }
 .tier-balanced {
-  background: var(--green-soft);
-  color: var(--green);
+  background: var(--surface-2);
+  color: var(--text-2);
 }
 .tier-best {
   background: var(--gold-soft);
@@ -1300,11 +1301,11 @@ button {
   background: var(--surface-2);
 }
 .state-pill.active {
-  background: var(--green-soft);
-  color: var(--green);
+  background: var(--ok-soft);
+  color: var(--ok);
 }
 .state-pill.active .dot {
-  background: var(--green);
+  background: var(--ok);
 }
 
 .dl {
@@ -1465,7 +1466,7 @@ button {
 }
 
 .mark-ok {
-  color: var(--green);
+  color: var(--ok);
 }
 
 .mark-miss {
@@ -1801,7 +1802,7 @@ button {
   gap: 8px;
 }
 .onb-bg.ok svg {
-  color: var(--green);
+  color: var(--ok);
 }
 
 .perm-list {
@@ -1827,7 +1828,7 @@ button {
 }
 .perm.ok {
   border-color: transparent;
-  background: var(--green-soft);
+  background: var(--ok-soft);
 }
 .perm-icon {
   display: grid;
