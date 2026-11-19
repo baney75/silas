@@ -1443,7 +1443,7 @@ impl Core {
         if let Some(e) = typing_error {
             me.fail(format!("{e}. Your full text is in History."));
         } else if lost_focus {
-            me.fail(format!("Another window took the keyboard, so {p} stopped typing. Your full text is in History."));
+            me.fail("Another window took the keyboard, so Silas stopped typing. Your full text is in History.".into());
         } else if stopped {
             me.notice(Notice::Stopped, "Stopped typing. Your full text is in History.");
             me.set_status(Status::Ready, None);
