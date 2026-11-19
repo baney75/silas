@@ -69,7 +69,7 @@ export function icon(name: keyof typeof paths | string, size = 18): SVGSVGElemen
   return wrap.firstElementChild as SVGSVGElement;
 }
 
-/** The brand nib mark, drawn in the two gold faces. */
+/** The brand nib mark: a gold nib cut in four facets, lit from the upper left. */
 export function logo(size = 28): SVGSVGElement {
   const wrap = document.createElement("span");
   wrap.innerHTML = `<svg width="${size}" height="${size}" viewBox="330 190 364 700" aria-hidden="true" class="logo-mark">
@@ -79,11 +79,14 @@ export function logo(size = 28): SVGSVGElement {
         <path d="M512 330V900M452 388v160M572 388v160M396 436v64M628 436v64"/>
       </g>
       <path d="M396 300h232" stroke="#000" stroke-width="16"/>
-    </mask></defs>
-    <g mask="url(#nibcut-${size})">
-      <path fill="#B98F4B" d="M512 872c-20-72-152-232-162-402-4-70 18-130 46-166v-52q0-16 16-16h200q16 0 16 16v52c28 36 50 96 46 166-10 170-142 330-162 402z"/>
-      <path fill="#D9B676" d="M512 872c-20-72-152-232-162-402-4-70 18-130 46-166v-52q0-16 16-16h100z"/>
-    </g>
+    </mask>
+    <clipPath id="nibclip-${size}"><path d="M512 872c-20-72-152-232-162-402-4-70 18-130 46-166v-52q0-16 16-16h200q16 0 16 16v52c28 36 50 96 46 166-10 170-142 330-162 402z"/></clipPath></defs>
+    <g mask="url(#nibcut-${size})"><g clip-path="url(#nibclip-${size})">
+      <rect x="512" y="200" width="200" height="700" fill="#8F6C22"/>
+      <rect x="312" y="200" width="200" height="700" fill="#DDB451"/>
+      <polygon points="512,200 436,200 436,330 512,900" fill="#F6DE9C"/>
+      <polygon points="512,200 588,200 588,330 512,900" fill="#C49A36"/>
+    </g></g>
   </svg>`;
   return wrap.firstElementChild as SVGSVGElement;
 }

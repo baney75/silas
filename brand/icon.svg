@@ -1,24 +1,29 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <title>Silas</title>
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#20242B"/>
-      <stop offset="1" stop-color="#121418"/>
-    </linearGradient>
     <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
       <rect width="1024" height="1024" fill="#fff"/>
       <path d="M512 330 L512 900" stroke="#000" stroke-width="26" stroke-linecap="round"/>
-<path d="M452 388 L452 548" stroke="#000" stroke-width="26" stroke-linecap="round"/>
-<path d="M572 388 L572 548" stroke="#000" stroke-width="26" stroke-linecap="round"/>
-<path d="M396 436 L396 500" stroke="#000" stroke-width="26" stroke-linecap="round"/>
-<path d="M628 436 L628 500" stroke="#000" stroke-width="26" stroke-linecap="round"/>
+      <path d="M452 388 L452 548" stroke="#000" stroke-width="26" stroke-linecap="round"/>
+      <path d="M572 388 L572 548" stroke="#000" stroke-width="26" stroke-linecap="round"/>
+      <path d="M396 436 L396 500" stroke="#000" stroke-width="26" stroke-linecap="round"/>
+      <path d="M628 436 L628 500" stroke="#000" stroke-width="26" stroke-linecap="round"/>
       <path d="M396 300 L628 300" stroke="#000" stroke-width="14"/>
     </mask>
+    <clipPath id="nib">
+      <path d="M512 872 C492 800 360 640 350 470 C346 400 368 340 396 304 L396 252 Q396 236 412 236 L612 236 Q628 236 628 252 L628 304 C656 340 678 400 674 470 C664 640 532 800 512 872 Z"/>
+    </clipPath>
   </defs>
-  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
-  <rect x="100.5" y="100.5" width="823" height="823" rx="185.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.08"/>
+  <!-- Diamond black tile with a gold rim. Flat: the facets on the nib carry the light. -->
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="#0A0A0B"/>
+  <rect x="106" y="106" width="812" height="812" rx="180" fill="none" stroke="#D6AE45" stroke-opacity="0.38" stroke-width="4"/>
+  <!-- The nib, cut in four facets: light falls from the upper left. -->
   <g transform="translate(0 -30)" mask="url(#cut)">
-    <path d="M512 872 C492 800 360 640 350 470 C346 400 368 340 396 304 L396 252 Q396 236 412 236 L612 236 Q628 236 628 252 L628 304 C656 340 678 400 674 470 C664 640 532 800 512 872 Z" fill="#B98F4B"/>
-    <path d="M512 872 C492 800 360 640 350 470 C346 400 368 340 396 304 L396 252 Q396 236 412 236 L512 236 Z" fill="#D9B676"/>
+    <g clip-path="url(#nib)">
+      <rect x="512" y="200" width="200" height="700" fill="#8F6C22"/>
+      <rect x="312" y="200" width="200" height="700" fill="#DDB451"/>
+      <polygon points="512,200 436,200 436,330 512,900" fill="#F6DE9C"/>
+      <polygon points="512,200 588,200 588,330 512,900" fill="#C49A36"/>
+    </g>
   </g>
 </svg>
