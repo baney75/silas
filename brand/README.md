@@ -31,14 +31,17 @@ Diamond black and gold. Silas is dark only: it does not change with the system l
 | --- | --- | --- |
 | Diamond black | `#0A0A0B` | Background. The sidebar is `#050506`, cards `#101012` |
 | Parchment | `#F3EEE4` | Text. Secondary `#BDB6A8`, muted `#8E877A` |
-| Gold | `#D6AE45` | The one accent: primary buttons, active states, the nib |
+| Gold | `#D6AE45` | The one accent: primary buttons, active states, the Best tier, the nib |
 | Gold ink | `#E8C66C` | Gold text and links on black |
-| Gold high / deep | `#F2D58A` / `#A7832B` | Focus ring and keycap edge / dark edges |
-| Gold hairline | `#D6AE45` at 30% | The hero card's border and the sidebar edge |
+| Gold high | `#F2D58A` | Focus ring and the keycap's top edge |
+| Gold hairline | `#D6AE45` at 30% | The hero card's border |
+| Sidebar edge | `#D6AE45` at 16% | The line between the sidebar and the page |
 | Facets | `#F6DE9C` `#DDB451` `#C49A36` `#8F6C22` | The nib's four faces, light to dark |
 | Green / red | `#86BF93` / `#EC7D65` | Saved and error states only |
 
-Cards carry one facet: a 1 px light line along the top edge (`--facet`). No gradients, glass or glow.
+Every card carries one facet: a 1 px light line along the top edge (`--facet`). Surfaces have no
+gradients, glass or glow; the overlay's moving wave is the only gold that shimmers. Secondary badges
+(your own words, the Fast tier) are neutral gray, so gold always means the one thing that matters.
 
 ## Type
 

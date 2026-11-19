@@ -15,9 +15,8 @@
   --text-2: #bdb6a8;
   --text-3: #8e877a;
 
-  /* Gold: one accent. Deep for edges, base for fills, ink for text, high for the shine. */
+  /* Gold: one accent. Base for fills, ink for text, high for focus and the keycap edge. */
   --gold: #d6ae45;
-  --gold-deep: #a7832b;
   --gold-ink: #e8c66c;
   --gold-hi: #f2d58a;
   --gold-soft: rgba(214, 174, 69, 0.12);
@@ -25,9 +24,6 @@
   --gold-hair: rgba(214, 174, 69, 0.3);
   --gold-side: rgba(214, 174, 69, 0.16);
 
-  /* Links and info use the gold too: one accent on the page. */
-  --blue: #e8c66c;
-  --blue-soft: rgba(214, 174, 69, 0.1);
   --green: #86bf93;
   --green-soft: rgba(134, 191, 147, 0.12);
   --red: #ec7d65;
@@ -35,14 +31,14 @@
   --primary-bg: #d6ae45;
   --primary-fg: #0a0a0b;
   --primary-hover: #e4c05e;
-  --focus: #f2d58a;
+  --focus: var(--gold-hi);
 
   /* A facet: the one-pixel light along a cut stone's top edge. */
   --facet: inset 0 1px 0 rgba(255, 255, 255, 0.06);
   --shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 0 rgba(0, 0, 0, 0.6);
   --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4);
   --key-face: #141416;
-  --key-edge: #000;
+  --key-edge: #2a2930;
   --key-hi: rgba(242, 213, 138, 0.32);
   --key-hi-lg: rgba(242, 213, 138, 0.45);
   --thumb: #f3eee4;
@@ -188,6 +184,18 @@ button {
 }
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* Every card carries one facet: a 1 px light line along its top edge. A card's own shadow below wins. */
+.stat,
+.recent-list,
+.entry,
+.rows,
+.model-card,
+.device-panel,
+.set-card,
+.about {
+  box-shadow: var(--facet);
 }
 
 /* ---------- Shell ---------- */
@@ -520,7 +528,9 @@ button {
   padding: 0 7px;
   border-radius: var(--r-5);
   font-size: 12px;
-  box-shadow: 0 1px 0 var(--key-edge);
+  box-shadow:
+    0 1px 0 var(--key-edge),
+    inset 0 1px 0 var(--key-hi);
   margin: 0 2px;
 }
 
@@ -689,7 +699,6 @@ button {
   border-radius: var(--r);
   background: var(--surface);
   border: 1px solid var(--line);
-  box-shadow: var(--facet);
 }
 
 .stat-value {
@@ -973,8 +982,8 @@ button {
   color: var(--gold-ink);
 }
 .badge-user {
-  background: var(--blue-soft);
-  color: var(--blue);
+  background: var(--surface-2);
+  color: var(--text-2);
 }
 .badge-import {
   background: var(--surface-2);
@@ -1237,8 +1246,8 @@ button {
   letter-spacing: 0.02em;
 }
 .tier-fast {
-  background: var(--blue-soft);
-  color: var(--blue);
+  background: var(--surface-2);
+  color: var(--text-2);
 }
 .tier-balanced {
   background: var(--green-soft);
@@ -2005,12 +2014,3 @@ button {
   }
 }
 
-/* Polycarp theme asks for no motion (set by theme.ts). */
-html[data-reduced-motion] *,
-html[data-reduced-motion] *::before,
-html[data-reduced-motion] *::after {
-  animation-duration: 1ms !important;
-  animation-iteration-count: 1 !important;
-  transition-duration: 1ms !important;
-  scroll-behavior: auto !important;
-}
