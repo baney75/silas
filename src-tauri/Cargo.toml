@@ -1,6 +1,6 @@
 [package]
 name = "silas"
-version = "0.1.6"
+version = "0.1.7-local.20261119"
 description = "Silas: hold a key, speak, and it types what you said."
 authors = ["Donovan Baney"]
 license = "MIT"
