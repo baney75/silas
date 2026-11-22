@@ -971,9 +971,9 @@ impl Core {
             }
         }
         // Keep earlier results for models this run skipped, but only from this version of Silas
-        // and this speech set: numbers from another build aren't comparable.
+        // (load_report already drops another speech set): numbers from another build aren't comparable.
         let mut results: Vec<ModelResult> = benchmark::load_report()
-            .filter(|r| r.silas == env!("CARGO_PKG_VERSION") && r.suite == benchmark::suite_id())
+            .filter(|r| r.silas == env!("CARGO_PKG_VERSION"))
             .map(|r| r.results)
             .unwrap_or_default()
             .into_iter()

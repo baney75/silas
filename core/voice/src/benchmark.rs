@@ -492,10 +492,11 @@ impl Report {
     }
 }
 
-/// The report if it is a real one measured on the computer with this device key. A data
-/// folder carried over from another computer says nothing about this one.
+/// The report if it is a real one measured on the computer with this device key, on the current
+/// speech set. A data folder carried over from another computer says nothing about this one, and
+/// numbers from an older set aren't comparable: with no report, the benchmark runs again.
 fn report_for(r: Report, key: &str) -> Option<Report> {
-    (!r.ran_at.is_empty() && r.device.key == key).then_some(r)
+    (!r.ran_at.is_empty() && r.device.key == key && r.suite == suite_id()).then_some(r)
 }
 
 pub fn load_report() -> Option<Report> {
@@ -966,6 +967,32 @@ mod tests {
         let mut blank = rep;
         blank.ran_at.clear();
         assert!(report_for(blank, "macos/apple-m5/10").is_none());
+    }
+
+    /// Review sol-F1 and second-F7 on #64: a report saved on the v1 set was still trusted, so the
+    /// v2 benchmark never ran, the v1 pick stayed recommended and sharing offered a report the
+    /// service rejects as stale.
+    #[test]
+    fn a_saved_report_from_an_older_set_counts_as_absent() {
+        let _store = crate::store::TEST_DIR.lock();
+        let dir = std::env::temp_dir().join(format!("pc-v1-report-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::store::set_data_dir(Some(dir.clone()));
+        let current = Report::new(device().clone(), vec![r("parakeet-v3", 20.0, 0.03)]);
+        // Saved before reports named their set, so it reads as v1.
+        let mut v1 = serde_json::to_value(&current).unwrap();
+        v1.as_object_mut().unwrap().remove("suite");
+        std::fs::write(dir.join(REPORT_FILE), v1.to_string()).unwrap();
+        let old = load_report();
+        let old_best = best_for_device_from(old.as_ref());
+        save_report(&current);
+        let now = load_report();
+        crate::store::set_data_dir(None);
+        let _ = std::fs::remove_dir_all(dir);
+        assert!(old.is_none(), "a v1 report was trusted: {old:?}");
+        assert_eq!(old_best, None);
+        assert_eq!(now.as_ref().map(|r| r.suite.as_str()), Some(suite_id()));
     }
 
     #[test]

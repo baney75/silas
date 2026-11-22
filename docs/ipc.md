@@ -161,9 +161,9 @@ interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string
 | `fix_accessibility` | | `null`. macOS Fix Permission: when not trusted, clears Silas's Accessibility entry and reopens Silas, which asks once and opens Settings. No-op when trusted or off macOS |
 | `list_microphones` | | `string[]`. Runs off the main thread (Linux opens every ALSA device to list them); the UI reads it at launch and on focus, never when Settings opens |
 | `show_main` | | `null` |
-| `get_benchmark` | | `Report \| null` (saved `benchmark.json`) |
+| `get_benchmark` | | `Report \| null` (saved `benchmark.json`; null when it was made on another computer or an older `suite`, which counts as no benchmark) |
 | `run_benchmark` | `{ all }` | `null` when the run ends. Measures the active model, and with `all` every other installed one. Errors at once if a benchmark is already running or no model is loaded. Results of models not run this time are kept in the report |
-| `share_preview` | | `string \| null`: the exact JSON a share posts (`Report` without `clip_seconds`), or null before any benchmark |
+| `share_preview` | | `string \| null`: the exact JSON a share posts (`Report` without `clip_seconds`), or null before any benchmark on the current `suite` |
 | `share_benchmark` | `{ payload }` | `ShareReply`. Posts `payload` to the report service (10 s timeout) and refreshes the community copy. Errors with a sentence if `payload` is not the current `share_preview` (so what the user saw is what is sent), on 413 or 429, on a rejected report, or when the service is out of reach |
 | `share_benchmark_github` | | `null` opens a prefilled GitHub issue (`report_url`) in the default browser; the user reviews and submits it |
 | `get_community` | | `CommunityDevice \| null`: shared results for this device (3 s timeout, then the cached `community.json`; null offline with no copy) |
