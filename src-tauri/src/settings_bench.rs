@@ -39,6 +39,7 @@ fn settings_bench() {
             latency_ms: 140,
             words: 14,
             corrected: None,
+            file: None,
         })
         .collect();
     store::save("history.json", &history);

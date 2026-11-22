@@ -126,6 +126,28 @@ address" on its own and Silas types your address. Inside a sentence, say "insert
 "send it to insert my address". The phrase's words in ordinary speech ("I changed my address")
 are left alone.
 
+Music or a video playing when you press the key pauses while you speak and plays again after.
+Silas only restarts what it paused, so something you stopped yourself stays stopped. Turn it off
+in Settings → Audio.
+
+## Transcribe a file
+
+Click *Transcribe a file* in History, or drop an audio or video file on the window. Silas writes
+what was said into History; nothing is typed. It reads WAV, MP3, M4A, FLAC, OGG, Opus, AIFF and the
+sound of MP4, MOV and WebM videos, and works through long recordings a piece at a time. It waits
+while you dictate, so the key keeps working.
+
+From a terminal:
+
+```sh
+silas transcribe meeting.m4a           # prints the text
+silas transcribe meeting.m4a --json    # text, the model's raw words, and timings
+silas transcribe meeting.m4a --raw     # without your dictionary
+```
+
+It uses the model and dictionary the app uses. On macOS the command is
+`/Applications/Silas.app/Contents/MacOS/silas`.
+
 ## It learns
 
 - **Fix it where it typed.** Right after Silas types, backspace over a wrong word and type

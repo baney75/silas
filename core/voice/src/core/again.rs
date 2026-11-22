@@ -211,6 +211,7 @@ mod tests {
             latency_ms: 1,
             words: 1,
             corrected: corrected.map(Into::into),
+            file: None,
         }
     }
 
