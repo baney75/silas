@@ -275,17 +275,21 @@ fn run(args: &[String]) -> anyhow::Result<()> {
             "load1": load1,
             "threads": models::gguf_threads(),
             "pieces": d.pieces,
+            "guesses": d.guesses,
+            "guess_used": d.guess_used,
             "paced": !a.fast,
         });
         writeln!(out, "{row}")?;
         out.flush()?;
         eprintln!(
-            "{}/{} {id}: {:.1}s audio, final {:.0} ms after release, {} piece(s), load {}",
+            "{}/{} {id}: {:.1}s audio, final {:.0} ms after release, {} piece(s), {} guess(es){}, load {}",
             i + 1,
             clips.len(),
             seconds,
             d.after_release.as_secs_f64() * 1000.0,
             d.pieces,
+            d.guesses,
+            if d.guess_used { " (used)" } else { "" },
             load1.map_or("n/a".into(), |l| format!("{l:.1}"))
         );
     }

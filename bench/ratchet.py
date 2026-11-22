@@ -10,7 +10,7 @@
 
 The ratchet runs --fast by default because it repeats word for word: the model's text depends a little on how
 much silence trails the clip, and in real time that tail varies by a few milliseconds of thread timing, enough
-to change a word on a handful of clips between two runs. --fast pads exactly the app's 200 ms tail every time.
+to change a word on a handful of clips between two runs. --fast pads exactly 200 ms of quiet every time.
 
 The same model gives slightly different text on a different CPU (the engine picks different kernels): 10 of
 the 40 clips differed by a word or a comma between abbey1's Ryzen and an Intel runner, enough to move a category
