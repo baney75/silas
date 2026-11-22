@@ -1366,7 +1366,7 @@ impl Core {
         let text = me.dict.lock().apply(&raw, s.remove_fillers);
         // The app's style, spoken code and snippets (`core/shaping.rs`).
         let (mut text, s) = me.shape(target.as_ref(), &text, s);
-        if text.trim().is_empty() {
+        if nothing_to_type(&text) {
             me.set_status(Status::Ready, None);
             return;
         }
@@ -1593,12 +1593,27 @@ pub fn overlay_shown(status: Status, enabled: bool, notice_until: Option<Instant
     (enabled && overlay_status(status)) || notice_until.is_some_and(|until| now < until)
 }
 
+/// An empty or blank result types nothing, but a spoken "new line" alone is a line break to type.
+fn nothing_to_type(text: &str) -> bool {
+    text.trim().is_empty() && !text.contains('\n')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// Review sol-F2 on #23: an error's notice went out while its status hid the overlay, and
     /// with the main window hidden nothing showed it.
+    #[test]
+    fn a_spoken_line_break_alone_is_still_typed() {
+        let none: &[crate::snippets::Snippet] = &[];
+        let shaped = crate::style::render("new line", crate::style::Style::Code, none);
+        assert_eq!(shaped, "\n");
+        assert!(!nothing_to_type(&shaped));
+        assert!(nothing_to_type(""));
+        assert!(nothing_to_type("  "));
+    }
+
     #[test]
     fn a_notice_keeps_the_overlay_up_until_it_runs_out() {
         let now = Instant::now();

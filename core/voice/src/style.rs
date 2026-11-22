@@ -210,16 +210,17 @@ pub fn render(text: &str, style: Style, snippets: &[Snippet]) -> String {
         // Keep the spaces around a piece that sits next to a snippet.
         let lead = &speech[..speech.len() - speech.trim_start().len()];
         let trail = &speech[speech.trim_end().len()..];
-        let mut body = speech.trim().to_string();
-        if let Some(flavor) = style.spoken_code() {
-            body = spoken::format(&body, flavor);
+        let raw = speech.trim();
+        let spoken = |t: &str| style.spoken_code().map_or_else(|| t.to_string(), |flavor| spoken::format(t, flavor));
+        let mut body = spoken(raw);
+        let ends = k + 1 == count;
+        if ends && (style == Style::Terminal || (style == Style::Code && spoken::reads_as_code(&body))) {
+            // Drop the sentence's own period before spoken code runs, so a dot the user said
+            // stays: "cd dot." types "cd .", not "cd".
+            body = spoken(&drop_period(raw));
         }
         if k == 0 && style == Style::Terminal {
             body = lower_start(&body);
-        }
-        let ends = k + 1 == count;
-        if ends && (style == Style::Terminal || (style == Style::Code && spoken::reads_as_code(&body))) {
-            body = drop_period(&body);
         }
         out.push_str(lead);
         out.push_str(&body);
@@ -254,6 +255,15 @@ fn drop_period(text: &str) -> String {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn a_spoken_dot_survives_the_terminal_period_drop() {
+        let none: &[Snippet] = &[];
+        assert_eq!(render("Cd dot.", Style::Terminal, none), "cd .");
+        assert_eq!(render("Git add dot", Style::Terminal, none), "git add .");
+        assert_eq!(render("Git add dot.", Style::Terminal, none), "git add .");
+        assert_eq!(render("Cargo test.", Style::Terminal, none), "cargo test");
+    }
 
     #[test]
     fn every_known_id_is_listed_once_per_os_and_agrees_across_oses() {
