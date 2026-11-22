@@ -18,6 +18,10 @@ use crate::models::{self, Engine};
 use crate::store::{self, HistoryItem, Settings, Stats};
 use crate::typer;
 
+mod again;
+mod shaping;
+pub use again::Via;
+
 /// What the interface around the engine provides. The engine never names a UI toolkit:
 /// the Tauri app (Windows, Linux, Android) and the native Mac app both implement this.
 ///
@@ -146,6 +150,10 @@ pub struct Core {
     /// False while the interface has paused dictation: keys are ignored, nothing records.
     /// The model stays loaded.
     enabled: AtomicBool,
+    /// Pauses what's playing while a dictation records (nowplaying.rs).
+    media: crate::nowplaying::MediaPause,
+    /// The id of the app the last dictation went to, for Settings (`shaping.rs`).
+    app: Mutex<Option<String>>,
 }
 
 pub type Shared = Arc<Core>;
@@ -469,6 +477,12 @@ impl Core {
         let trigger = Trigger::parse(&settings.hotkey).expect("default hotkey parses");
         let mut machine = Machine::new(trigger, settings.tap_to_toggle);
         machine.fallback = settings.hotkey_fallback.as_deref().and_then(Trigger::parse);
+        // A saved retype key this build can't use, or one that is now the dictation key, is dropped.
+        let again = again::trigger(&settings).unwrap_or_else(|_| {
+            settings.retype_hotkey = None;
+            None
+        });
+        machine.again.set(again);
         let mut history: Vec<HistoryItem> = store::load("history.json");
         history.truncate(store::HISTORY_KEEP);
         Arc::new(Core {
@@ -502,6 +516,8 @@ impl Core {
             dictations: AtomicU64::new(0),
             loading: Mutex::new(None),
             enabled: AtomicBool::new(true),
+            media: crate::nowplaying::MediaPause::system(),
+            app: Mutex::new(None),
             settings: Mutex::new(settings),
         })
     }
@@ -584,6 +600,7 @@ impl Core {
         self.typing.store(false, Ordering::Relaxed);
         if key {
             self.machine.lock().reset();
+            self.media.resume(Duration::ZERO);
             self.recording.lock().take();
             self.pieces.lock().take();
             self.target.lock().take();
@@ -844,6 +861,19 @@ impl Core {
         ) || self.recording.lock().is_some()
     }
 
+    /// A dictation is recording, being written or being typed: a file being transcribed waits (file.rs).
+    pub(crate) fn dictating(&self) -> bool {
+        matches!(self.status().0, Status::Recording | Status::Transcribing | Status::Typing) || self.recording.lock().is_some()
+    }
+
+    /// Run 16 kHz audio through the loaded model, holding it for this audio only (file.rs).
+    pub(crate) fn transcribe_audio(&self, audio: &[f32], language: &str) -> anyhow::Result<String> {
+        match self.engine.lock().as_mut() {
+            Some((_, engine)) => engine.transcribe(audio, language),
+            None => anyhow::bail!("No model is loaded"),
+        }
+    }
+
     /// Hold until no dictation is happening, so a recording is never delayed by more than
     /// the one clip in flight.
     fn wait_quiet(&self) {
@@ -1029,13 +1059,18 @@ impl Core {
         let mut settings = settings;
         let trigger = Trigger::parse(&settings.hotkey)
             .ok_or_else(|| format!("{} is not a key Silas can use", settings.hotkey))?;
+        // Choosing a key ends the second key. Otherwise it's the core's, like the model: the
+        // interface's copy may lag. The retype key is checked against this one.
+        settings.hotkey_fallback = {
+            let cur = self.settings.lock();
+            if settings.hotkey == cur.hotkey { cur.hotkey_fallback.clone() } else { None }
+        };
+        let again = again::trigger(&settings)?;
         settings.update_channel = settings.effective_channel().into();
         let old = {
             let mut cur = self.settings.lock();
             settings.model = cur.model.clone();
             settings.model_source = cur.model_source.clone();
-            // Choosing a key ends the second key. Otherwise it's the core's, like the model: the interface's copy may lag.
-            settings.hotkey_fallback = if settings.hotkey == cur.hotkey { cur.hotkey_fallback.clone() } else { None };
             std::mem::replace(&mut *cur, settings.clone())
         };
         {
@@ -1043,6 +1078,7 @@ impl Core {
             m.trigger = trigger;
             m.fallback = settings.hotkey_fallback.as_deref().and_then(Trigger::parse);
             m.tap_to_toggle = settings.tap_to_toggle;
+            m.again.set(again);
         }
         self.sync_blocked();
         self.save_settings();
@@ -1139,6 +1175,7 @@ impl Core {
             self.feed_watch(ev, now);
         }
         self.act(out);
+        self.again_key(ev);
     }
 
     /// A pending "pick the hotkey" request takes this key event. True when it did. Escape
@@ -1308,6 +1345,10 @@ impl Core {
             let thread = std::thread::spawn(crate::focus::Target::capture);
             move || thread.join().ok().flatten()
         };
+        // Music playing out loud would end up in the dictation. Only sends a message; never waits.
+        if self.settings.lock().pause_media {
+            self.media.pause();
+        }
         // The overlay comes up now, before the microphone is open (that can take a moment with
         // a Bluetooth headset); its dot fills in when the first sound arrives.
         self.set_status(Status::Recording, None);
@@ -1373,6 +1414,7 @@ impl Core {
             }
             Err(e) => {
                 let _ = capture();
+                self.media.resume(Duration::ZERO);
                 self.machine.lock().reset();
                 self.fail(format!("Microphone: {e}"));
             }
@@ -1408,6 +1450,7 @@ impl Core {
         };
         self.target.lock().take();
         self.pieces.lock().take();
+        self.media.resume(Duration::ZERO);
         if let Some(live) = recording {
             drop(live);
             self.set_status(Status::Ready, None);
@@ -1427,6 +1470,8 @@ impl Core {
             return;
         };
         self.cue("stop");
+        // Once the tail is recorded, what was playing plays again.
+        self.media.resume(tail_for(ending));
         // Carried by value: a new dictation may start before this one finishes typing.
         let target = self.target.lock().take();
         let pieces = self.pieces.lock().take();
@@ -1484,8 +1529,10 @@ impl Core {
             }
         };
         let s = me.settings.lock().clone();
-        let mut text = me.dict.lock().apply(&raw, s.remove_fillers);
-        if text.trim().is_empty() {
+        let text = me.dict.lock().apply(&raw, s.remove_fillers);
+        // The app's style, spoken code and snippets (`core/shaping.rs`).
+        let (mut text, s) = me.shape(target.as_ref(), &text, s);
+        if nothing_to_type(&text) {
             me.set_status(Status::Ready, None);
             return;
         }
@@ -1578,6 +1625,7 @@ impl Core {
                 .max(secs),
             latency_ms: latency,
             corrected: None,
+            file: None,
         };
         {
             let mut h = me.history.lock();
@@ -1682,7 +1730,8 @@ impl Core {
         let today = Local::now().date_naive();
         let mut s = Stats::default();
         let mut speak_secs = 0f32;
-        for i in h.iter() {
+        // Text from a file wasn't dictated: it would swamp the speaking pace and time saved.
+        for i in h.iter().filter(|i| i.file.is_none()) {
             s.dictations += 1;
             s.words_total += i.words as u64;
             speak_secs += i.duration_s;
@@ -1746,6 +1795,11 @@ fn after_mic_opened(active: bool, pending: u8) -> MicOpened {
     }
 }
 
+/// An empty or blank result types nothing, but a spoken "new line" alone is a line break to type.
+fn nothing_to_type(text: &str) -> bool {
+    text.trim().is_empty() && !text.contains('\n')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1780,6 +1834,16 @@ mod tests {
 
     /// Review sol-F2 on #23: an error's notice went out while its status hid the overlay, and
     /// with the main window hidden nothing showed it.
+    #[test]
+    fn a_spoken_line_break_alone_is_still_typed() {
+        let none: &[crate::snippets::Snippet] = &[];
+        let shaped = crate::style::render("new line", crate::style::Style::Code, none);
+        assert_eq!(shaped, "\n");
+        assert!(!nothing_to_type(&shaped));
+        assert!(nothing_to_type(""));
+        assert!(nothing_to_type("  "));
+    }
+
     #[test]
     fn a_notice_keeps_the_overlay_up_until_it_runs_out() {
         let now = Instant::now();

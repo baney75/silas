@@ -8,6 +8,7 @@ import {
   type BenchmarkProgress,
   type CommunityDevice,
   type Device,
+  type FileProgress,
   type Dictionary,
   type HistoryItem,
   type ModelEntry,
@@ -22,14 +23,14 @@ import {
 } from "./api";
 import { toast } from "./ui";
 
-export type Topic = "state" | "settings" | "models" | "history" | "dict" | "stats" | "progress" | "update" | "benchmark" | "microphones";
+export type Topic = "state" | "settings" | "models" | "history" | "dict" | "stats" | "progress" | "update" | "benchmark" | "microphones" | "file";
 
 export const store = {
   state: null as unknown as AppState,
   settings: null as unknown as Settings,
   models: [] as ModelEntry[],
   history: [] as HistoryItem[],
-  dict: { terms: [], corrections: [], pending: [], fillers: [] } as Dictionary,
+  dict: { terms: [], corrections: [], pending: [], fillers: [], snippets: [] } as Dictionary,
   stats: null as Stats | null,
   progress: {} as Record<string, ModelProgress>,
   microphones: [] as string[],
@@ -46,6 +47,10 @@ export const store = {
   /** Result of the last manual check: "none" means up to date. */
   updateCheck: "idle" as "idle" | "checking" | "none" | "found" | "error",
   updateProgress: null as UpdateProgress | null,
+  /** The file being transcribed, or the last one for a moment after it ends. */
+  file: null as FileProgress | null,
+  /** Files are being dragged over the window. */
+  dragging: false,
 };
 
 export interface BenchRun {
@@ -128,7 +133,7 @@ export async function updateSettings(patch: Partial<Settings>) {
   try {
     store.settings = await api.setSettings(store.settings);
     notify("settings");
-    if ("hotkey" in patch || "model" in patch) await refreshState();
+    if ("hotkey" in patch || "retypeHotkey" in patch || "appStyles" in patch || "model" in patch) await refreshState();
   } catch (e) {
     store.settings = before;
     notify("settings");
@@ -273,4 +278,21 @@ export async function installUpdate() {
     notify("update");
     toast(`The update didn't install. ${errorText(e)}`, "error", 6000);
   }
+}
+
+/** "Transcribe a file": the picker, then the core. Progress and the outcome arrive as `file-progress`
+ * events, which main.ts shows; this only reports what never became an event (the picker failing). */
+export async function transcribeFile(path?: string) {
+  try {
+    await api.transcribeFile(path);
+  } catch (e) {
+    const message = errorText(e);
+    if (store.file?.message !== message && lastRefusal !== message) toast(`Couldn't transcribe that file. ${message}`, "error", 6000);
+  }
+}
+
+/** The last refusal's text, so the rejected call doesn't show it twice. */
+export let lastRefusal = "";
+export function noteRefusal(message: string) {
+  lastRefusal = message;
 }

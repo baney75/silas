@@ -1,4 +1,4 @@
-# Install Silas on Windows (nightly channel):
+# Install Silas on Windows (stable channel; $env:SILAS_CHANNEL = "nightly" for nightly):
 #   irm https://raw.githubusercontent.com/baney75/silas/main/install.ps1 | iex
 # Remove it (your dictionary and history stay):
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/baney75/silas/main/install.ps1))) -Uninstall
@@ -36,9 +36,11 @@
   # SILAS_GITHUB_TOKEN (CI sets it) lifts the API's 60-requests-an-hour limit on shared IPs.
   $headers = @{}
   if ($env:SILAS_GITHUB_TOKEN) { $headers.Authorization = "Bearer $env:SILAS_GITHUB_TOKEN" }
-  $release = Invoke-RestMethod "https://api.github.com/repos/baney75/silas/releases/tags/nightly" -Headers $headers
+  $channel = if ($env:SILAS_CHANNEL -eq "nightly") { "nightly" } else { "stable" }
+  $api = if ($channel -eq "nightly") { "releases/tags/nightly" } else { "releases/latest" }
+  $release = Invoke-RestMethod "https://api.github.com/repos/baney75/silas/$api" -Headers $headers
   $asset = $release.assets | Where-Object { $_.name -like "*-setup.exe" } | Select-Object -First 1
-  if (-not $asset) { throw "The nightly release is being rebuilt. Try again in a few minutes." }
+  if (-not $asset) { throw "The $channel release has no Windows installer yet. Try again in a few minutes, or set `$env:SILAS_CHANNEL = `"nightly`"." }
   $file = Join-Path $env:TEMP $asset.name
   Write-Host "Downloading Silas ($([math]::Round($asset.size / 1MB)) MB)..." -ForegroundColor Yellow
   Invoke-WebRequest $asset.browser_download_url -OutFile $file -UseBasicParsing

@@ -1,6 +1,6 @@
 [package]
 name = "polycarp-voice"
-version = "0.1.6"
+version = "0.2.0"
 description = "Silas voice engine: hold a key, speak, and it types what you said. No UI toolkit."
 authors = ["Donovan Baney"]
 license = "MIT"
@@ -36,6 +36,10 @@ sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 # Metal: the engine the model study scored (bench/models/accent-2026-11.md). Builds transcribe.cpp and
 # ggml from vendored source, so it needs CMake and a C++ compiler; see .cargo/config.toml for the CPU floor.
 transcribe-cpp = { version = "=0.4.2", default-features = false }
+# Transcribing a file: pure-Rust demuxers and decoders, no FFmpeg. symphonia-opus adds Opus, which
+# Symphonia itself lacks (.opus files and most WebM sound).
+symphonia = { version = "0.6.1", default-features = false, features = ["wav", "aiff", "caf", "ogg", "mkv", "isomp4", "flac", "mp3", "aac", "alac", "vorbis", "pcm", "adpcm"] }
+symphonia-opus = "0.1.3"
 
 [target.'cfg(not(any(target_os = "macos", target_os = "linux")))'.dependencies]
 enigo = "0.6"
@@ -44,16 +48,22 @@ enigo = "0.6"
 libc = "0.2"
 wayland-client = "0.31"
 wayland-protocols-misc = { version = "0.3", features = ["client"] }
+# Pausing media while dictating: MPRIS over D-Bus (nowplaying.rs).
+zbus = "5"
 x11rb = { version = "0.13", features = ["xkb", "xtest"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Registry"] }
+windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Registry", "Win32_System_Threading", "Win32_Foundation"] }
+# Pausing media while dictating: the system media transport controls (nowplaying.rs).
+windows = { version = "0.61", features = ["Media_Control", "Foundation", "Foundation_Collections"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24"
 core-foundation = "0.10"
 objc2 = "0.6"
 objc2-foundation = "0.3"
+# MediaRemote's callbacks are blocks (nowplaying.rs).
+block2 = "0.6"
 
 [features]
 bench = []
