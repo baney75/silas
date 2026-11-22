@@ -294,6 +294,11 @@ async function exportReports(url: URL, env: Env): Promise<Response> {
   return new Response(lines.join(""), { headers });
 }
 
+/** One JSON line per event, for Workers Logs. Never a request's contents, address or hash. */
+export function log(event: string, fields: Record<string, string | number> = {}): void {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), event, ...fields }));
+}
+
 const ROUTES: Record<string, { method: string; handle: (req: Request, url: URL, env: Env) => Promise<Response> }> = {
   "/v1/reports": { method: "POST", handle: (req, _url, env) => submit(req, env) },
   "/v1/devices": { method: "GET", handle: (_req, url, env) => devices(url, env) },
@@ -309,12 +314,18 @@ export const handler = {
     try {
       return await route.handle(request, url, env);
     } catch {
-      // Nothing about the request is logged, not even the error.
+      // Only the route is logged: nothing about the request, not even the error.
+      log("error", { route: url.pathname });
       return json({ error: "Something went wrong. Try again later." }, 500);
     }
   },
 
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(env.DB.batch(prune(env.DB, yesterdayOf(new Date(controller.scheduledTime)))));
+    const day = yesterdayOf(new Date(controller.scheduledTime));
+    ctx.waitUntil(
+      env.DB.batch(prune(env.DB, day)).then((results) =>
+        log("prune", { before: day, rows: results.reduce((n, r) => n + (r.meta?.changes ?? 0), 0) }),
+      ),
+    );
   },
 } satisfies ExportedHandler<Env>;

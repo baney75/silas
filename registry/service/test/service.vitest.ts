@@ -1,6 +1,6 @@
 import { createExecutionContext, createScheduledController, waitOnExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ACCEPTED_PER_DAY, CLIENT_POSTS_PER_DAY, EXPORT_PAGE, MAX_BODY, MIN_AGREE, handler, store, utcDay } from "../src/service";
 import { MAX_SPEED, MAX_WER, MIN_SPEED, SUITE_ID, TIE_WER, validate } from "../src/validate";
 import * as main from "../src/index";
@@ -207,6 +207,26 @@ describe("scheduled", () => {
     expect(clients.results.map((r) => r.client)).toEqual(["recent", "now"]);
     const senders = await env.DB.prepare("SELECT client FROM reports ORDER BY id").all<{ client: string | null }>();
     expect(senders.results.map((r) => r.client)).toEqual([null, "recent", "now"]);
+  });
+
+  it("logs one JSON line with the count and nothing about any sender", async () => {
+    const seed = env.DB.prepare("INSERT INTO clients (day, client, posts) VALUES (?, ?, 1)");
+    await env.DB.batch([seed.bind(daysAgo(5), "gone-1"), seed.bind(daysAgo(6), "gone-2")]);
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((line: string) => void lines.push(line));
+    try {
+      const ctx = createExecutionContext();
+      await handler.scheduled(createScheduledController({ scheduledTime: Date.now(), cron: "5 0 * * *" }), env, ctx);
+      await waitOnExecutionContext(ctx);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(lines).toHaveLength(1);
+    const entry = JSON.parse(lines[0]);
+    expect(Object.keys(entry).sort()).toEqual(["before", "event", "rows", "ts"]);
+    expect(entry.event).toBe("prune");
+    expect(entry.rows).toBeGreaterThanOrEqual(2);
+    expect(lines[0]).not.toContain("gone-");
   });
 });
 
