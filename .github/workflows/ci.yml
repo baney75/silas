@@ -57,6 +57,9 @@ jobs:
       - name: Unit tests
         working-directory: src-tauri
         run: cargo test --lib
+      - name: SilasCore tests
+        if: runner.os == 'macOS'
+        run: swift test
       - name: Lint
         if: runner.os == 'macOS'
         working-directory: src-tauri

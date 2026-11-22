@@ -13,3 +13,6 @@ __pycache__/
 *.core
 core.[0-9]*
 vgcore.*
+/.build/
+/.swiftpm/
+/Package.resolved
