@@ -1,6 +1,9 @@
 #!/bin/sh
-# Build Silas for the iPad, install it over USB and launch it.
+# Build Silas, install it over USB and launch it.
 # Usage: ios/scripts/install.sh <device-udid>   (or set SILAS_DEVICE)
+# Works with the free Personal Team: its profiles carry the App Group the keyboard needs, and
+# last 7 days, so run this again weekly. Over ssh, codesign fails with errSecInternalComponent
+# (the login keychain is locked to the GUI session); run it in Terminal on the Mac instead.
 # List devices with: xcrun devicectl list devices
 set -eu
 cd "$(dirname "$0")/.."
@@ -19,5 +22,5 @@ cp Package.resolved Silas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Pac
 xcodebuild -project Silas.xcodeproj -scheme Silas -configuration Release \
   -destination "id=$DEVICE" -derivedDataPath build -allowProvisioningUpdates -disableAutomaticPackageResolution \
   DEVELOPMENT_TEAM=54H7JX2PD4 build -quiet
-xcrun devicectl device install app --device "$DEVICE" build/Build/Products/Release-iphoneos/Silas.app
-xcrun devicectl device process launch --device "$DEVICE" com.baney.silas.ipad
+xcrun devicectl device install app --device "$DEVICE" "build/Build/Products/Release-iphoneos/Silas.app"
+xcrun devicectl device process launch --device "$DEVICE" com.baney.silas.ios

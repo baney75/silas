@@ -1,4 +1,4 @@
-// Parakeet TDT v3 on the iPad through FluidAudio (CoreML). The model is downloaded once
+// Parakeet TDT v3 on the device through FluidAudio (CoreML). The model is downloaded once
 // from Hugging Face, like the desktop app; audio never leaves the device.
 
 import FluidAudio
@@ -38,10 +38,20 @@ actor SpeechEngine {
         manager = m
     }
 
+    /// The last queued transcription. Each call waits for the one before it: the actor alone
+    /// would interleave two calls at their awaits, and live text runs while a final pass waits.
+    private var tail: Task<Void, Never>?
+
     /// `samples` are 16 kHz mono floats.
     func transcribe(_ samples: [Float]) async throws -> String {
         guard let manager else { throw EngineError.notReady }
-        return try await manager.transcribe(AudioPadding.padded(samples), source: .microphone).text
+        let previous = tail
+        let job = Task { () async throws -> String in
+            await previous?.value
+            return try await manager.transcribe(AudioPadding.padded(samples), source: .microphone).text
+        }
+        tail = Task { _ = try? await job.value }
+        return try await job.value
     }
 
     /// The model is 480 MB and can be downloaded again; keep it out of iCloud backups.

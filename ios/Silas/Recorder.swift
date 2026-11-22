@@ -1,4 +1,9 @@
 // Microphone capture: AVAudioEngine input, converted to 16 kHz mono floats for Parakeet.
+//
+// Two ways to run. In the app, the engine runs only while a recording is kept. For the Silas
+// Keyboard the engine stays armed for the whole session (the background audio mode keeps the app
+// alive while the microphone is open), and samples are kept only between `beginCapture` and
+// `endCapture`, so the keyboard's mic key starts instantly without opening the app again.
 
 import AVFoundation
 
@@ -26,6 +31,16 @@ final class Recorder {
     private let outFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32, sampleRate: Recorder.sampleRate, channels: 1, interleaved: false)!
     private(set) var isRunning = false
+    /// True while samples are being kept.
+    private var capturing = false
+    var isCapturing: Bool { lock.withLock { capturing } }
+
+    enum Mode {
+        /// In the app: other audio pauses while Silas listens.
+        case app
+        /// A keyboard session: runs in the background and mixes with other audio.
+        case session
+    }
 
     /// Called on the audio thread with a 0...1 loudness for the button's glow.
     var onLevel: ((Float) -> Void)?
@@ -34,13 +49,22 @@ final class Recorder {
     /// The recorder is already halted; `stop()` still returns what was heard.
     var onInterrupted: (() -> Void)?
 
-    func start() throws {
+    /// Open the microphone. With `capture` false the engine runs armed and keeps nothing yet.
+    func start(mode: Mode = .app, capture: Bool = true) throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.record, mode: .default, options: [.allowBluetoothHFP])
+        switch mode {
+        case .app:
+            try session.setCategory(.record, mode: .default, options: [.allowBluetoothHFP])
+        case .session:
+            try session.setCategory(.playAndRecord, mode: .default, options: [.mixWithOthers, .allowBluetoothHFP, .defaultToSpeaker])
+        }
         try session.setActive(true)
 
         engine = AVAudioEngine()
-        lock.withLock { samples.removeAll(keepingCapacity: true) }
+        lock.withLock {
+            samples.removeAll(keepingCapacity: true)
+            capturing = capture
+        }
         do {
             try attach()
         } catch {
@@ -114,15 +138,46 @@ final class Recorder {
     func stop() -> [Float] {
         halt()
         return lock.withLock {
-            let out = samples
+            let out = capturing ? samples : []
             samples = []
+            capturing = false
             return out
         }
     }
 
+    /// Start keeping samples on an armed engine.
+    func beginCapture() {
+        lock.withLock {
+            samples.removeAll(keepingCapacity: true)
+            capturing = true
+        }
+    }
+
+    /// Stop keeping samples and return them; the engine stays armed.
+    func endCapture() -> [Float] {
+        lock.withLock {
+            let out = samples
+            samples = []
+            capturing = false
+            return out
+        }
+    }
+
+    /// What has been kept so far, for live text.
+    func snapshot() -> [Float] {
+        lock.withLock { samples }
+    }
+
+    var capturedSeconds: Double {
+        lock.withLock { Double(samples.count) / Recorder.sampleRate }
+    }
+
     func cancel() {
         halt()
-        lock.withLock { samples = [] }
+        lock.withLock {
+            samples = []
+            capturing = false
+        }
     }
 
     private func halt() {
@@ -153,7 +208,11 @@ final class Recorder {
         }
         guard error == nil, let data = out.floatChannelData?[0], out.frameLength > 0 else { return }
         let chunk = UnsafeBufferPointer(start: data, count: Int(out.frameLength))
-        lock.withLock { samples.append(contentsOf: chunk) }
+        let keep = lock.withLock {
+            if capturing { samples.append(contentsOf: chunk) }
+            return capturing
+        }
+        guard keep else { return }
 
         var sum: Float = 0
         for s in chunk { sum += s * s }

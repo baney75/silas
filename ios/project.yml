@@ -15,9 +15,16 @@ settings:
     DEVELOPMENT_TEAM: 54H7JX2PD4
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.1.0"
+    MARKETING_VERSION: "0.2.0"
     CURRENT_PROJECT_VERSION: "1"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    SUPPORTS_MACCATALYST: NO
+    SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+    SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
+
 targets:
+  # The app embeds the keyboard; both carry the App Group group.com.baney.silas, which a free
+  # Personal Team can provision (7-day profiles).
   Silas:
     type: application
     platform: iOS
@@ -26,32 +33,60 @@ targets:
     dependencies:
       - package: FluidAudio
       - package: SilasCore
-    info:
-      path: Silas/Info.plist
-      properties:
-        CFBundleDisplayName: Silas
-        CFBundleShortVersionString: $(MARKETING_VERSION)
-        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        NSMicrophoneUsageDescription: >-
-          Silas listens only while you hold the button or turn on hands-free. Your voice is
-          turned into text on this iPad and never leaves it.
-        UILaunchScreen:
-          UIColorName: Ink
-        UIRequiresFullScreen: false
-        UIApplicationSceneManifest:
-          UIApplicationSupportsMultipleScenes: false
-        UISupportedInterfaceOrientations~ipad:
-          - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationPortraitUpsideDown
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
-        UIUserInterfaceStyle: Dark
-        ITSAppUsesNonExemptEncryption: false
+      - target: SilasKeyboard
+        embed: true
+        codeSign: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.baney.silas.ipad
+        PRODUCT_BUNDLE_IDENTIFIER: com.baney.silas.ios
         PRODUCT_NAME: Silas
-        TARGETED_DEVICE_FAMILY: "2"
+        INFOPLIST_FILE: Config/Silas-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Config/Silas.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        SUPPORTS_MACCATALYST: NO
-        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+      configs:
+        # The self-test clip is for debug builds and UI tests only.
+        Release:
+          EXCLUDED_SOURCE_FILE_NAMES: selftest.wav
+
+  SilasKeyboard:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: SilasKeyboard
+    dependencies:
+      - package: SilasCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.baney.silas.ios.keyboard
+        PRODUCT_NAME: SilasKeyboard
+        INFOPLIST_FILE: Config/Keyboard-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Config/Keyboard.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+
+  SilasUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: SilasUITests
+    dependencies:
+      - target: Silas
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.baney.silas.ios.uitests
+        TEST_TARGET_NAME: Silas
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  Silas:
+    build:
+      targets:
+        Silas: all
+        SilasKeyboard: all
+    test:
+      config: Debug
+      targets:
+        - SilasUITests
+    run:
+      config: Debug
+    archive:
+      config: Release

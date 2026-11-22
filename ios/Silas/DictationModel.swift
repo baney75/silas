@@ -31,11 +31,20 @@ struct FailedClip {
     let seconds: Double
     let id: UUID
     let date: Date
+    let toKeyboard: Bool
+}
+
+enum Sheet: String, Identifiable {
+    case history, dictionary, settings
+    var id: String { rawValue }
 }
 
 @MainActor
 @Observable
 final class DictationModel {
+    /// One model per process, so App Intents and URLs reach the same one the screen shows.
+    static let shared = DictationModel()
+
     private(set) var status: Status = .loading
     private(set) var history: [Dictation] = []
     /// False while history.json exists but could not be read (device locked). Nothing saves until it loads.
@@ -45,7 +54,25 @@ final class DictationModel {
     /// A short note under the status line ("Didn't catch that", "Copied").
     private(set) var notice: String?
     private(set) var level: Float = 0
+    /// Live text while listening.
+    private(set) var preview = ""
     var handsFree: Bool { machine.isHandsFree }
+
+    /// The personal dictionary: terms, corrections, fillers. Same rules and file shape as the desktop.
+    private(set) var dictionary: PersonalDictionary
+
+    /// The sheet on a phone (history, dictionary, settings) or on an iPad (dictionary, settings).
+    var sheet: Sheet?
+    /// A pairing code from `silas://pair?k=`, waiting for the person to confirm.
+    var joinCode: String?
+
+    let sync = SyncController()
+
+    /// The App Group handoff to the Silas Keyboard; nil when the build was signed without the App Group.
+    let handoff = Handoff()
+    var keyboardAvailable: Bool { handoff != nil }
+    /// A keyboard session is on: the microphone stays armed while the person is in another app.
+    var keyboardSession = false
 
     /// The editor's text. Edits are saved to the selected dictation.
     var text: String = "" {
@@ -63,6 +90,7 @@ final class DictationModel {
             guard let id = selectedID,
                 let i = history.firstIndex(where: { $0.id == id }), history[i].text != text
             else { return }
+            if editBase?.id != id { editBase = (id, history[i].text) }
             history[i].text = text
             scheduleSave()
         }
@@ -75,17 +103,21 @@ final class DictationModel {
         }
     }
 
-    private let engine = SpeechEngine()
-    private let recorder = Recorder()
-    private var machine = HoldMachine()
+    let engine = SpeechEngine()
+    let recorder = Recorder()
+    var machine = HoldMachine()
     private var recordingStarted: Date?
     private var maxTimer: Task<Void, Never>?
     private var saveTask: Task<Void, Never>?
+    private var dictionarySaveTask: Task<Void, Never>?
     private var noticeTask: Task<Void, Never>?
+    private var previewTask: Task<Void, Never>?
     /// Bumped whenever a pending start (waiting on the mic permission) must not go ahead.
     private var startToken = 0
     private var backgroundTaskID = UIBackgroundTaskIdentifier.invalid
     private var inFlight: Set<UUID> = []
+    /// The text of the dictation being edited, as it was before the edit began, to learn from.
+    @ObservationIgnored private var editBase: (id: UUID, text: String)?
     /// Every recording whose transcription failed this launch, oldest first, so "Try again" and
     /// "Discard" reach all of them. Recovery skips these ids so a bad clip is not retried in a loop.
     @ObservationIgnored private var failed: [FailedClip] = []
@@ -93,12 +125,38 @@ final class DictationModel {
     /// How many clips could not be transcribed. Recording stays available; the UI offers Try again / Discard.
     private(set) var failedClipCount = 0
     var hasFailedClip: Bool { failedClipCount > 0 }
+    /// The capture in progress was started from the keyboard, so its text goes back to the keyboard.
+    var captureToKeyboard = false
+    /// A hands-free start asked for before the model was ready (App Intent, keyboard URL).
+    var pendingStart: PendingStart?
+    enum PendingStart { case app, keyboard }
+
+    // Keyboard session state (DictationModel+Keyboard.swift).
+    @ObservationIgnored var requestObserver: DarwinNotify.Observer?
+    @ObservationIgnored var heartbeat: Task<Void, Never>?
+    @ObservationIgnored var lastRequestID: UUID?
+    @ObservationIgnored var sessionIdleSince = Date()
+
+    #if DEBUG
+    /// The bundled self-test clip's text, for the UI test.
+    private(set) var selfTestResult: String?
+    #endif
+
+    /// UI tests launch with `-uitest`: no up-front microphone prompt over the screen under test.
+    static let isUITest: Bool = {
+        #if DEBUG
+        return ProcessInfo.processInfo.arguments.contains("-uitest")
+        #else
+        return false
+        #endif
+    }()
 
     /// Hands-free left on by mistake would grow without end; stop at 5 minutes like the desktop.
     private static let maxRecording: Duration = .seconds(300)
     private static let minSeconds = 0.35
 
-    init() {
+    private init() {
+        dictionary = DictionaryStore.load()
         loadHistory()
         recorder.onLevel = { [weak self] lvl in
             Task { @MainActor in self?.level = lvl }
@@ -106,6 +164,13 @@ final class DictationModel {
         recorder.onInterrupted = { [weak self] in
             Task { @MainActor in self?.interrupted() }
         }
+        sync.currentDictionary = { [weak self] in self?.dictionary ?? PersonalDictionary() }
+        sync.applyMerged = { [weak self] merged in
+            guard let self else { return }
+            self.dictionary = merged
+            DictionaryStore.save(merged)
+        }
+        if let last = history.first { handoff?.setLast(last.text, date: last.date) }
     }
 
     // MARK: History file
@@ -141,14 +206,18 @@ final class DictationModel {
     }
 
     func leavingForeground() {
-        finishIfRecording()
+        commitEdit()
+        // A keyboard session keeps listening in the background; that is its whole point.
+        if !keyboardSession { finishIfRecording() }
         saveNow()
+        sync.deactivate()
     }
 
     func becameActive() {
         if !historyLoaded { loadHistory() }
         if unsavedChanges { persist() }
         Task { await recoverPending() }
+        Task { await sync.activate() }
     }
 
     // MARK: Model
@@ -163,7 +232,7 @@ final class DictationModel {
         let needsDownload = !SpeechEngine.modelIsDownloaded
         status = needsDownload ? .downloading(progress: 0) : .loading
         UIApplication.shared.isIdleTimerDisabled = true
-        defer { UIApplication.shared.isIdleTimerDisabled = false }
+        defer { UIApplication.shared.isIdleTimerDisabled = status == .listening }
 
         let monitor: Task<Void, Never>? = needsDownload ? Task.detached { [weak self] in
             while !Task.isCancelled {
@@ -182,8 +251,12 @@ final class DictationModel {
             monitor?.cancel()
             status = .ready
             // Ask now, so the system alert never lands under a finger mid-hold.
-            if AVAudioApplication.shared.recordPermission == .undetermined {
+            if AVAudioApplication.shared.recordPermission == .undetermined, pendingStart == nil, !Self.isUITest {
                 _ = await AVAudioApplication.requestRecordPermission()
+            }
+            if let p = pendingStart {
+                pendingStart = nil
+                startHandsFree(toKeyboard: p == .keyboard)
             }
             await recoverPending()
             #if DEBUG
@@ -198,17 +271,28 @@ final class DictationModel {
     }
 
     #if DEBUG
-    /// `-selftest <path.wav>` (debug builds only): transcribe a file at launch and log it,
-    /// so the engine can be checked in the simulator without touching the screen.
+    /// Debug builds only. `-selftest <path.wav>` transcribes a file at launch and logs it;
+    /// `-selftest-bundled` does the same with the bundled clip and shows the text for the UI test.
     private func selfTest() async {
         let args = ProcessInfo.processInfo.arguments
-        guard let i = args.firstIndex(of: "-selftest"), i + 1 < args.count else { return }
+        let url: URL
+        if let i = args.firstIndex(of: "-selftest"), i + 1 < args.count {
+            url = URL(fileURLWithPath: args[i + 1])
+        } else if args.contains("-selftest-bundled"), let bundled = Bundle.main.url(forResource: "selftest", withExtension: "wav") {
+            url = bundled
+        } else {
+            return
+        }
         do {
-            let samples = try AudioConverter().resampleAudioFile(URL(fileURLWithPath: args[i + 1]))
+            let samples = try AudioConverter().resampleAudioFile(url)
             let start = Date()
             let raw = try await engine.transcribe(samples)
-            NSLog("SILAS-SELFTEST raw=%@ clean=%@ secs=%.2f", raw, Cleanup.apply(raw), Date().timeIntervalSince(start))
+            var d = dictionary
+            let clean = d.apply(raw)
+            selfTestResult = clean
+            NSLog("SILAS-SELFTEST raw=%@ clean=%@ secs=%.2f", raw, clean, Date().timeIntervalSince(start))
         } catch {
+            selfTestResult = "failed: \(error.localizedDescription)"
             NSLog("SILAS-SELFTEST failed: %@", String(describing: error))
         }
     }
@@ -240,12 +324,35 @@ final class DictationModel {
         act(machine.toggle())
     }
 
+    /// Start hands-free (App Intent, the keyboard's mic, `silas://dictate`). Waits for the model.
+    func startHandsFree(toKeyboard: Bool) {
+        switch status {
+        case .ready:
+            guard !recorder.isCapturing else { return }
+            machine.reset()
+            _ = machine.toggle()
+            start(toKeyboard: toKeyboard)
+        case .listening:
+            if toKeyboard { captureToKeyboard = true }
+        case .loading, .downloading, .error:
+            pendingStart = toKeyboard ? .keyboard : .app
+        case .writing:
+            break
+        }
+    }
+
     func cancel() {
-        guard recorder.isRunning else { return }
+        guard recorder.isCapturing else { return }
         machine.reset()
         stopTimers()
-        recorder.cancel()
+        if keyboardSession {
+            _ = recorder.endCapture()
+        } else {
+            recorder.cancel()
+        }
+        preview = ""
         status = .ready
+        pushSession()
     }
 
     /// The app is leaving the screen: keep what was said.
@@ -253,7 +360,7 @@ final class DictationModel {
         // Also drops a start that is still waiting on the permission prompt.
         startToken += 1
         machine.reset()
-        guard recorder.isRunning else { return }
+        guard recorder.isCapturing else { return }
         finish()
     }
 
@@ -262,20 +369,22 @@ final class DictationModel {
         startToken += 1
         machine.reset()
         finish(force: true)
+        if keyboardSession { endKeyboardSession() }
         show("Recording stopped: the microphone was interrupted.")
     }
 
     private func act(_ out: HoldMachine.Out) {
         switch out {
-        case .start: start()
+        case .start: start(toKeyboard: false)
         case .finish: finish()
         case .nothing: break
         }
     }
 
-    private func start() {
+    private func start(toKeyboard: Bool) {
         startToken += 1
         let token = startToken
+        commitEdit()
         Task {
             let granted = await AVAudioApplication.requestRecordPermission()
             // A newer press or a stop owns the gesture now; leave its state alone.
@@ -286,39 +395,55 @@ final class DictationModel {
                 return
             }
             // The press may have ended while the permission prompt was up.
-            guard machine.isActive, !recorder.isRunning, status == .ready else {
+            guard machine.isActive, !recorder.isCapturing, status == .ready else {
                 machine.reset()
                 return
             }
             do {
-                try recorder.start()
+                if recorder.isRunning {
+                    // Armed by a keyboard session: start keeping samples at once.
+                    recorder.beginCapture()
+                } else {
+                    try recorder.start(mode: keyboardSession ? .session : .app)
+                }
             } catch {
                 machine.reset()
                 status = .error("Microphone: \(error.localizedDescription)")
                 return
             }
+            captureToKeyboard = toKeyboard
             recordingStarted = Date()
+            preview = ""
             status = .listening
+            pushSession()
             UIApplication.shared.isIdleTimerDisabled = true
             maxTimer = Task {
                 try? await Task.sleep(for: Self.maxRecording)
                 guard !Task.isCancelled else { return }
                 self.finishIfRecording()
             }
+            startPreview()
         }
     }
 
-    private func finish(force: Bool = false) {
-        guard recorder.isRunning || force else { return }
+    func finish(force: Bool = false) {
+        guard recorder.isCapturing || force else { return }
         stopTimers()
-        let samples = recorder.stop()
+        machine.reset()
+        let toKeyboard = captureToKeyboard
+        captureToKeyboard = false
+        // In a keyboard session the engine stays armed for the next tap.
+        let samples = keyboardSession && recorder.isRunning ? recorder.endCapture() : recorder.stop()
         level = 0
         let seconds = Double(samples.count) / Recorder.sampleRate
         guard seconds >= Self.minSeconds else {
+            preview = ""
             status = .ready
+            pushSession()
             return
         }
         status = .writing
+        pushSession()
         // Keep the audio on disk until the text is saved, and ask iOS for time to finish.
         let id = UUID()
         let date = Date()
@@ -329,8 +454,33 @@ final class DictationModel {
         }
         beginBackgroundWork()
         Task {
-            await transcribe(samples, seconds: seconds, id: id, date: date)
+            await transcribe(samples, seconds: seconds, id: id, date: date, toKeyboard: toKeyboard)
             endBackgroundWork()
+        }
+    }
+
+    // MARK: Live text
+
+    /// While listening, transcribe everything heard so far every second or so with the loaded
+    /// model and show it. The interval grows with the clip so a long hands-free take stays light.
+    private func startPreview() {
+        previewTask?.cancel()
+        previewTask = Task { [weak self] in
+            var wait = 1.0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(wait))
+                guard let self, !Task.isCancelled, self.status == .listening else { return }
+                let samples = self.recorder.snapshot()
+                guard Double(samples.count) / Recorder.sampleRate >= 0.6 else { continue }
+                let t0 = Date()
+                guard let raw = try? await self.engine.transcribe(samples),
+                    !Task.isCancelled, self.status == .listening
+                else { continue }
+                var d = self.dictionary
+                self.preview = d.apply(raw)
+                self.pushSession()
+                wait = max(1.0, Date().timeIntervalSince(t0) * 1.5)
+            }
         }
     }
 
@@ -348,25 +498,35 @@ final class DictationModel {
         backgroundTaskID = .invalid
     }
 
-    private func transcribe(_ samples: [Float], seconds: Double, id: UUID, date: Date) async {
+    private func transcribe(_ samples: [Float], seconds: Double, id: UUID, date: Date, toKeyboard: Bool) async {
         guard inFlight.insert(id).inserted else { return }
         defer { inFlight.remove(id) }
         do {
             let raw = try await engine.transcribe(samples)
-            let cleaned = Cleanup.apply(raw)
+            let cleaned = dictionary.apply(raw)
+            scheduleDictionarySave()
             failed.removeAll { $0.id == id }
             failedClipCount = failed.count
             status = .ready
+            preview = ""
             guard !cleaned.isEmpty else {
                 PendingAudio.remove(id: id, in: HistoryStore.directory)
                 show("Didn't catch that. Try again a little closer.")
+                pushSession()
                 return
             }
             let item = Dictation(id: id, date: date, raw: raw, text: cleaned, seconds: seconds)
             history.insert(item, at: 0)
+            editBase = nil
             selectedID = item.id
             text = cleaned
             persist()
+            if toKeyboard {
+                handoff?.publish(cleaned, id: id, date: date)
+            } else {
+                handoff?.setLast(cleaned, date: date)
+            }
+            pushSession()
             // The audio is only safe to drop once the text is on disk.
             if historyLoaded && !unsavedChanges {
                 PendingAudio.remove(id: id, in: HistoryStore.directory)
@@ -374,9 +534,11 @@ final class DictationModel {
         } catch {
             // Never block recording over one bad clip: stay Ready and offer Try again / Discard.
             failed.removeAll { $0.id == id }
-            failed.append(FailedClip(samples: samples, seconds: seconds, id: id, date: date))
+            failed.append(FailedClip(samples: samples, seconds: seconds, id: id, date: date, toKeyboard: toKeyboard))
             failedClipCount = failed.count
             status = .ready
+            preview = ""
+            pushSession()
             show("Couldn't transcribe that recording: \(error.localizedDescription)")
         }
     }
@@ -393,13 +555,15 @@ final class DictationModel {
             }
             guard status == .ready, !inFlight.contains(id), !failed.contains(where: { $0.id == id }) else { continue }
             status = .writing
-            await transcribe(clip.samples, seconds: Double(clip.samples.count) / Recorder.sampleRate, id: id, date: clip.date)
+            await transcribe(clip.samples, seconds: Double(clip.samples.count) / Recorder.sampleRate, id: id, date: clip.date, toKeyboard: false)
         }
     }
 
     private func stopTimers() {
         maxTimer?.cancel()
         maxTimer = nil
+        previewTask?.cancel()
+        previewTask = nil
         UIApplication.shared.isIdleTimerDisabled = false
     }
 
@@ -426,7 +590,7 @@ final class DictationModel {
                     guard status == .ready else { return }
                     status = .writing
                 }
-                await transcribe(f.samples, seconds: f.seconds, id: f.id, date: f.date)
+                await transcribe(f.samples, seconds: f.seconds, id: f.id, date: f.date, toKeyboard: f.toKeyboard)
             }
         }
     }
@@ -445,11 +609,13 @@ final class DictationModel {
     var selected: Dictation? { history.first { $0.id == selectedID } }
 
     func select(_ d: Dictation) {
+        commitEdit()
         selectedID = d.id
         text = d.text
     }
 
     func delete(_ d: Dictation) {
+        if editBase?.id == d.id { editBase = nil }
         history.removeAll { $0.id == d.id }
         if selectedID == d.id {
             selectedID = history.first?.id
@@ -471,11 +637,129 @@ final class DictationModel {
     func saveNow() {
         saveTask?.cancel()
         persist()
+        dictionarySaveTask?.cancel()
+        DictionaryStore.save(dictionary)
+    }
+
+    // MARK: Learning
+
+    /// An edit to a dictation is over (the editor closed, another one was picked, the app left the
+    /// screen): learn from it the way the desktop learns from an edit in its history, as explicit.
+    func commitEdit() {
+        guard let base = editBase else { return }
+        editBase = nil
+        guard let item = history.first(where: { $0.id == base.id }), item.text != base.text else { return }
+        let result = dictionary.learn(typed: base.text, fixed: item.text, explicit: true)
+        guard !result.isEmpty else { return }
+        dictionaryChanged()
+        if let c = result.learned.first {
+            show("Learned: \(c.from) → \(c.to)")
+        } else if let t = result.terms.first {
+            show("Added \(t) to your words")
+        } else if let p = result.pending.first {
+            show("Noted \(p.from) → \(p.to). Accept it in Dictionary.")
+        }
+    }
+
+    // MARK: Dictionary
+
+    /// The person changed the dictionary: save it and tell the other devices.
+    func dictionaryChanged() {
+        dictionarySaveTask?.cancel()
+        DictionaryStore.save(dictionary)
+        sync.localChange()
+    }
+
+    /// Use counts change on every dictation; save them without syncing (they are local only).
+    private func scheduleDictionarySave() {
+        dictionarySaveTask?.cancel()
+        dictionarySaveTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, let self else { return }
+            DictionaryStore.save(self.dictionary)
+        }
+    }
+
+    @discardableResult
+    func addTerm(_ text: String) -> Bool {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, dictionary.addTerm(t, source: "user") else { return false }
+        dictionaryChanged()
+        return true
+    }
+
+    func removeTerm(_ text: String) {
+        dictionary.removeTerm(text)
+        dictionaryChanged()
+    }
+
+    @discardableResult
+    func addCorrection(_ from: String, _ to: String) -> Bool {
+        let f = from.trimmingCharacters(in: .whitespacesAndNewlines)
+        let t = to.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !f.isEmpty, !t.isEmpty, dictionary.addCorrection(f, t, source: "user") != nil else { return false }
+        dictionaryChanged()
+        return true
+    }
+
+    func removeCorrection(_ from: String) {
+        dictionary.removeCorrection(from)
+        dictionaryChanged()
+    }
+
+    func acceptPending(_ from: String) {
+        dictionary.acceptPending(from)
+        dictionaryChanged()
+    }
+
+    func dismissPending(_ from: String) {
+        dictionary.dismissPending(from)
+        DictionaryStore.save(dictionary)
+    }
+
+    func addFiller(_ word: String) {
+        let w = word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !w.isEmpty, !dictionary.fillers.contains(w) else { return }
+        dictionary.fillers.append(w)
+        dictionaryChanged()
+    }
+
+    func removeFiller(_ word: String) {
+        dictionary.fillers.removeAll { $0 == word }
+        dictionaryChanged()
+    }
+
+    // MARK: URLs
+
+    /// `silas://dictate` (hands-free in the app), `silas://dictate?from=keyboard` (a keyboard
+    /// session), `silas://pair?k=<code>` (join sync after the person confirms).
+    func open(_ url: URL) {
+        guard url.scheme == "silas" else { return }
+        switch url.host() {
+        case "dictate":
+            let from = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first { $0.name == "from" }?.value
+            if from == "keyboard" {
+                startKeyboardSession()
+            } else {
+                startHandsFree(toKeyboard: false)
+            }
+        case "pair":
+            if let key = SyncKey.key(fromPairURL: url) {
+                joinCode = SyncKey.pairingCode(key)
+                sheet = .settings
+            } else {
+                show("That pairing code isn't valid.")
+            }
+        default:
+            break
+        }
     }
 
     // MARK: Actions
 
     func copy() {
+        commitEdit()
         UIPasteboard.general.string = text
         show("Copied")
     }
@@ -493,4 +777,11 @@ final class DictationModel {
             self?.notice = nil
         }
     }
+
+    #if DEBUG
+    /// UI tests: put text where the keyboard picks it up, as a finished keyboard dictation would.
+    func debugHandoff(_ text: String) {
+        handoff?.publish(text)
+    }
+    #endif
 }
