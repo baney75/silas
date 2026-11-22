@@ -267,6 +267,9 @@ struct Runtime {
     alive: Arc<AtomicBool>,
     tx: mpsc::Sender<Cmd>,
     addr: SocketAddr,
+    /// The thread that owns the listener. Joined on stop, so the port is free again by the time
+    /// a restart binds it.
+    accept: std::thread::JoinHandle<()>,
     mdns: Option<mdns_sd::ServiceDaemon>,
     _watcher: Option<notify::RecommendedWatcher>,
 }
@@ -278,6 +281,7 @@ impl Runtime {
         if let Some(m) = self.mdns {
             let _ = m.shutdown();
         }
+        let _ = self.accept.join();
     }
 }
 
@@ -383,7 +387,8 @@ impl SyncEngine {
     }
 
     pub fn stop(&self) {
-        if let Some(rt) = self.rt.lock().take() {
+        let rt = self.rt.lock().take();
+        if let Some(rt) = rt {
             rt.stop();
             log::info!("sync: stopped");
         }
@@ -703,7 +708,8 @@ impl SyncEngine {
 
         let me = self.me.clone();
         let live = alive.clone();
-        std::thread::Builder::new().name("sync-listen".into()).spawn(move || accept_loop(listener, me, live))?;
+        let accept =
+            std::thread::Builder::new().name("sync-listen".into()).spawn(move || accept_loop(listener, me, live))?;
 
         let (device, name, folder) = {
             let st = self.st.lock();
@@ -724,9 +730,13 @@ impl SyncEngine {
 
         let engine = self.arc();
         let live = alive.clone();
-        std::thread::Builder::new().name("sync".into()).spawn(move || engine.worker(rx, live))?;
+        if let Err(e) = std::thread::Builder::new().name("sync".into()).spawn(move || engine.worker(rx, live)) {
+            alive.store(false, Ordering::SeqCst);
+            let _ = accept.join();
+            return Err(e.into());
+        }
         log::info!("sync: listening on port {}", addr.port());
-        *self.rt.lock() = Some(Runtime { alive, tx, addr, mdns, _watcher: watcher });
+        *self.rt.lock() = Some(Runtime { alive, tx, addr, accept, mdns, _watcher: watcher });
         Ok(())
     }
 
@@ -1035,11 +1045,15 @@ mod tests {
     }
 
     fn engine(tag: &str, key: Option<&SyncKey>) -> (Arc<SyncEngine>, Arc<FileDict>, PathBuf) {
+        engine_on(tag, key, 0)
+    }
+
+    fn engine_on(tag: &str, key: Option<&SyncKey>, port: u16) -> (Arc<SyncEngine>, Arc<FileDict>, PathBuf) {
         let dir = temp(tag);
         let keys = Arc::new(FileKeyStore::new(dir.join("sync-key")));
         let dict = Arc::new(FileDict::open(dir.join("dictionary.json")));
         let mut o = Options::new(dir.clone(), keys, dict.clone());
-        o.port = Some(0);
+        o.port = Some(port);
         o.bind = IpAddr::V4(Ipv4Addr::LOCALHOST);
         o.discovery = false;
         o.frame_timeout = Duration::from_millis(800);
@@ -1120,6 +1134,22 @@ mod tests {
         e2.stop();
         let _ = std::fs::remove_dir_all(dir);
         let _ = std::fs::remove_dir_all(dir2);
+    }
+
+    #[test]
+    fn a_restart_gets_the_same_port_back() {
+        // A fixed port, as 47823 is: peers that know it must still reach this device after a
+        // rename, a new folder or a toggle, each of which restarts the listener.
+        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let (e, _d, dir) = engine_on("port", None, port);
+        assert_eq!(e.listen_addr().map(|a| a.port()), Some(port));
+        e.set_name("Rectory").unwrap();
+        assert_eq!(e.listen_addr().map(|a| a.port()), Some(port), "after a rename");
+        e.set_enabled(false).unwrap();
+        e.set_enabled(true).unwrap();
+        assert_eq!(e.listen_addr().map(|a| a.port()), Some(port), "after a toggle");
+        e.stop();
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
