@@ -20,19 +20,44 @@ Paste one line into a terminal. It downloads Silas, installs it and opens it.
 curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | sh
 ```
 
-**Windows** (10 or 11, 64-bit; nightly builds), in PowerShell:
+**Windows** (10 or 11, 64-bit), in PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/baney75/silas/main/install.ps1 | iex
 ```
 
-**Linux** (x86_64, glibc 2.39 or newer, e.g. Ubuntu 24.04+ or Fedora 40+; nightly builds): the macOS line. It
+**Linux** (x86_64, glibc 2.39 or newer, e.g. Ubuntu 24.04+ or Fedora 40+): the macOS line. It
 installs the `.deb` on Debian and Ubuntu, the `.rpm` on Fedora and openSUSE Tumbleweed, and otherwise an
 AppImage with a launcher entry and a udev rule so Silas can read the hold-to-talk key.
 
-Run the same line again to update by hand. Silas also updates itself. macOS installs the stable
-channel (`SILAS_CHANNEL=nightly` for nightly); Windows and Linux install nightly until a stable
-release carries them. Pick any channel later in Settings › Updates.
+**Arch Linux and Omarchy**: the same line builds the native `silas-git` package from source (a few
+minutes), which installs `/usr/bin/silas` and `silas-ctl`, the udev rule for the hold-to-talk key, and
+Hyprland keybindings. By hand:
+
+```sh
+git clone https://github.com/baney75/silas && cd silas/packaging/arch && makepkg -si
+```
+
+Then put Silas on Omarchy's dictation keys (hold **F9** to talk, **Super + Ctrl + X** for
+hands-free) by adding this to `~/.config/hypr/bindings.lua`:
+
+```lua
+local silas = dofile("/usr/share/silas/hyprland.lua")
+silas.hold("SUPER + SHIFT + code:201") -- optional: the Copilot key
+```
+
+The bindings run `silas-ctl press` and `silas-ctl release`. Hyprland swallows the keys, so
+apps never see them. Silas types through Wayland's virtual-keyboard protocol, floats its
+overlay as a layer surface that never takes the keyboard, and on Hyprland puts the text back
+in the window where you started. The package is built on your machine and isn't in a repository,
+so `pacman -Syu` won't update it and Silas doesn't update itself: run the install line again to update.
+If you used voxtype, stop it so two apps don't share the keys:
+`systemctl --user disable --now voxtype`.
+
+Run the same line again to update by hand. Silas also updates itself. Every installer gets the
+stable channel; set `SILAS_CHANNEL=nightly` first for nightly. On Linux, a Silas package
+installed from nightly keeps updating from nightly unless you set `SILAS_CHANNEL=stable`. Pick any
+channel later in Settings › Updates.
 
 <details>
 <summary>Rather download it yourself?</summary>
@@ -42,7 +67,7 @@ release carries them. Pick any channel later in Settings › Updates.
   macOS says it can't verify the app. Click **Done**, open **System Settings › Privacy &
   Security**, scroll down and click **Open Anyway**. The one-line installer skips this step.
 - **Windows and Linux:** the `.exe`, `.deb`, `.rpm` and `.AppImage` are on the
-  [nightly release](https://github.com/baney75/silas/releases/tag/nightly). Windows SmartScreen
+  [latest release](https://github.com/baney75/silas/releases/latest). Windows SmartScreen
   may warn about a new app: click **More info › Run anyway**.
 
 </details>
@@ -66,9 +91,62 @@ for your key.
 | Tap the key once | listens hands-free until you tap it again |
 | Press **Esc** while it listens | cancels |
 | Press the key with another key (Right ⌘ + C) | does nothing; your shortcut still works |
+| Press your **Type it again** key, or pick *Type Last Dictation Again* in the tray menu | types your last dictation again where you are (Windows: the key only; the menu item is off until Silas can put your window back in front) |
 
 New lines are typed as Shift+Return, so chat boxes don't send early. Change the key,
-typing speed and the rest in Settings.
+typing speed and the rest in Settings. The *Type it again* key is unset until you pick one
+in Settings → Dictation.
+
+**Each app gets its style.** Silas checks which app you're typing into:
+
+| Style | For | What changes |
+| --- | --- | --- |
+| Terminal | Terminal, iTerm2, Ghostty, kitty, Windows Terminal, PowerShell, foot and others | Spoken code on, no capital at the start, no period at the end |
+| Code | VS Code, Cursor, Zed, Xcode, JetBrains IDEs and others | Spoken code on; no period after a line that reads as code |
+| Chat | Slack, Discord, Messages, Signal, Telegram and others | New lines always go out as Shift+Return |
+| Prose | everything else | Nothing: your words as you said them |
+
+Settings → App styles shows the app your last dictation went to and its style. Pick another
+style for it, or add any app by its id.
+
+**Spoken code** (Terminal and Code styles): "cargo test dash dash release" types
+`cargo test --release`; "cd tilde slash dot config" types `cd ~/.config`; "all caps node
+underscore env equals production" types `NODE_ENV=production`; "print open paren name close
+paren" types `print(name)`; "camel case user name" types `userName`. Also: dot, slash, back
+slash, underscore, tilde, pipe, equals, double equals, at sign, dollar sign, open and close
+bracket or brace, snake case, pascal case, kebab case, constant case, new line, new paragraph.
+Words that read as prose stay words: "a dash of salt", "results underscore the need" and "a red
+dot appears" are typed as you said them. Underscore, equals, pipe, dot, tilde and all caps turn
+into code only next to other code ("node underscore env equals production", "console dot log",
+"pipe grep"). Say "new line" on its own, between pauses, for a line break in a Code app; a
+Terminal never gets one from spoken code, since it would press Return.
+
+**Snippets.** Dictionary → Snippets saves text to type when you say a phrase: say "my
+address" on its own and Silas types your address. Inside a sentence, say "insert" first:
+"send it to insert my address". The phrase's words in ordinary speech ("I changed my address")
+are left alone.
+
+Music or a video playing when you press the key pauses while you speak and plays again after.
+Silas only restarts what it paused, so something you stopped yourself stays stopped. Turn it off
+in Settings → Audio.
+
+## Transcribe a file
+
+Click *Transcribe a file* in History, or drop an audio or video file on the window. Silas writes
+what was said into History; nothing is typed. It reads WAV, MP3, M4A, FLAC, OGG, Opus, AIFF and the
+sound of MP4, MOV and WebM videos, and works through long recordings a piece at a time. It waits
+while you dictate, so the key keeps working.
+
+From a terminal:
+
+```sh
+silas transcribe meeting.m4a           # prints the text
+silas transcribe meeting.m4a --json    # text, the model's raw words, and timings
+silas transcribe meeting.m4a --raw     # without your dictionary
+```
+
+It uses the model and dictionary the app uses. On macOS the command is
+`/Applications/Silas.app/Contents/MacOS/silas`.
 
 ## It learns
 
@@ -117,12 +195,13 @@ from a terminal.
 
 | Channel | For | Source |
 | --- | --- | --- |
-| Stable | Everyone. The default. | `vX.Y.Z` releases, promoted from a nightly at least 72 hours old. macOS today; Windows and Linux from the next stable release |
+| Stable | Everyone. The default. | `vX.Y.Z` releases, promoted from a nightly at least 72 hours old, for macOS, Windows and Linux since 0.1.7 |
 | Nightly | People who want new work first | the rolling `nightly` pre-release, rebuilt by CI each night when `main` changed |
 | Dev | Testing a change | the rolling `dev` pre-release, rebuilt by CI on every merge to `main` |
 
 Choose the channel in Settings › Updates. Switching replaces the install, and it may go to a lower
-version. Until a stable release carries Windows and Linux, those systems on stable get nightly.
+version. A Windows or Linux copy on stable reads nightly only if the latest stable release lacks
+its platform.
 Silas checks at launch and every four hours. With auto-update on, it installs once it has been
 idle for two minutes. Stable has its own signing key, which never leaves the release Mac; nightly
 and dev share a second one, and Silas refuses an update that isn't signed by its channel's key. Mac
@@ -135,7 +214,7 @@ secrets. See [docs/channels.md](docs/channels.md) and [docs/signing.md](docs/sig
 | --- | --- |
 | Holding the key does nothing (macOS) | Click Fix Permission on the Silas home screen, then allow Silas when macOS asks. By hand: System Settings › Privacy & Security › Accessibility, select Silas, click the minus button, click plus and add Silas from Applications, then turn on its switch. Turning the switch off and on doesn't help. |
 | Words are typed into the wrong place | Silas types where the dictation started. Click into the field before you hold the key. |
-| Nothing is typed into a Wayland app (Linux) | Install `wtype`. |
+| Nothing is typed into a Wayland app (Linux) | Hyprland and Sway work as they are. On GNOME or KDE, install `ydotool`. |
 | The AppImage won't start (Linux) | Install your distro's FUSE 2 package (`libfuse2` or `fuse2`). |
 
 Still stuck? [Open an issue](https://github.com/baney75/silas/issues/new) with your OS and
@@ -172,7 +251,8 @@ uses it by path, so this repo builds on its own.
 The default speech engine, transcribe.cpp, builds from source, so every platform needs CMake and a C++
 compiler (Xcode's command line tools on macOS, Visual Studio's C++ tools on Windows).
 
-Linux needs `cmake g++ libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev libudev-dev libxdo-dev`.
+Linux needs `cmake g++ libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev libudev-dev libxdo-dev`,
+plus `libgtk-layer-shell0` at run time for the overlay on Wayland.
 
 ## Privacy
 

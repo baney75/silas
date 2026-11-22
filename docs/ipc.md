@@ -17,7 +17,34 @@ interface AppState {
   model: string | null;           // active model id, null if none installed
   hotkey: string;                 // e.g. "CmdRight"
   hotkeyLabel: string;            // e.g. "Right ⌘"
+  retypeHotkeyLabel: string | null; // label of Settings.retypeHotkey, null when unset
+  app: AppInfo | null;            // the app the last dictation went to; null before the first one,
+                                  // or where the system doesn't name apps (Linux outside Hyprland)
   permissions: Permissions;
+}
+
+// How Silas shapes text for an app (core/voice/src/style.rs):
+//   prose    as spoken (the default for apps not in the table)
+//   chat     prose; new lines go out as Shift+Return whatever newlineAsShiftEnter says
+//   code     spoken code on (core/voice/src/spoken.rs): "dash dash", "dot", "open paren",
+//            "camel case user name"; the trailing period is dropped when the text reads as code.
+//            Words that are also English (underscore, equals, pipe, dot, tilde, all caps) turn
+//            into code only next to other code; "new line" breaks only when said on its own
+//   terminal spoken code on, no capital at the start, never a trailing period, and spoken code
+//            never types a line break (it would be Return)
+type AppStyle = "prose" | "chat" | "code" | "terminal";
+
+interface AppInfo {
+  id: string;                     // macOS bundle id, Windows exe name ("code.exe"), Hyprland window class
+  name: string;                   // from the built-in table (style.rs KNOWN), else the id
+  style: AppStyle;                // what it gets now: Settings.appStyles, else `builtin`
+  builtin: AppStyle;              // Silas's own style for it: the table, else "prose"
+}
+
+interface Snippet {
+  trigger: string;                // what you say; matched without case or punctuation
+  text: string;                   // typed exactly as saved, new lines included
+  added: string;                  // RFC 3339
 }
 
 interface Permissions {
@@ -35,8 +62,12 @@ interface Settings {
   trailingSpace: boolean;
   typingSpeed: "steady" | "fast" | "instant"; // chars/sec 250 | 700 | 2000
   newlineAsShiftEnter: boolean;   // so chat boxes do not send early
+  retypeHotkey: string | null;    // handy-keys string for "type the last dictation again"; null = unset.
+                                  // set_settings rejects the dictation hotkey itself or a string that isn't a key
+  appStyles: Record<string, AppStyle>; // app id -> style the user chose; ids match without case
   learnFromEdits: boolean;
   sounds: boolean;
+  pauseMedia: boolean;            // pause playing music and video while dictating (default on); see below
   showOverlay: boolean;
   launchAtLogin: boolean;
   microphone: string | null;      // device name, null = system default
@@ -96,6 +127,17 @@ interface HistoryItem {
   latencyMs: number;              // release → text ready
   words: number;
   corrected: string | null;       // text after the user taught a fix
+  file?: string;                  // file name when it came from transcribe_file (then nothing was typed,
+                                  // latencyMs is the whole transcription and Stats leave it out)
+}
+
+interface FileProgress {
+  name: string;                   // the file's name
+  stage: "decoding" | "transcribing" | "waiting" | "done" | "error" | "cancelled" | "refused";
+  doneS: number;                  // seconds of audio transcribed so far
+  totalS: number | null;          // the file's length when the container says it
+  message?: string;               // error, cancelled and refused: why
+  item?: HistoryItem;             // done: the new History entry
 }
 
 interface Correction { from: string; to: string; count: number; source: "user" | "learned" | "import"; added: string }
@@ -107,6 +149,7 @@ interface Dictionary {
   corrections: Correction[];
   pending: Pending[];             // seen fixes not yet trusted (needs 2 sightings)
   fillers: string[];              // words removed when removeFillers is on
+  snippets: Snippet[];            // one per trigger match form; sync key "s:" + norm(trigger) (docs/sync.md)
 }
 
 interface Stats {
@@ -139,11 +182,14 @@ interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string
 | `add_term` / `remove_term` | `{ text }` | `Dictionary` |
 | `add_correction` | `{ from, to }` | `Dictionary` |
 | `remove_correction` | `{ from }` | `Dictionary` |
+| `add_snippet` | `{ trigger, text }` | `Dictionary`. Replaces the text of a snippet with the same trigger. Errors when either is empty |
+| `remove_snippet` | `{ trigger }` | `Dictionary` |
 | `accept_pending` / `dismiss_pending` | `{ from }` | `Dictionary` |
 | `import_dictionary` | `{ json }` | `Dictionary` (accepts Silas export or a TypeWhisper export) |
 | `export_dictionary` | | `string` (pretty JSON) |
 | `get_stats` | | `Stats` |
 | `toggle_recording` | | `null` (same as tapping the hotkey) |
+| `type_again` | | `null` once the retype has started. Types the newest History item (its taught fix, if any) into the field with the keyboard, with a dictation's guards: never into a password field or a window that took the keyboard, and Escape stops it. The tray item and `retypeHotkey` do the same. Errors with the reason when paused, busy, or History is empty. Windows: errors, and the tray item is disabled, because Silas can't yet remember and restore the window the user was typing in and the command and the menu leave Silas's own window in front; only `retypeHotkey` types there |
 | `capture_hotkey` | | `string` next key/modifier pressed, e.g. `"CmdRight"` (10 s timeout) |
 | `open_permission` | `{ kind: "microphone" \| "accessibility" \| "input" }` | `null`. Reads first; shows the system prompt at most once per run and never when already granted, otherwise opens the OS settings pane |
 | `reset_accessibility` | | `null`. macOS onboarding: when not trusted, clears Silas's Accessibility entry, asks at most once per run, opens Settings |
@@ -154,6 +200,8 @@ interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string
 | `run_benchmark` | `{ all }` | `null` when the run ends. Measures the active model, and with `all` every other installed one. Errors at once if a benchmark is already running or no model is loaded. Results of models not run this time are kept in the report |
 | `share_benchmark` | | `null` opens a prefilled GitHub issue (`report_url`) in the default browser; the user reviews and submits it |
 | `get_device` | | `Device` |
+| `transcribe_file` | `{ path?: string }` | `HistoryItem \| null`. Transcribes an audio or video file into History; nothing is typed and the clipboard is untouched. With no `path` it opens the system picker and returns `null` if the person cancels. Errors (and emits `file-progress` `refused`) while a dictation is under way, before a model is loaded, or while another file runs. Progress and the result arrive as `file-progress` events too |
+| `cancel_file` | | `boolean` whether a file was being transcribed; it stops after the current piece |
 
 ## Events (`listen(name, cb)`)
 
@@ -163,11 +211,33 @@ interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string
 | `level` | `number` 0..1 microphone level, ~30 Hz while recording (overlay) |
 | `transcript` | `HistoryItem` just typed |
 | `learned` | `LearnResult` when Silas learned from an edit |
+| `app` | `AppInfo` of the app a dictation or retype is going to, sent as it is typed |
 | `notice` | `{ kind: "error" \| "busy" \| "stopped", message }` why a press did nothing or a dictation stopped. The overlay shows it for 4 s (`NOTICE_FOR`) even when its setting is off; the main window shows it as a toast |
 | `benchmark-progress` | `{ model, clip, clips }` clips finished so far for `model` (0 when it starts) |
 | `benchmark-done` | `Report` just saved |
 | `benchmark-error` | `{ message }` |
+| `file-progress` | `FileProgress`. `decoding` first, then `transcribing` after each piece, `waiting` while a dictation has the model, and one of `done`, `error`, `cancelled`. `refused` alone means it never started (also sent for dropped files, which have no caller) |
+| `file-drag` | `{ active }` files are being dragged over the main window (`true`), or left or were dropped (`false`). Dropped files are transcribed one after another, as `transcribe_file` |
 | `model-progress` | `{ id, downloaded, total, stage: "downloading" \| "unpacking" \| "loading" \| "done" \| "error", message? }` |
+
+## Control socket (Linux, macOS)
+
+`silas-ctl <command>` (or `silas <command>`, which loads the GUI libraries first and takes
+about 30 ms instead of 2) writes one line to `$XDG_RUNTIME_DIR/silas.sock` and reads `ok`.
+Without `XDG_RUNTIME_DIR` the socket is in an owner-only `silas-<uid>` folder in the temp dir.
+Compositor keybindings use it, since on Wayland the compositor owns the keyboard. The engine
+(`core/voice/src/control.rs`) handles commands one at a time, in the order they arrived.
+`silas-ctl` ships in the Arch package; elsewhere use `silas <command>`.
+
+| Command | Same as |
+| --- | --- |
+| `press` | the hotkey going down (a short press-and-release starts hands-free) |
+| `release` | the hotkey coming up |
+| `toggle` | the record button in the window |
+| `cancel` | Esc while listening |
+
+Exit code 1 means Silas isn't running. This socket is to fold into the `silas.voice` engine
+socket (baney75/local-studio#6).
 
 ## Choosing a model for this computer
 
@@ -190,3 +260,21 @@ cached as `registry.json`) and looks up the device key.
 
 `silas-bench suite [model-id...]` runs the same set on the installed models from the command line and
 prints the `Report` and its share link.
+
+## Pausing media while dictating
+
+With `pauseMedia` on, the key press pauses every player that is playing (Linux: MPRIS over D-Bus;
+macOS: the system Now Playing app; Windows: the system media sessions), off the key thread. When the
+dictation ends or is cancelled, Silas plays again only the players it paused, and only those still
+paused: a player the person paused or changed meanwhile is left alone. After a finished dictation the
+music waits for the end-of-dictation tail, so a dictation right after it doesn't make it blip.
+Code: `core/voice/src/nowplaying.rs`.
+
+## Command line
+
+`silas transcribe <file> [--raw] [--json] [--model <id>] [--data-dir <dir>]` prints what was said
+in the file and exits (0 on success, 1 on failure, 2 for a usage error). It runs without the window
+or the tray and loads the model once. `--json` prints
+`{ file, model, text, raw, audioSeconds, pieces, timings: { loadMs, decodeMs, transcribeMs, totalMs } }`.
+Formats: WAV, MP3, M4A (AAC, ALAC), FLAC, OGG (Vorbis, Opus), Opus, AIFF, CAF, and the sound of
+MP4, MOV, MKV and WebM. Long audio is cut at pauses into pieces of 6 to 20 s, as a long dictation is.
