@@ -277,6 +277,15 @@ package_installed() {
   command -v rpm >/dev/null 2>&1 && rpm -q silas >/dev/null 2>&1
 }
 
+installed_package_version() {
+  if command -v dpkg-query >/dev/null 2>&1 &&
+    [ "$(dpkg-query -W -f='${Status}' silas 2>/dev/null)" = "install ok installed" ]; then
+    dpkg-query -W -f='${Version}' silas 2>/dev/null
+  elif command -v rpm >/dev/null 2>&1 && rpm -q silas >/dev/null 2>&1; then
+    rpm -q --qf '%{VERSION}-%{RELEASE}' silas 2>/dev/null
+  fi
+}
+
 linux_uninstall() {
   # Stop Silas only once we know it's ours to remove.
   if package_installed || is_our_appimage; then stop_linux_silas; fi
@@ -333,7 +342,15 @@ linux_install() {
     die "$HOME/.local/bin/silas exists and isn't a Silas AppImage. Move it, then run this again."
   fi
 
-  if [ "${SILAS_CHANNEL:-stable}" = nightly ]; then
+  channel=${SILAS_CHANNEL:-}
+  # A nightly package ranks above the stable release it leads to, so apt and dnf would refuse to
+  # "downgrade" it. An installed nightly package stays on nightly unless SILAS_CHANNEL says otherwise.
+  if [ -z "$channel" ] && [ "$format" != appimage ]; then
+    case "$(installed_package_version)" in
+    *nightly*) channel=nightly && say "Silas from nightly is installed; updating it from nightly (SILAS_CHANNEL=stable to switch)." ;;
+    esac
+  fi
+  if [ "$channel" = nightly ]; then
     channel=nightly api="https://api.github.com/repos/baney75/silas/releases/tags/nightly"
   else
     channel=stable api="https://api.github.com/repos/baney75/silas/releases/latest"

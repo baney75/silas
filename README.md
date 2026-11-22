@@ -31,8 +31,9 @@ installs the `.deb` on Debian and Ubuntu, the `.rpm` on Fedora and openSUSE Tumb
 AppImage with a launcher entry and a udev rule so Silas can read the hold-to-talk key.
 
 Run the same line again to update by hand. Silas also updates itself. Every installer gets the
-stable channel; set `SILAS_CHANNEL=nightly` first for nightly. Pick any channel later in
-Settings › Updates.
+stable channel; set `SILAS_CHANNEL=nightly` first for nightly. On Linux, a Silas package
+installed from nightly keeps updating from nightly unless you set `SILAS_CHANNEL=stable`. Pick any
+channel later in Settings › Updates.
 
 <details>
 <summary>Rather download it yourself?</summary>
