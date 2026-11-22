@@ -970,14 +970,18 @@ impl Core {
         let mut settings = settings;
         let trigger = Trigger::parse(&settings.hotkey)
             .ok_or_else(|| format!("{} is not a key Silas can use", settings.hotkey))?;
+        // Choosing a key ends the second key. Otherwise it's the core's, like the model: the
+        // interface's copy may lag. The retype key is checked against this one.
+        settings.hotkey_fallback = {
+            let cur = self.settings.lock();
+            if settings.hotkey == cur.hotkey { cur.hotkey_fallback.clone() } else { None }
+        };
         let again = again::trigger(&settings)?;
         settings.update_channel = settings.effective_channel().into();
         let old = {
             let mut cur = self.settings.lock();
             settings.model = cur.model.clone();
             settings.model_source = cur.model_source.clone();
-            // Choosing a key ends the second key. Otherwise it's the core's, like the model: the interface's copy may lag.
-            settings.hotkey_fallback = if settings.hotkey == cur.hotkey { cur.hotkey_fallback.clone() } else { None };
             std::mem::replace(&mut *cur, settings.clone())
         };
         {

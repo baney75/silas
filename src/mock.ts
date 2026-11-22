@@ -428,7 +428,7 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
     case "set_settings": {
       // Like the core: the model and who chose it are not changed through here.
       const next = { ...(args.settings as Settings), model: settings.model, modelSource: settings.modelSource };
-      if (next.retypeHotkey && next.retypeHotkey === next.hotkey) throw "That key already starts dictation. Pick another key to type the last dictation again.";
+      if (next.retypeHotkey && next.retypeHotkey === next.hotkey) throw "The dictation key and the Type it again key must be different keys.";
       Object.assign(settings, next);
       state.hotkey = settings.hotkey;
       state.hotkeyLabel = labelFor(settings.hotkey);

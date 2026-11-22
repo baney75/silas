@@ -12,7 +12,9 @@ const ICON_LIVE: &[u8] = include_bytes!("../icons/tray-recording@2x.png");
 
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open Silas", true, None::<&str>)?;
-    let again = MenuItem::with_id(app, "again", "Type Last Dictation Again", true, None::<&str>)?;
+    // Off on Windows: the menu leaves Silas's own window in front, so it would type blind
+    // (`core::again::allowed`). The retype key works there.
+    let again = MenuItem::with_id(app, "again", "Type Last Dictation Again", !cfg!(target_os = "windows"), None::<&str>)?;
     let status = MenuItem::with_id(app, "status", "Starting…", false, None::<&str>)?;
     let update = MenuItem::with_id(app, "update", "Check for Updates…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Silas", true, Some("CmdOrCtrl+Q"))?;

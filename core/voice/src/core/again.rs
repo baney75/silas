@@ -18,6 +18,7 @@ pub enum Via {
     /// The retype hotkey.
     Key,
     /// The tray menu item, which waits for the menu to close and hand the keyboard back.
+    /// Not on Windows: there the menu leaves Silas's own window in front (see `allowed`).
     Menu,
     /// The `type_again` command; the caller shows why it didn't happen.
     Command,
@@ -28,16 +29,32 @@ const MENU_CLOSE: Duration = Duration::from_millis(300);
 
 const BUSY: &str = "Silas is busy with a dictation. Try again when it's done.";
 
+/// Said when the retype key and a dictation key are the same key.
+const SAME_KEY: &str = "The dictation key and the Type it again key must be different keys.";
+
 /// The retype key from settings. None when it is unset. An error when it can't be a key, or
-/// when it is the dictation key itself.
+/// when it is a key that starts dictation: the hotkey or its fallback (Right \u{2318} while the
+/// microphone key hasn't been seen).
 pub(super) fn trigger(settings: &Settings) -> Result<Option<Trigger>, String> {
     let Some(key) = settings.retype_hotkey.as_deref().map(str::trim).filter(|k| !k.is_empty()) else {
         return Ok(None);
     };
-    if key == settings.hotkey {
-        return Err("That key already starts dictation. Pick another key to type the last dictation again.".into());
+    let again = Trigger::parse(key).ok_or_else(|| format!("{key} is not a key Silas can use"))?;
+    let dictation = [Some(settings.hotkey.as_str()), settings.hotkey_fallback.as_deref()];
+    if dictation.into_iter().flatten().any(|k| Trigger::parse(k) == Some(again)) {
+        return Err(SAME_KEY.into());
     }
-    Trigger::parse(key).map(Some).ok_or_else(|| format!("{key} is not a key Silas can use"))
+    Ok(Some(again))
+}
+
+/// Windows has no way yet to find the window the user was typing in (`focus::Target` is None
+/// there), and the tray menu and the Silas window both leave Silas's own window in front. So
+/// there only the retype key, pressed while the user's app has the keyboard, may type.
+fn allowed(via: Via, windows: bool) -> Result<(), String> {
+    if windows && via != Via::Key {
+        return Err("On Windows, use your Type it again key. The menu can't type into your app yet.".into());
+    }
+    Ok(())
 }
 
 /// Said when a password field has the keyboard as a retype starts.
@@ -59,7 +76,7 @@ impl Core {
     /// the keyboard. Returns at once; the typing runs on its own thread. An error says why
     /// nothing will be typed; from a key or the menu it also shows as a notice.
     pub fn type_again(self: &Shared, via: Via) -> Result<(), String> {
-        let result = self.claim_again();
+        let result = allowed(via, cfg!(target_os = "windows")).and_then(|()| self.claim_again());
         match result {
             Ok(text) => {
                 let me = self.clone();
@@ -109,7 +126,7 @@ impl Core {
 
     /// Runs on its own thread with `typing` already set.
     fn retype(self: &Shared, text: &str) {
-        let before = self.status().0;
+        let before = self.status();
         let target = Target::capture();
         let restored = target.as_ref().map_or(Restore::Elsewhere, Target::restore);
         match delivery(crate::focus::secure_input(), restored) {
@@ -149,16 +166,30 @@ impl Core {
         self.typing.store(false, Ordering::Relaxed);
         let stopped = self.stop_typing.swap(false, Ordering::Relaxed);
         *self.last_activity.lock() = std::time::Instant::now();
-        // Back to where Silas was: Ready, or still asking for a model.
-        let after = if before == Status::NeedsModel { Status::NeedsModel } else { Status::Ready };
         match typed {
             Err(e) => self.fail(e.to_string()),
             Ok(_) if stopped => {
                 self.notice(Notice::Stopped, "Stopped typing.");
-                self.set_status(after, None);
+                self.restore_status(before);
             }
             Ok(false) => self.fail("Another window took the keyboard, so Silas stopped typing.".into()),
-            Ok(true) => self.set_status(after, None),
+            Ok(true) => self.restore_status(before),
+        }
+    }
+
+    /// Back to the exact status and detail Silas had before the retype: an Error stays that
+    /// Error. The key-access error goes through Ready, which `set_status` turns back into it
+    /// while the listener is still down. A dictation Error gets its recovery again, since one
+    /// that came due during the retype saw Typing and did nothing.
+    fn restore_status(self: &Shared, before: (Status, Option<String>)) {
+        if before.0 == Status::Error && before.1.as_deref() == Some(self.key_message().as_str()) {
+            self.set_status(Status::Ready, None);
+            return;
+        }
+        let error = before.0 == Status::Error;
+        self.set_status(before.0, before.1);
+        if error && self.active_model().is_some() {
+            self.recover_soon();
         }
     }
 }
@@ -192,9 +223,51 @@ mod tests {
         s.retype_hotkey = Some("F14".into());
         assert_eq!(trigger(&s), Ok(Some(Trigger::Key(handy_keys::Key::F14))));
         s.retype_hotkey = Some(s.hotkey.clone());
-        assert!(trigger(&s).unwrap_err().contains("already starts dictation"));
+        assert_eq!(trigger(&s).unwrap_err(), SAME_KEY);
         s.retype_hotkey = Some("NotAKey".into());
         assert!(trigger(&s).is_err());
+    }
+
+    #[test]
+    fn the_retype_key_cannot_be_the_second_dictation_key() {
+        let mut s = Settings {
+            hotkey: "F13".into(),
+            hotkey_fallback: Some("CmdRight".into()),
+            retype_hotkey: Some("CmdRight".into()),
+            ..Settings::default()
+        };
+        assert_eq!(trigger(&s).unwrap_err(), SAME_KEY, "Right Cmd still starts dictation");
+        s.hotkey_fallback = None;
+        assert_eq!(trigger(&s), Ok(Trigger::parse("CmdRight")));
+    }
+
+    #[test]
+    fn windows_types_again_only_from_the_retype_key() {
+        assert_eq!(allowed(Via::Key, true), Ok(()));
+        assert!(allowed(Via::Menu, true).unwrap_err().contains("Windows"));
+        assert!(allowed(Via::Command, true).unwrap_err().contains("Windows"));
+        for via in [Via::Key, Via::Menu, Via::Command] {
+            assert_eq!(allowed(via, false), Ok(()));
+        }
+    }
+
+    #[test]
+    fn a_retype_puts_back_the_exact_status_it_found() {
+        let _turn = crate::store::TEST_DIR.lock();
+        let dir = std::env::temp_dir().join(format!("silas-again-status-{}", std::process::id()));
+        crate::store::set_data_dir(Some(dir.clone()));
+        let core = Core::new(Arc::new(NullHost));
+        for before in [
+            (Status::Error, Some("Could not load the model: no file".to_string())),
+            (Status::NeedsModel, None),
+        ] {
+            core.set_status(before.0, before.1.clone());
+            core.set_status(Status::Typing, None);
+            core.restore_status(before.clone());
+            assert_eq!(core.status(), before);
+        }
+        crate::store::set_data_dir(None);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -93,7 +93,7 @@ pub fn pick(ev: &KeyEvent) -> Option<Picked> {
     });
     Some(match typing {
         Some(what) => Picked::Refused(format!(
-            "{what} types text, so it can't be the dictation key. Try Right \u{2318}, Right \u{2325} or F13."
+            "{what} types text, so it can't be a Silas key. Try Right \u{2318}, Right \u{2325} or F13."
         )),
         None => Picked::Key(name),
     })
@@ -524,7 +524,7 @@ mod tests {
             (Key::Comma, "The , key"),
         ] {
             match pick(&key(k, Modifiers::empty())) {
-                Some(Picked::Refused(m)) => assert!(m.starts_with(what) && m.contains("can't be the dictation key"), "{m}"),
+                Some(Picked::Refused(m)) => assert!(m.starts_with(what) && m.contains("can't be a Silas key"), "{m}"),
                 other => panic!("{k:?}: {other:?}"),
             }
         }
