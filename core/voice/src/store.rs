@@ -116,7 +116,7 @@ pub struct Settings {
     pub hotkey_fallback: Option<String>,
     pub tap_to_toggle: bool,
     pub model: String,
-    /// Who chose `model`: default | registry | benchmark | user. A user choice is never overridden.
+    /// Who chose `model`: default | registry | community | benchmark | user. A user choice is never overridden.
     pub model_source: String,
     pub language: String,
     pub remove_fillers: bool,
@@ -125,12 +125,19 @@ pub struct Settings {
     pub newline_as_shift_enter: bool,
     pub learn_from_edits: bool,
     pub sounds: bool,
+    /// Pause whatever is playing while dictating, and play it again after (nowplaying.rs).
+    pub pause_media: bool,
     pub show_overlay: bool,
     pub launch_at_login: bool,
     pub microphone: Option<String>,
     pub onboarded: bool,
     pub update_channel: String,
     pub auto_update: bool,
+    /// A second key that types the last dictation again. None: no key (the tray menu still does it).
+    pub retype_hotkey: Option<String>,
+    /// The user's style for an app, by app id (`style.rs`): "prose", "terminal", "code" or "chat".
+    /// Apps not listed use the built-in table.
+    pub app_styles: std::collections::BTreeMap<String, String>,
 }
 
 /// Settings saved before per-device picks have no `modelSource`. A model other than the
@@ -163,12 +170,15 @@ impl Default for Settings {
             newline_as_shift_enter: true,
             learn_from_edits: true,
             sounds: true,
+            pause_media: true,
             show_overlay: true,
             launch_at_login: true,
             microphone: None,
             onboarded: false,
             update_channel: "stable".into(),
             auto_update: true,
+            retype_hotkey: None,
+            app_styles: Default::default(),
         }
     }
 }
@@ -271,6 +281,9 @@ pub struct HistoryItem {
     pub words: usize,
     #[serde(default)]
     pub corrected: Option<String>,
+    /// The file's name, for text transcribed from a file rather than dictated (file.rs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
 }
 
 pub const HISTORY_KEEP: usize = 1000;

@@ -1,4 +1,4 @@
-# shellcheck shell=bash disable=SC2154 # REPO and draft come from the sourcing script
+# shellcheck shell=bash disable=SC2154 # REPO, draft and tag come from the sourcing script
 # Sourced by release-stable.sh. Every call names the draft by its release id ($draft) or one of its
 # asset ids, never by tag: if a promotion re-run replaces the draft, these fail against the old id
 # instead of writing into the new draft. Needs REPO and draft set.
@@ -36,5 +36,7 @@ draft_upload() { # file: replace the draft's asset of the same name
 }
 
 draft_edit() { # title notes
-  gh api -X PATCH "repos/$REPO/releases/$draft" -f name="$1" -f body="$2" >/dev/null
+  # Name the tag on every edit: GitHub turns a draft whose tag doesn't exist yet into
+  # "untagged-..." when a PATCH leaves tag_name out (v0.1.7, 2026-11-22).
+  gh api -X PATCH "repos/$REPO/releases/$draft" -f tag_name="$tag" -f name="$1" -f body="$2" >/dev/null
 }

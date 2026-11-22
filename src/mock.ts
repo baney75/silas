@@ -6,9 +6,15 @@
 //   ?update            an update is waiting
 //   ?unmeasured        this computer has not been benchmarked yet
 //   ?benchmarking      a benchmark is running when the page opens
+//   ?mixed             the last benchmark holds a pick and a model that misses both bars
+//   ?fewShared         fewer than three shared reports agree for this device
+//   ?offline           the report service is out of reach and nothing is cached
+//   ?shareFail         sending a shared report fails
 
+import { findSnippet, triggerKey } from "./appstyles";
 import type {
   AppState,
+  CommunityDevice,
   Correction,
   Dictionary,
   HistoryItem,
@@ -75,8 +81,11 @@ const settings: Settings = {
   trailingSpace: true,
   typingSpeed: "fast",
   newlineAsShiftEnter: true,
+  retypeHotkey: null,
+  appStyles: { "com.apple.Notes": "chat" },
   learnFromEdits: true,
   sounds: true,
+  pauseMedia: true,
   showOverlay: true,
   launchAtLogin: false,
   microphone: null,
@@ -95,6 +104,8 @@ const state: AppState = {
   model: onboarding ? null : "parakeet-v3",
   hotkey: settings.hotkey,
   hotkeyLabel: labelFor(settings.hotkey),
+  retypeHotkeyLabel: null,
+  app: onboarding ? null : { id: "com.mitchellh.ghostty", name: "Ghostty", style: "terminal", builtin: "terminal" },
   permissions: {
     microphone: onboarding ? "unknown" : "granted",
     accessibility: onboarding ? "denied" : "granted",
@@ -157,12 +168,12 @@ const device: Device = {
 
 /** What each mock model scores, so every state of the page can be previewed. */
 const mockScores: Record<string, ModelResult> = {
-  "parakeet-v3": { model: "parakeet-v3", speed: 23.4, wer: 0.019, audio_seconds: 62.2, compute_seconds: 2.66, clips: 9 },
-  "parakeet-v3-onnx": { model: "parakeet-v3-onnx", speed: 19.8, wer: 0.022, audio_seconds: 62.2, compute_seconds: 3.14, clips: 9 },
-  "cohere-int4": { model: "cohere-int4", speed: 4.1, wer: 0.012, audio_seconds: 62.2, compute_seconds: 15.2, clips: 9 },
+  "parakeet-v3": { model: "parakeet-v3", speed: 23.4, wer: 0.052, audio_seconds: 84.1, compute_seconds: 3.59, clips: 14, wait_seconds: 0.31 },
+  "parakeet-v3-onnx": { model: "parakeet-v3-onnx", speed: 19.8, wer: 0.058, audio_seconds: 84.1, compute_seconds: 4.25, clips: 14, wait_seconds: 0.37 },
+  "cohere-int4": { model: "cohere-int4", speed: 4.1, wer: 0.091, audio_seconds: 84.1, compute_seconds: 20.5, clips: 14, wait_seconds: 1.8 },
 };
 
-const SUITE = "librispeech-test-clean-9clips-v1";
+const SUITE = "silas-bench-mixed-14clips-v2";
 const BAR_SPEED = 10;
 const BAR_WER = 0.08;
 
@@ -181,6 +192,24 @@ function pickModel(results: ModelResult[]): string | null {
 
 let report: Report | null = null;
 let benchmarking = false;
+
+/** Like Report::shared in the core: per-clip timings stay on this computer. */
+function sharedReport(r: Report): Report {
+  return { ...r, results: r.results.map(({ clip_seconds: _, ...rest }) => rest) };
+}
+
+/** What others with this device shared. `?fewShared` shows a result too thin to act on. */
+let community: CommunityDevice = params.has("fewShared")
+  ? { reports: 2, pick: "parakeet-v3", agree: 2, models: { "parakeet-v3": { reports: 2, speed: 22.8, wer: 0.054, wait: 0.33 } } }
+  : {
+      reports: 7,
+      pick: "parakeet-v3",
+      agree: 6,
+      models: {
+        "parakeet-v3": { reports: 7, speed: 22.1, wer: 0.053, wait: 0.32 },
+        "parakeet-v3-onnx": { reports: 3, speed: 18.9, wer: 0.059, wait: 0.38 },
+      },
+    };
 
 function applyReport(next: Report) {
   report = next;
@@ -201,8 +230,8 @@ async function benchmark(all: boolean) {
     const ids = [state.model ?? "parakeet-v3", ...(all ? models.filter((m) => m.installed && m.id !== state.model).map((m) => m.id) : [])];
     const fresh: ModelResult[] = [];
     for (const id of ids) {
-      for (let clip = 0; clip <= 9; clip++) {
-        emit("benchmark-progress", { model: id, clip, clips: 9 });
+      for (let clip = 0; clip <= 14; clip++) {
+        emit("benchmark-progress", { model: id, clip, clips: 14 });
         await delay(id === "cohere-int4" ? 420 : 180);
       }
       fresh.push({ ...mockScores[id], speed: mockScores[id].speed * (0.95 + Math.random() * 0.1) });
@@ -224,7 +253,10 @@ async function benchmark(all: boolean) {
 }
 
 if (!onboarding && !params.has("unmeasured")) {
-  report = { schema: 1, silas: "0.1.0", suite: SUITE, device, results: [mockScores["parakeet-v3"]], pick: "parakeet-v3", ran_at: iso(2 * HOUR) };
+  const results = params.has("mixed")
+    ? [mockScores["parakeet-v3"], { ...mockScores["parakeet-v3-onnx"], speed: 6.1, wer: 0.112 }, mockScores["cohere-int4"]]
+    : [mockScores["parakeet-v3"]];
+  report = { schema: 1, silas: "0.1.0", suite: SUITE, device, results, pick: pickModel(results), ran_at: iso(2 * HOUR) };
   applyReport(report);
 }
 if (params.has("benchmarking")) {
@@ -259,7 +291,7 @@ let history: HistoryItem[] = empty
     });
 
 const dict: Dictionary = empty
-  ? { terms: [], corrections: [], pending: [], fillers: ["um", "uh", "you know"] }
+  ? { terms: [], corrections: [], pending: [], fillers: ["um", "uh", "you know"], snippets: [] }
   : {
       terms: [
         { text: "Argon1", source: "learned", added: iso(3 * DAY), uses: 14 },
@@ -280,6 +312,10 @@ const dict: Dictionary = empty
         { from: "Hendersen", to: "Henderson", count: 1, lastSeen: iso(DAY) },
       ],
       fillers: ["um", "uh", "you know"],
+      snippets: [
+        { trigger: "my address", text: "12 Benson Rd, Springfield", added: iso(5 * DAY) },
+        { trigger: "sign off", text: "Thanks,\nDonovan", added: iso(2 * DAY) },
+      ],
     };
 
 function stats(): Stats {
@@ -347,6 +383,38 @@ async function stopRecording() {
   emit("transcript", item);
   await delay(500);
   setStatus("ready");
+}
+
+let fileJob: { name: string } | null = null;
+
+/** Mock of "Transcribe a file": a 42 second file, read and transcribed in a few steps. */
+async function mockTranscribeFile(path: string): Promise<HistoryItem | null> {
+  const name = path.split(/[\\/]/).pop() ?? path;
+  if (fileJob) {
+    const message = "Silas is already transcribing a file. Wait for it to finish.";
+    emit("file-progress", { name, stage: "refused", doneS: 0, totalS: null, message });
+    throw message;
+  }
+  const job = { name };
+  fileJob = job;
+  const totalS = 42;
+  emit("file-progress", { name, stage: "decoding", doneS: 0, totalS });
+  await delay(700);
+  for (let doneS = 0; doneS < totalS; doneS += 7) {
+    if (fileJob !== job) {
+      emit("file-progress", { name, stage: "cancelled", doneS, totalS, message: "Stopped." });
+      throw "Stopped.";
+    }
+    emit("file-progress", { name, stage: "transcribing", doneS, totalS });
+    await delay(450);
+  }
+  fileJob = null;
+  const text = "Thanks everyone for joining. The launch moves to Thursday, and Claire will send the deck tonight.";
+  const ts = Date.now();
+  const item: HistoryItem = { id: String(ts), ts: new Date(ts).toISOString(), text, raw: text, durationS: totalS, latencyMs: 3150, words: text.split(/\s+/).length, corrected: null, file: name };
+  history.unshift(item);
+  emit("file-progress", { name, stage: "done", doneS: totalS, totalS, item });
+  return item;
 }
 
 /** Mock of the core's diff: the first differing word span between old and new. */
@@ -419,9 +487,11 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
     case "set_settings": {
       // Like the core: the model and who chose it are not changed through here.
       const next = { ...(args.settings as Settings), model: settings.model, modelSource: settings.modelSource };
+      if (next.retypeHotkey && next.retypeHotkey === next.hotkey) throw "The dictation key and the Type it again key must be different keys.";
       Object.assign(settings, next);
       state.hotkey = settings.hotkey;
       state.hotkeyLabel = labelFor(settings.hotkey);
+      state.retypeHotkeyLabel = settings.retypeHotkey ? labelFor(settings.retypeHotkey) : null;
       return out(settings);
     }
     case "list_models":
@@ -449,10 +519,23 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
     case "run_benchmark":
       await benchmark(Boolean(args.all));
       return null as T;
-    case "share_benchmark":
+    case "share_preview":
+      return out(report ? JSON.stringify(sharedReport(report), null, 2) : null);
+    case "share_benchmark": {
+      if (!report) throw "Run the benchmark first";
+      if (args.payload !== JSON.stringify(sharedReport(report), null, 2)) throw "The results changed. Look them over again before sharing.";
+      await delay(600);
+      if (params.has("shareFail")) throw "The report service isn't available right now. Try again later, or share on GitHub instead.";
+      community = { ...community, reports: community.reports + 1 };
+      return out({ key: device.key, reports: community.reports, pick: community.pick, agree: community.agree });
+    }
+    case "share_benchmark_github":
       if (!report) throw "Run the benchmark first";
       window.open("https://github.com/baney75/silas/issues/new?template=device-report.yml", "_blank", "noopener");
       return null as T;
+    case "get_community":
+      await delay(200);
+      return out(params.has("offline") ? null : community);
     case "select_model": {
       // Like the core: setup's automatic choice never overrides the user's.
       if (args.auto && settings.modelSource === "user") return null as T;
@@ -506,6 +589,21 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
     case "remove_correction":
       dict.corrections = dict.corrections.filter((c) => c.from !== args.from);
       return out(dict);
+    case "add_snippet": {
+      const trigger = String(args.trigger).trim();
+      const text = String(args.text);
+      if (!triggerKey(trigger) || !text.trim()) throw "A snippet needs a phrase to say and the text to type.";
+      const old = findSnippet(dict.snippets, trigger);
+      if (old) old.text = text;
+      else dict.snippets.push({ trigger, text, added: new Date().toISOString() });
+      return out(dict);
+    }
+    case "remove_snippet":
+      dict.snippets = dict.snippets.filter((x) => triggerKey(x.trigger) !== triggerKey(String(args.trigger)));
+      return out(dict);
+    case "type_again":
+      if (!history.length) throw "Nothing to type yet. Dictate something first.";
+      return null as T;
     case "accept_pending": {
       const p = dict.pending.find((x) => x.from === args.from) as Pending;
       dict.pending = dict.pending.filter((x) => x !== p);
@@ -520,6 +618,7 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
       for (const t of parsed.terms ?? []) if (!dict.terms.some((x) => x.text === t.text)) dict.terms.push({ ...t, source: "import" });
       for (const c of parsed.corrections ?? [])
         if (!dict.corrections.some((x) => x.from === c.from)) dict.corrections.push({ ...c, source: "import" });
+      for (const sn of parsed.snippets ?? []) if (!findSnippet(dict.snippets, sn.trigger)) dict.snippets.push(sn);
       return out(dict);
     }
     case "save_dictionary":
@@ -554,6 +653,13 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
           ? { version: "0.1.2", currentVersion: state.version, notes: "Faster first dictation after wake. Fixes a stuck key on some keyboards.", date: iso(DAY), channel: settings.updateChannel }
           : null,
       );
+    case "transcribe_file":
+      return out(await mockTranscribeFile(typeof args.path === "string" ? args.path : "Team call.m4a"));
+    case "cancel_file": {
+      const was = fileJob !== null;
+      fileJob = null;
+      return out(was);
+    }
     case "install_update": {
       const total = 18 * 1024 * 1024;
       for (let i = 1; i <= 30; i++) {

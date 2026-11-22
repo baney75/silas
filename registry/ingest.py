@@ -10,7 +10,8 @@ The issue body is untrusted. It is only ever parsed as JSON and checked field by
 nothing from it is executed or written except the validated values. Exit 0 when the report is
 valid (and stored), 2 when it is rejected (the reason is printed for the issue comment).
 
-The bars and the pick rule must match src-tauri/src/benchmark.rs.
+The bars and the pick rule must match core/voice/src/benchmark.rs. The benchmark set (suite.json) and
+the models Silas offers (models.json) are read from files that Silas and registry/service read too.
 """
 
 import json
@@ -28,19 +29,23 @@ DEVICES = ROOT / "devices.json"
 MIN_SPEED = 10.0
 MAX_WER = 0.08
 TIE_WER = 0.005
-# Models Silas can install. Add new ids here when the catalog in models.rs grows.
-KNOWN_MODELS = {"parakeet-v3", "cohere-int4"}
+# Models Silas can install: models.json, kept equal to the catalog in models.rs by a test there.
+KNOWN_MODELS = set(json.loads((ROOT / "models.json").read_text())["models"])
 MAX_BODY = 20_000
-# The bundled set in core/voice/bench (manifest.json), named by benchmark::SUITE_ID in Silas.
-# Every honest report measured exactly this much audio. When the set changes, give it a new id
-# here and in Silas: stored reports from the old set are then skipped, not fatal.
-SUITE_ID = "librispeech-test-clean-9clips-v1"
-SUITE_CLIPS = 9
-SUITE_SECONDS = 62.2
+# The bundled set in core/voice/bench (manifest.json), defined in suite.json, which Silas builds in.
+# Every honest report measured exactly this much audio. When the set changes, suite.json gets a new
+# id: stored reports from an older set are then skipped, not fatal.
+_SUITE = json.loads((ROOT / "suite.json").read_text())
+SUITE_ID = _SUITE["id"]
+SUITE_CLIPS = _SUITE["clips"]
+SUITE_SECONDS = _SUITE["seconds"]
+# Reports saved before Silas named its set have no suite field: they were made on the first one.
+LEGACY_SUITE = _SUITE["legacy_ids"][0]
 # No CPU transcribes this set 500x faster than real time; a bigger number is made up.
 MAX_SPEED = 500.0
 
-KEY_RE = re.compile(r"^(macos|windows|linux)/[a-z0-9]+(?:-[a-z0-9]+)*/[0-9]{1,4}$")
+OSES = ("macos", "windows", "linux", "ios", "ipados")
+KEY_RE = re.compile(r"^(macos|windows|linux|ios|ipados)/[a-z0-9]+(?:-[a-z0-9]+)*/[0-9]{1,4}$")
 # CPU names and OS versions need only these; no brackets, backticks or markup reach a comment.
 TEXT_RE = re.compile(r"^[A-Za-z0-9 ()@.,_+/:-]{1,120}$")
 HW_RE = re.compile(r"^[A-Za-z0-9,._ -]{1,40}$")
@@ -93,10 +98,9 @@ def text(v, what, pattern=TEXT_RE):
 
 
 def validate(data: dict) -> dict:
-    if data.get("schema") != 1:
+    if data.get("schema") != 1 or isinstance(data.get("schema"), bool):
         raise Reject("Unknown report schema.")
-    # Reports from before suite ids existed were all made on this set.
-    suite = data.get("suite", SUITE_ID)
+    suite = data.get("suite", LEGACY_SUITE)
     if suite != SUITE_ID:
         raise Stale("This report was made with an older benchmark set. Update Silas and run the benchmark again.")
     silas = text(data.get("silas"), "silas", VERSION_RE)
@@ -104,7 +108,7 @@ def validate(data: dict) -> dict:
     if not isinstance(d, dict):
         raise Reject("The report has no device.")
     os_name = d.get("os")
-    if os_name not in ("macos", "windows", "linux"):
+    if os_name not in OSES:
         raise Reject("Unknown operating system.")
     cpu = text(d.get("cpu"), "device.cpu")
     cores = num(d.get("cores"), 1, 1024, "device.cores", integer=True)
@@ -144,12 +148,16 @@ def validate(data: dict) -> dict:
             "clips": num(r.get("clips"), 1, 1000, f"{model} clips", integer=True),
             "audio_seconds": num(r.get("audio_seconds"), 1, 100_000, f"{model} audio_seconds"),
             "compute_seconds": num(r.get("compute_seconds"), 0.0001, 100_000, f"{model} compute_seconds"),
+            # The wait after you stop talking: median compute seconds of the 5 to 10 s clips.
+            "wait_seconds": num(r.get("wait_seconds"), 0.0001, 100, f"{model} wait_seconds"),
         }
         # The numbers have to come from Silas's own set and agree with each other.
         if res["clips"] != SUITE_CLIPS or abs(res["audio_seconds"] - SUITE_SECONDS) > 1.0:
             raise Reject(f"{model} wasn't measured on Silas's benchmark set.")
         if abs(res["audio_seconds"] / res["compute_seconds"] - res["speed"]) > 0.02 * res["speed"]:
             raise Reject(f"{model} speed doesn't match its audio and compute seconds.")
+        if res["wait_seconds"] > res["compute_seconds"]:
+            raise Reject(f"{model} wait_seconds is longer than the whole run.")
         clean.append(res)
     return {"schema": 1, "suite": SUITE_ID, "silas": silas, "device": device, "results": clean}
 
@@ -191,13 +199,14 @@ def rebuild(write: bool = True) -> dict:
         dev = by_device.setdefault(rep["device"]["key"], {"reports": 0, "models": {}})
         dev["reports"] += 1
         for r in rep["results"]:
-            m = dev["models"].setdefault(r["model"], {"speed": [], "wer": []})
+            m = dev["models"].setdefault(r["model"], {"speed": [], "wer": [], "wait": []})
             m["speed"].append(r["speed"])
             m["wer"].append(r["wer"])
+            m["wait"].append(r["wait_seconds"])
     devices = {}
     for key, dev in sorted(by_device.items()):
         meds = [
-            {"model": m, "speed": statistics.median(v["speed"]), "wer": statistics.median(v["wer"])}
+            {"model": m, "speed": statistics.median(v["speed"]), "wer": statistics.median(v["wer"]), "wait": statistics.median(v["wait"])}
             for m, v in sorted(dev["models"].items())
         ]
         best = pick(meds)
@@ -206,6 +215,7 @@ def rebuild(write: bool = True) -> dict:
             "model": best,
             "speed": chosen["speed"],
             "wer": chosen["wer"],
+            "wait": chosen["wait"],
             "reports": dev["reports"],
         }
     out = {"schema": 1, "devices": devices}

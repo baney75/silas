@@ -1,5 +1,7 @@
 pub mod commands;
 pub mod host;
+#[cfg(target_os = "linux")]
+pub mod layer;
 #[cfg(test)]
 mod settings_bench;
 pub mod tray;
@@ -7,7 +9,11 @@ pub mod updates;
 
 // The engine lives in core/voice (polycarp-voice). Re-exported so `crate::core::Shared`,
 // `silas_lib::models` and the other old paths keep working.
-pub use polycarp_voice::{audio, benchmark, core, dictionary, focus, keys, models, permissions, store, typer};
+pub use polycarp_voice::{
+    audio, benchmark, core, dictionary, file, focus, keys, models, nowplaying, permissions, store, style, typer,
+};
+#[cfg(unix)]
+pub use polycarp_voice::ctl;
 
 use tauri::{AppHandle, Manager};
 
@@ -23,6 +29,38 @@ pub fn show_main(app: &AppHandle) {
     }
 }
 
+/// On Windows the release app has no console of its own: borrow the one `silas transcribe` was
+/// typed into so its output shows. Elsewhere this does nothing.
+pub fn attach_console() {
+    #[cfg(windows)]
+    // SAFETY: a plain Win32 call with a constant; it fails harmlessly when there is no parent console.
+    unsafe {
+        windows_sys::Win32::System::Console::AttachConsole(windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS);
+    }
+}
+
+/// Files dropped on the main window are transcribed one after another into History.
+fn on_drop(app: &AppHandle, event: &tauri::DragDropEvent) {
+    use tauri::{DragDropEvent, Emitter};
+    let active = matches!(event, DragDropEvent::Enter { .. } | DragDropEvent::Over { .. });
+    if matches!(event, DragDropEvent::Over { .. }) {
+        return;
+    }
+    let _ = app.emit_to("main", "file-drag", serde_json::json!({ "active": active }));
+    if let DragDropEvent::Drop { paths, .. } = event {
+        let core = app.state::<core::Shared>().inner().clone();
+        let paths = paths.clone();
+        std::thread::spawn(move || {
+            for path in paths {
+                // Each outcome, refusals included, reaches the UI as a `file-progress` event.
+                if let Err(e) = core.transcribe_file(&path) {
+                    log::info!("file not transcribed: {e:#}");
+                }
+            }
+        });
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     env_logger::Builder::from_env(
@@ -31,8 +69,12 @@ pub fn run() {
     .init();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            show_main(app)
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _| {
+            // Login autostart (or a desktop's autostart line) launching Silas again must not
+            // pop the window open; opening it from the launcher should.
+            if !argv.iter().any(|a| a == "--background") {
+                show_main(app)
+            }
         }))
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -40,6 +82,7 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let core = Core::new(std::sync::Arc::new(host::TauriHost::new(handle.clone())));
@@ -55,9 +98,15 @@ pub fn run() {
             }
 
             tray::build(&handle)?;
+            #[cfg(target_os = "linux")]
+            if let Some(w) = handle.get_webview_window("overlay") {
+                layer::setup(&w);
+            }
             core.load_model();
             core.start_device_pick();
             polycarp_voice::start_listener(core.clone());
+            #[cfg(unix)]
+            polycarp_voice::control::serve(core.clone());
             updates::schedule(handle.clone());
 
             let background = std::env::args().any(|a| a == "--background");
@@ -75,6 +124,11 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(drop) = event {
+                if window.label() == "main" {
+                    on_drop(window.app_handle(), drop);
+                }
+            }
             // Closing the window keeps Silas running in the menu bar / tray.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
@@ -104,6 +158,8 @@ pub fn run() {
             commands::remove_term,
             commands::add_correction,
             commands::remove_correction,
+            commands::add_snippet,
+            commands::remove_snippet,
             commands::accept_pending,
             commands::dismiss_pending,
             commands::import_dictionary,
@@ -111,6 +167,7 @@ pub fn run() {
             commands::save_dictionary,
             commands::get_stats,
             commands::toggle_recording,
+            commands::type_again,
             commands::capture_hotkey,
             commands::open_permission,
             commands::reset_accessibility,
@@ -120,10 +177,15 @@ pub fn run() {
             commands::get_benchmark,
             commands::run_benchmark,
             commands::share_benchmark,
+            commands::share_preview,
+            commands::share_benchmark_github,
+            commands::get_community,
             commands::get_device,
             commands::wait_device_pick,
             commands::check_update,
             commands::install_update,
+            commands::transcribe_file,
+            commands::cancel_file,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Silas")
