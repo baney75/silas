@@ -125,6 +125,8 @@ pub struct Settings {
     pub newline_as_shift_enter: bool,
     pub learn_from_edits: bool,
     pub sounds: bool,
+    /// Pause whatever is playing while dictating, and play it again after (nowplaying.rs).
+    pub pause_media: bool,
     pub show_overlay: bool,
     pub launch_at_login: bool,
     pub microphone: Option<String>,
@@ -163,6 +165,7 @@ impl Default for Settings {
             newline_as_shift_enter: true,
             learn_from_edits: true,
             sounds: true,
+            pause_media: true,
             show_overlay: true,
             launch_at_login: true,
             microphone: None,
@@ -271,6 +274,9 @@ pub struct HistoryItem {
     pub words: usize,
     #[serde(default)]
     pub corrected: Option<String>,
+    /// The file's name, for text transcribed from a file rather than dictated (file.rs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
 }
 
 pub const HISTORY_KEEP: usize = 1000;

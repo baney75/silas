@@ -28,6 +28,8 @@ tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# The "Transcribe a file" picker.
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 polycarp-voice = { path = "../core/voice" }
@@ -46,6 +48,10 @@ chrono = { version = "0.4", features = ["serde"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
+
+# `silas transcribe` prints to the terminal it was started from (the app is a GUI program there).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Console"] }
 
 # The TDT decoder fix for the ONNX fallback (vendor/transcribe-rs/VENDORED.md). A [patch] in
 # core/voice does not reach this workspace, so it is repeated here.

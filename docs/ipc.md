@@ -37,6 +37,7 @@ interface Settings {
   newlineAsShiftEnter: boolean;   // so chat boxes do not send early
   learnFromEdits: boolean;
   sounds: boolean;
+  pauseMedia: boolean;            // pause playing music and video while dictating (default on); see below
   showOverlay: boolean;
   launchAtLogin: boolean;
   microphone: string | null;      // device name, null = system default
@@ -96,6 +97,17 @@ interface HistoryItem {
   latencyMs: number;              // release → text ready
   words: number;
   corrected: string | null;       // text after the user taught a fix
+  file?: string;                  // file name when it came from transcribe_file (then nothing was typed,
+                                  // latencyMs is the whole transcription and Stats leave it out)
+}
+
+interface FileProgress {
+  name: string;                   // the file's name
+  stage: "decoding" | "transcribing" | "waiting" | "done" | "error" | "cancelled" | "refused";
+  doneS: number;                  // seconds of audio transcribed so far
+  totalS: number | null;          // the file's length when the container says it
+  message?: string;               // error, cancelled and refused: why
+  item?: HistoryItem;             // done: the new History entry
 }
 
 interface Correction { from: string; to: string; count: number; source: "user" | "learned" | "import"; added: string }
@@ -154,6 +166,8 @@ interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string
 | `run_benchmark` | `{ all }` | `null` when the run ends. Measures the active model, and with `all` every other installed one. Errors at once if a benchmark is already running or no model is loaded. Results of models not run this time are kept in the report |
 | `share_benchmark` | | `null` opens a prefilled GitHub issue (`report_url`) in the default browser; the user reviews and submits it |
 | `get_device` | | `Device` |
+| `transcribe_file` | `{ path?: string }` | `HistoryItem \| null`. Transcribes an audio or video file into History; nothing is typed and the clipboard is untouched. With no `path` it opens the system picker and returns `null` if the person cancels. Errors (and emits `file-progress` `refused`) while a dictation is under way, before a model is loaded, or while another file runs. Progress and the result arrive as `file-progress` events too |
+| `cancel_file` | | `boolean` whether a file was being transcribed; it stops after the current piece |
 
 ## Events (`listen(name, cb)`)
 
@@ -167,6 +181,8 @@ interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string
 | `benchmark-progress` | `{ model, clip, clips }` clips finished so far for `model` (0 when it starts) |
 | `benchmark-done` | `Report` just saved |
 | `benchmark-error` | `{ message }` |
+| `file-progress` | `FileProgress`. `decoding` first, then `transcribing` after each piece, `waiting` while a dictation has the model, and one of `done`, `error`, `cancelled`. `refused` alone means it never started (also sent for dropped files, which have no caller) |
+| `file-drag` | `{ active }` files are being dragged over the main window (`true`), or left or were dropped (`false`). Dropped files are transcribed one after another, as `transcribe_file` |
 | `model-progress` | `{ id, downloaded, total, stage: "downloading" \| "unpacking" \| "loading" \| "done" \| "error", message? }` |
 
 ## Choosing a model for this computer
@@ -190,3 +206,21 @@ cached as `registry.json`) and looks up the device key.
 
 `silas-bench suite [model-id...]` runs the same set on the installed models from the command line and
 prints the `Report` and its share link.
+
+## Pausing media while dictating
+
+With `pauseMedia` on, the key press pauses every player that is playing (Linux: MPRIS over D-Bus;
+macOS: the system Now Playing app; Windows: the system media sessions), off the key thread. When the
+dictation ends or is cancelled, Silas plays again only the players it paused, and only those still
+paused: a player the person paused or changed meanwhile is left alone. After a finished dictation the
+music waits for the end-of-dictation tail, so a dictation right after it doesn't make it blip.
+Code: `core/voice/src/nowplaying.rs`.
+
+## Command line
+
+`silas transcribe <file> [--raw] [--json] [--model <id>] [--data-dir <dir>]` prints what was said
+in the file and exits (0 on success, 1 on failure, 2 for a usage error). It runs without the window
+or the tray and loads the model once. `--json` prints
+`{ file, model, text, raw, audioSeconds, pieces, timings: { loadMs, decodeMs, transcribeMs, totalMs } }`.
+Formats: WAV, MP3, M4A (AAC, ALAC), FLAC, OGG (Vorbis, Opus), Opus, AIFF, CAF, and the sound of
+MP4, MOV, MKV and WebM. Long audio is cut at pauses into pieces of 6 to 20 s, as a long dictation is.

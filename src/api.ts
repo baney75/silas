@@ -41,6 +41,8 @@ export interface Settings {
   newlineAsShiftEnter: boolean;
   learnFromEdits: boolean;
   sounds: boolean;
+  /** Pause music and videos while dictating, and play them again after. */
+  pauseMedia: boolean;
   showOverlay: boolean;
   launchAtLogin: boolean;
   microphone: string | null;
@@ -133,6 +135,22 @@ export interface HistoryItem {
   latencyMs: number;
   words: number;
   corrected: string | null;
+  /** The file's name when the text came from "Transcribe a file", not a dictation. */
+  file?: string;
+}
+
+/** Where a file transcription is. `refused` means it never started (and `message` says why). */
+export type FileStage = "decoding" | "transcribing" | "waiting" | "done" | "error" | "cancelled" | "refused";
+
+/** A file transcription's progress: `doneS` of `totalS` seconds of audio (`null` when unknown). */
+export interface FileProgress {
+  name: string;
+  stage: FileStage;
+  doneS: number;
+  totalS: number | null;
+  message?: string;
+  /** With `done`: the new History entry. */
+  item?: HistoryItem;
 }
 
 export type Source = "user" | "learned" | "import";
@@ -214,6 +232,9 @@ export interface EventMap {
   "benchmark-error": { message: string };
   "update-available": UpdateInfo;
   "update-progress": UpdateProgress;
+  "file-progress": FileProgress;
+  /** Files are being dragged over the main window (`active`), or left or were dropped. */
+  "file-drag": { active: boolean };
 }
 
 export type PermissionKind = "microphone" | "accessibility" | "input";
@@ -276,6 +297,9 @@ export const api = {
   getDevice: () => call<Device>("get_device"),
   checkUpdate: () => call<UpdateInfo | null>("check_update"),
   installUpdate: () => call<null>("install_update"),
+  /** Transcribes a file into History. With no path it opens the picker; `null` if that was cancelled. */
+  transcribeFile: (path?: string) => call<HistoryItem | null>("transcribe_file", { path: path ?? null }),
+  cancelFile: () => call<boolean>("cancel_file"),
 };
 
 /** Error text from a rejected invoke (Tauri rejects with a string). */

@@ -77,6 +77,7 @@ const settings: Settings = {
   newlineAsShiftEnter: true,
   learnFromEdits: true,
   sounds: true,
+  pauseMedia: true,
   showOverlay: true,
   launchAtLogin: false,
   microphone: null,
@@ -349,6 +350,38 @@ async function stopRecording() {
   setStatus("ready");
 }
 
+let fileJob: { name: string } | null = null;
+
+/** Mock of "Transcribe a file": a 42 second file, read and transcribed in a few steps. */
+async function mockTranscribeFile(path: string): Promise<HistoryItem | null> {
+  const name = path.split(/[\\/]/).pop() ?? path;
+  if (fileJob) {
+    const message = "Silas is already transcribing a file. Wait for it to finish.";
+    emit("file-progress", { name, stage: "refused", doneS: 0, totalS: null, message });
+    throw message;
+  }
+  const job = { name };
+  fileJob = job;
+  const totalS = 42;
+  emit("file-progress", { name, stage: "decoding", doneS: 0, totalS });
+  await delay(700);
+  for (let doneS = 0; doneS < totalS; doneS += 7) {
+    if (fileJob !== job) {
+      emit("file-progress", { name, stage: "cancelled", doneS, totalS, message: "Stopped." });
+      throw "Stopped.";
+    }
+    emit("file-progress", { name, stage: "transcribing", doneS, totalS });
+    await delay(450);
+  }
+  fileJob = null;
+  const text = "Thanks everyone for joining. The launch moves to Thursday, and Claire will send the deck tonight.";
+  const ts = Date.now();
+  const item: HistoryItem = { id: String(ts), ts: new Date(ts).toISOString(), text, raw: text, durationS: totalS, latencyMs: 3150, words: text.split(/\s+/).length, corrected: null, file: name };
+  history.unshift(item);
+  emit("file-progress", { name, stage: "done", doneS: totalS, totalS, item });
+  return item;
+}
+
 /** Mock of the core's diff: the first differing word span between old and new. */
 function diffSpan(before: string, after: string): { from: string; to: string } | null {
   const a = before.split(/\s+/);
@@ -554,6 +587,13 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
           ? { version: "0.1.2", currentVersion: state.version, notes: "Faster first dictation after wake. Fixes a stuck key on some keyboards.", date: iso(DAY), channel: settings.updateChannel }
           : null,
       );
+    case "transcribe_file":
+      return out(await mockTranscribeFile(typeof args.path === "string" ? args.path : "Team call.m4a"));
+    case "cancel_file": {
+      const was = fileJob !== null;
+      fileJob = null;
+      return out(was);
+    }
     case "install_update": {
       const total = 18 * 1024 * 1024;
       for (let i = 1; i <= 30; i++) {
