@@ -40,6 +40,7 @@ final class SyncVectorTests: XCTestCase {
         let frame_key_hex: String
         let frame: Frame
         let norm: [[String]]
+        let snippet_key: [[String?]]
         let hlc_order: [Order]
         let clock: [ClockCase]
         let merge: [MergeCase]
@@ -112,6 +113,18 @@ final class SyncVectorTests: XCTestCase {
     func testNorm() {
         for pair in v.norm {
             XCTAssertEqual(syncNorm(pair[0]), pair[1], pair[0])
+        }
+    }
+
+    /// Each trigger projects to the expected `s:` key, or to no key when the vector says null.
+    func testSnippetKey() {
+        for pair in v.snippet_key {
+            let trigger = pair[0]!
+            var d = PersonalDictionary()
+            d.snippets = [Snippet(trigger: trigger, text: "x", added: "")]
+            let keys = SyncProjection.values(of: d).keys.filter { $0.hasPrefix("s:") }
+            XCTAssertEqual(keys, pair[1].map { [$0] } ?? [], trigger)
+            XCTAssertEqual(snippetSyncKey(trigger), pair[1], trigger)
         }
     }
 

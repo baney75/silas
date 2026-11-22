@@ -169,6 +169,27 @@ public func syncNorm(_ s: String) -> String {
     return words.joined(separator: " ").lowercased(with: Locale(identifier: "en_US_POSIX"))
 }
 
+/// `snippets::match_key` from the desktop, the form spoken triggers are matched in: drop
+/// apostrophes (U+0027, U+2019), keep alphanumeric scalars, make every other scalar one space,
+/// collapse to single spaces, lower-case. One Unicode scalar at a time, never `Character`.
+public func snippetMatchKey(_ s: String) -> String {
+    var mapped = String.UnicodeScalarView()
+    for u in s.unicodeScalars where u != "\u{27}" && u != "\u{2019}" {
+        let p = u.properties
+        let alnum = p.isAlphabetic
+            || [.decimalNumber, .letterNumber, .otherNumber].contains(p.generalCategory)
+        mapped.append(alnum ? u : " ")
+    }
+    return String(mapped).split(separator: " ").joined(separator: " ")
+        .lowercased(with: Locale(identifier: "en_US_POSIX"))
+}
+
+/// A snippet's sync key: `s:` + match_key(NFC(trigger)), or nil when the key is empty (it never syncs).
+public func snippetSyncKey(_ trigger: String) -> String? {
+    let k = snippetMatchKey(trigger.precomposedStringWithCanonicalMapping)
+    return k.isEmpty ? nil : "s:" + k
+}
+
 // MARK: - JSON values
 
 /// Entry values are kept as JSON so fields this build doesn't know survive a round trip.
@@ -396,7 +417,8 @@ public enum SyncProjection {
             ])
         }
         for s in dict.snippets {
-            out["s:" + syncNorm(s.trigger)] = .object([
+            guard let key = snippetSyncKey(s.trigger) else { continue }
+            out[key] = .object([
                 "trigger": .string(s.trigger), "text": .string(s.text), "added": .string(s.added),
             ])
         }
@@ -449,11 +471,11 @@ public enum SyncProjection {
             }
         }
 
-        next.snippets.removeAll { dead("s:" + syncNorm($0.trigger)) }
+        next.snippets.removeAll { snippetSyncKey($0.trigger).map(dead) ?? false }
         for (k, v) in live("s:") {
             guard let trigger = v["trigger"], let text = v["text"] else { continue }
             let s = Snippet(trigger: trigger, text: text, added: v["added"] ?? "")
-            if let i = next.snippets.firstIndex(where: { "s:" + syncNorm($0.trigger) == k }) {
+            if let i = next.snippets.firstIndex(where: { snippetSyncKey($0.trigger) == k }) {
                 next.snippets[i] = s
             } else {
                 next.snippets.append(s)
