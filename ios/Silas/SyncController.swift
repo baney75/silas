@@ -232,9 +232,10 @@ final class SyncController {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         do {
-            let outcomes = try await peer.syncFolder(SyncFolder(root: url), dict: currentDictionary())
+            let snapshot = currentDictionary()
+            let outcomes = try await peer.syncFolder(SyncFolder(root: url), dict: snapshot)
             if let merged = outcomes.last(where: { $0.dictionary != nil })?.dictionary {
-                applyMerged(merged)
+                applyMerged(SyncProjection.rebase(merged, from: snapshot, onto: currentDictionary()))
             }
             for o in outcomes { report(o) }
             await saveLedger()
@@ -259,8 +260,11 @@ final class SyncController {
 
     private func received(_ frame: Data) async {
         do {
-            let o = try await peer.receive(frame, into: currentDictionary())
-            if let d = o.dictionary { applyMerged(d) }
+            let snapshot = currentDictionary()
+            let o = try await peer.receive(frame, into: snapshot)
+            if let d = o.dictionary {
+                applyMerged(SyncProjection.rebase(d, from: snapshot, onto: currentDictionary()))
+            }
             report(o)
             await saveLedger()
         } catch {

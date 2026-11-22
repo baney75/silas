@@ -383,6 +383,34 @@ final class SyncTransportTests: XCTestCase {
         XCTAssertTrue(client.discovered.isEmpty, "a peer the browser lost is not dialed")
     }
 
+    /// An edit made after the sync took its snapshot and before the result applies survives, and
+    /// what the sync brought in lands too.
+    func testEditDuringSyncSurvives() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("silas-sync-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let key = SyncKey.generate()
+        let folder = SyncFolder(root: dir)
+        let mac = SyncPeer(ledger: SyncLedger(), keys: MemoryKeyStore(key), name: "Mac", platform: "macos")
+        let phone = SyncPeer(ledger: SyncLedger(), keys: MemoryKeyStore(key), name: "iPhone", platform: "ios")
+        var onMac = PersonalDictionary()
+        onMac.addTerm("Rectory1", source: "user")
+        _ = try await mac.syncFolder(folder, dict: onMac)
+
+        var snapshot = PersonalDictionary()
+        snapshot.addTerm("Parish1", source: "user")
+        snapshot.addTerm("Abbey1", source: "user")
+        let outcomes = try await phone.syncFolder(folder, dict: snapshot)
+        let merged = try XCTUnwrap(outcomes.last?.dictionary)
+        // Meanwhile, on the main actor: one word added, one removed.
+        var current = snapshot
+        current.addTerm("Chapel1", source: "user")
+        current.removeTerm("Abbey1")
+
+        let applied = SyncProjection.rebase(merged, from: snapshot, onto: current)
+        XCTAssertEqual(Set(applied.terms.map(\.text)), ["Parish1", "Rectory1", "Chapel1"])
+        XCTAssertEqual(SyncProjection.rebase(merged, from: snapshot, onto: snapshot), merged)
+    }
+
     func testHostPort() {
         XCTAssertEqual(parseHostPort("rectory1:47823")?.host, "rectory1")
         XCTAssertEqual(parseHostPort("rectory1")?.port, 47823)

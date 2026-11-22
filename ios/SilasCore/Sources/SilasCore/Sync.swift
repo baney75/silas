@@ -496,6 +496,24 @@ public enum SyncProjection {
         dict = next
         return newTerms
     }
+
+    /// A sync merged against `snapshot` and returned `merged`, but the dictionary is `current` by
+    /// now (an edit landed while the sync awaited I/O). Apply only what the sync changed, onto
+    /// `current`; a key the person changed meanwhile keeps their version, and the next
+    /// `recordLocal` stamps it.
+    public static func rebase(
+        _ merged: PersonalDictionary, from snapshot: PersonalDictionary, onto current: PersonalDictionary
+    ) -> PersonalDictionary {
+        if current == snapshot { return merged }
+        let before = values(of: snapshot), after = values(of: merged), mine = values(of: current)
+        var delta: SyncState = [:]
+        for k in Set(before.keys).union(after.keys) where before[k] != after[k] && mine[k] == before[k] {
+            delta[k] = SyncEntry(v: after[k], h: HLC(ms: 0, c: 0, d: ""))
+        }
+        var out = current
+        _ = apply(delta, to: &out)
+        return out
+    }
 }
 
 // MARK: - Per-device sync state
