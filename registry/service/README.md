@@ -51,9 +51,12 @@ curl 'https://silas-registry.magnus-b37.workers.dev/v1/devices?key=macos/apple-m
    "models":{"parakeet-v3":{"reports":3,"speed":25,"wer":0.07,"wait":0.3}}}}}
 ```
 
-`speed`, `wer` and `wait` are medians across the device's reports (the mean of the middle two
-when the count is even, like Python's `statistics.median`). `pick` is Silas's pick rule over
-those medians; `agree` counts the device's reports whose own pick is the same model. Silas
+Only one report per sender per device per UTC day counts, the latest; a sender is the daily
+HMAC of the network address described under Privacy. So `reports` and `agree` count independent
+senders, and one network posting the same device many times is one voice. `speed`, `wer` and
+`wait` are medians across those reports (the mean of the middle two when the count is even, like
+Python's `statistics.median`). `pick` is Silas's pick rule over those medians; `agree` counts the
+senders whose own report picks the same model. Silas
 treats a device as settled once `agree` reaches `min_agree`. Cached for 5 minutes; CORS open.
 
 ### `GET /v1/reports.jsonl`
@@ -82,7 +85,8 @@ Any other path is `404`; a known path with the wrong method is `405`.
 - The rate-limit table holds only a daily-rotating HMAC of the IP: `HMAC-SHA256(dayKey, ip)`
   with `dayKey = HMAC-SHA256(RATE_KEY, "YYYY-MM-DD")`. It can't be turned back into an IP or
   matched across days, and rows are deleted once they are older than yesterday, so none lives
-  past 48 hours.
+  past 48 hours. Each stored report carries the same HMAC, so a sender counts once a day, and
+  it is cleared on the same schedule; only a flag saying whether the report still counts stays.
 
 ## Limits
 

@@ -1,6 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
-import { ACCEPTED_PER_DAY, CLIENT_POSTS_PER_DAY, EXPORT_PAGE, MAX_BODY, store, utcDay } from "../src/service";
+import { ACCEPTED_PER_DAY, CLIENT_POSTS_PER_DAY, EXPORT_PAGE, MAX_BODY, MIN_AGREE, store, utcDay } from "../src/service";
 import { MAX_SPEED, MAX_WER, MIN_SPEED, SUITE_ID, TIE_WER, validate } from "../src/validate";
 import * as main from "../src/index";
 import { ORIGIN, call, post } from "./helpers";
@@ -157,11 +157,11 @@ describe("POST /v1/reports", () => {
   it("the store transaction never takes a report past the cap, even if the check raced", async () => {
     await env.DB.prepare("INSERT INTO daily (day, accepted) VALUES (?, ?)").bind(today(), ACCEPTED_PER_DAY).run();
     const rep = validate(JSON.parse(report([result("parakeet-v3", 20.5, 0.061, 0.38)])));
-    expect(await store(env.DB, today(), rep)).toBeNull();
+    expect(await store(env.DB, today(), "c", rep)).toBeNull();
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM reports").first("n")).toBe(0);
     expect(await env.DB.prepare("SELECT accepted FROM daily").first("accepted")).toBe(ACCEPTED_PER_DAY);
     // A new day starts its own count.
-    expect(await store(env.DB, daysAgo(-1), rep)).toBeTypeOf("number");
+    expect(await store(env.DB, daysAgo(-1), "c", rep)).toBeTypeOf("number");
   });
 
   it("deletes client rows older than yesterday", async () => {
@@ -247,6 +247,36 @@ describe("GET /v1/devices", () => {
     const res = await post(report([result("parakeet-v3", 20.5, 0.061, 0.38)]));
     expect(await res.json()).toMatchObject({ reports: 1 });
     expect(await (await call("/v1/devices")).json()).toMatchObject({ devices: { "macos/apple-m5/10": { reports: 1 } } });
+  });
+
+  it("one sender's many reports count once toward agree", async () => {
+    // Review first-F1 on #64: agree counted reports, so one network posting MIN_AGREE fabricated
+    // reports settled a device on its own.
+    const body = report([result("cohere-int4", 12, 0.03, 0.5)]);
+    for (let i = 0; i < MIN_AGREE + 2; i++) {
+      const res = await post(body, "203.0.113.60");
+      expect(res.status).toBe(201);
+      expect(await res.json()).toEqual({ ok: true, key: "macos/apple-m5/10", reports: 1, pick: "cohere-int4", agree: 1 });
+    }
+    const devices = async () => ((await (await call("/v1/devices")).json()) as { devices: Record<string, { reports: number; agree: number }> }).devices;
+    expect((await devices())["macos/apple-m5/10"]).toMatchObject({ reports: 1, agree: 1 });
+    // Every report stays in the open data.
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM reports").first("n")).toBe(MIN_AGREE + 2);
+    // A second network is a second sender.
+    expect(await (await post(body, "203.0.113.61")).json()).toMatchObject({ reports: 2, agree: 2 });
+    // The same network on another day is another sender too: its HMAC rotates.
+    await env.DB.prepare("INSERT INTO reports (day, suite, device_key, report) VALUES (?, ?, ?, ?)")
+      .bind(daysAgo(3), SUITE_ID, "macos/apple-m5/10", body)
+      .run();
+    expect(await (await post(body, "203.0.113.61")).json()).toMatchObject({ reports: 3, agree: 3 });
+  });
+
+  it("forgets which network sent a report once its day is past", async () => {
+    await post(report([result("parakeet-v3", 20.5, 0.061, 0.38)]), "203.0.113.62");
+    await env.DB.prepare("UPDATE reports SET day = ?").bind(daysAgo(2)).run();
+    await post(report([result("parakeet-v3", 20.5, 0.061, 0.38)]), "203.0.113.63");
+    const rows = await env.DB.prepare("SELECT day, client FROM reports ORDER BY id").all<{ day: string; client: string | null }>();
+    expect(rows.results.map((r) => [r.day, r.client === null])).toEqual([[daysAgo(2), true], [today(), false]]);
   });
 
   it("skips a stored report whose model Silas no longer offers, as ingest.py's stored() does", async () => {

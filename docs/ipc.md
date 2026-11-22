@@ -52,9 +52,9 @@ interface ModelEntry {
   languages: string;              // "25 European languages"
   installed: boolean;
   active: boolean;
-  recommended: boolean;           // best_for_device when this computer has a pick, else the static flag
+  recommended: boolean;           // this computer's own pick, else the registry's, else the static flag; never a community pick
   deviceResult: ModelResult | null; // this computer's measurement (benchmark.json)
-  bestForDevice: boolean;         // the registry's or this computer's own benchmark's pick
+  bestForDevice: boolean;         // this computer's own benchmark's pick, else the registry's, else a settled community pick
 }
 
 // Benchmark types keep snake_case: the same JSON is the shared device report.
@@ -210,14 +210,17 @@ cached as `registry.json`) and looks up the device key. On a miss it asks the re
 
 1. This computer's own `benchmark.json` for the current `suite`.
 2. The registry: maintainer-approved.
-3. The community: used only when at least 3 shared reports agree (`agree >= 3`), the pick
+3. The community: used only when at least 3 independent senders agree (`agree >= 3`; the service
+   counts one report per network per day), the pick
    recomputed over the medians matches the service's, the model is known, and its medians pass both
    bars (`modelSource = "community"`). Fewer than 3 are shown on the Model page as information only.
 
 Offline, the cached copies answer; with no copy, Silas measures as before.
 
 - A hit while `modelSource` is `"default"` sets `model` and `modelSource` (`"registry"` or `"community"`), with no benchmark.
-  It switches only if that model is installed, or if no model is installed yet.
+  It switches only if that model is installed, or, for a registry hit, if no model is installed yet. A
+  community pick never chooses what first-run setup downloads: `recommended` comes only from this
+  computer's report or the registry.
 - A miss in both with no `benchmark.json`: once a model is loaded, the core runs the bundled set
   (`core/voice/bench/`, 14 clips, 84 s: clean, noisy, accented, dictation, command and code speech) clip by clip, waiting while a dictation is happening. An automatic run
   measures the active model and then every other installed model (nothing is downloaded). It saves the

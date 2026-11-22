@@ -252,13 +252,16 @@ pub struct ModelEntry {
     pub recommended: bool,
     /// This computer's measured speed and accuracy for the model, if it has been run.
     pub device_result: Option<ModelResult>,
-    /// The registry's or this computer's own benchmark's pick for this device.
+    /// This computer's own benchmark's pick for this device; else the registry's, else a
+    /// settled community pick. Shown as information; only `recommended` chooses a download.
     pub best_for_device: bool,
 }
 
 pub fn list(active: Option<&str>) -> Vec<ModelEntry> {
     let report = benchmark::load_report();
     let best = benchmark::best_for_device_from(report.as_ref());
+    // First-run setup downloads the recommended model, so only a trusted pick may set it.
+    let trusted = benchmark::trusted_best_for_device_from(report.as_ref());
     MODELS
         .iter()
         .map(|m| ModelEntry {
@@ -271,7 +274,7 @@ pub fn list(active: Option<&str>) -> Vec<ModelEntry> {
             installed: installed(m.id),
             active: active == Some(m.id) && installed(m.id),
             // Recommend what is known to suit this computer; the static flag otherwise.
-            recommended: recommends(m, best.as_deref(), &runs_here),
+            recommended: recommends(m, trusted.as_deref(), &runs_here),
             device_result: report.as_ref().and_then(|r| r.results.iter().find(|x| x.model == m.id).cloned()),
             best_for_device: best.as_deref().filter(|b| runs_here(b)) == Some(m.id),
         })
@@ -818,6 +821,33 @@ mod tests {
     #[test]
     fn parakeet_v3_onnx_transcribes_a_clip() {
         engine_on_a_bundled_clip(PARAKEET_V3_ONNX);
+    }
+
+    /// Review first-F1 on #64: first-run setup downloads the recommended model, and a community
+    /// pick, which anyone can post, could make it the recommended one.
+    #[test]
+    fn a_community_pick_is_never_the_recommended_download() {
+        let _store = crate::store::TEST_DIR.lock();
+        let dir = std::env::temp_dir().join(format!("pc-community-rec-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        crate::store::set_data_dir(Some(dir.clone()));
+        let key = benchmark::device().key.clone();
+        let device = serde_json::json!({
+            "reports": 3, "pick": "cohere-int4", "agree": 3,
+            "models": { "cohere-int4": { "reports": 3, "speed": 12.0, "wer": 0.03, "wait": 0.5 } }
+        });
+        let mut devices = serde_json::Map::new();
+        devices.insert(key.clone(), device);
+        let community = serde_json::json!({ "schema": 1, "suite": benchmark::suite_id(), "devices": devices });
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(benchmark::COMMUNITY_FILE), community.to_string()).unwrap();
+        let settled = benchmark::cached_community().lookup(&key);
+        let entries = list(None);
+        crate::store::set_data_dir(None);
+        let _ = std::fs::remove_dir_all(dir);
+        assert_eq!(settled.as_deref(), Some("cohere-int4"), "the community does settle this device");
+        let rec: Vec<_> = entries.iter().filter(|m| m.recommended).map(|m| m.id.as_str()).collect();
+        assert!(!rec.is_empty() && !rec.contains(&"cohere-int4"), "{rec:?}");
     }
 
     #[test]

@@ -84,7 +84,10 @@ export interface DeviceSummary {
   models: Record<string, ModelSummary>;
 }
 
-/** Medians per model across a device's reports, the pick over them, and how many reports agree. */
+/**
+ * Medians per model across a device's reports, the pick over them, and how many reports agree.
+ * The caller passes one report per sender per day, so agree counts independent senders.
+ */
 export function summarize(reports: Report[]): DeviceSummary {
   const by = new Map<string, { speed: number[]; wer: number[]; wait: number[] }>();
   for (const rep of reports) {
@@ -112,9 +115,11 @@ export function summarize(reports: Report[]): DeviceSummary {
 /**
  * Bump the day's accepted count and store the report, as one transaction. The count only moves
  * while it is under the cap, and the insert happens only if the count moved, so concurrent posts
- * can't push a day past ACCEPTED_PER_DAY. Returns the new report id, or null at the cap.
+ * can't push a day past ACCEPTED_PER_DAY. A sender's earlier reports for the same device that day
+ * stop counting: one sender is one voice in the summary. Returns the new report id, or null at
+ * the cap.
  */
-export async function store(db: D1Database, day: string, report: Report): Promise<number | null> {
+export async function store(db: D1Database, day: string, client: string, report: Report): Promise<number | null> {
   const [, inserted] = await db.batch<{ id: number }>([
     db
       .prepare(
@@ -124,26 +129,34 @@ export async function store(db: D1Database, day: string, report: Report): Promis
       .bind(day, ACCEPTED_PER_DAY),
     db
       .prepare(
-        "INSERT INTO reports (day, suite, device_key, report) SELECT ?1, ?2, ?3, ?4 WHERE changes() = 1 RETURNING id",
+        "INSERT INTO reports (day, suite, device_key, report, client) SELECT ?1, ?2, ?3, ?4, ?5 WHERE changes() = 1 RETURNING id",
       )
-      .bind(day, report.suite, report.device.key, JSON.stringify(report)),
+      .bind(day, report.suite, report.device.key, JSON.stringify(report), client),
+    db
+      .prepare(
+        "UPDATE reports SET counted = 0 WHERE day = ?1 AND client = ?2 AND suite = ?3 AND device_key = ?4 AND counted = 1 " +
+          "AND id < (SELECT MAX(id) FROM reports WHERE day = ?1 AND client = ?2 AND suite = ?3 AND device_key = ?4)",
+      )
+      .bind(day, client, report.suite, report.device.key),
   ]);
   return inserted.results.length > 0 ? inserted.results[0].id : null;
 }
 
 /**
- * Recompute one device's aggregate from its stored reports on the current set. Each stored report
- * is validated again, as ingest.py's stored() does, so one naming a model Silas has since dropped
- * is skipped. The write only lands if no report for the key arrived after the read; that later
- * post recomputes with it included, so the table never goes back to an older aggregate.
+ * Recompute one device's aggregate from its counted reports on the current set: one per sender
+ * per day. Each stored report is validated again, as ingest.py's stored() does, so one naming a
+ * model Silas has since dropped is skipped. The write only lands if no report for the key arrived
+ * after the read; that later post recomputes with it included, so the table never goes back to an
+ * older aggregate.
  */
 export async function recompute(db: D1Database, key: string): Promise<DeviceSummary> {
   const rows = await db
-    .prepare("SELECT report FROM reports WHERE suite = ?1 AND device_key = ?2 ORDER BY id")
+    .prepare("SELECT counted, report FROM reports WHERE suite = ?1 AND device_key = ?2 ORDER BY id")
     .bind(SUITE_ID, key)
-    .all<{ report: string }>();
+    .all<{ counted: number; report: string }>();
   const reports: Report[] = [];
   for (const row of rows.results) {
+    if (row.counted !== 1) continue;
     try {
       reports.push(validate(readReport(row.report)));
     } catch (e) {
@@ -171,8 +184,9 @@ async function submit(request: Request, env: Env): Promise<Response> {
 
   // 1. Per-client limit. Every POST counts, accepted or not.
   const client = await clientId(env.RATE_KEY, day, request.headers.get("CF-Connecting-IP") ?? "unknown");
-  const [, counted] = await env.DB.batch<{ posts: number }>([
+  const [, , counted] = await env.DB.batch<{ posts: number }>([
     env.DB.prepare("DELETE FROM clients WHERE day < ?1").bind(yesterday),
+    env.DB.prepare("UPDATE reports SET client = NULL WHERE day < ?1 AND client IS NOT NULL").bind(yesterday),
     env.DB
       .prepare(
         "INSERT INTO clients (day, client, posts) VALUES (?1, ?2, 1) " +
@@ -214,7 +228,7 @@ async function submit(request: Request, env: Env): Promise<Response> {
   }
 
   // 5. Store, count, and recompute this device's aggregate.
-  const id = await store(env.DB, day, report);
+  const id = await store(env.DB, day, client, report);
   if (id === null) return full();
   const key = report.device.key;
   const summary = await recompute(env.DB, key);

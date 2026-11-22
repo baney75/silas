@@ -162,6 +162,15 @@ pub enum Scope {
     Auto,
 }
 
+/// Whether a registry or community pick for this device moves Silas to `model`. Only while the
+/// model is still the default one, and only to a model that is here: never strand someone who
+/// has a working model on one they haven't downloaded. With no model installed yet, the
+/// maintainer-approved registry may choose what first-run setup downloads; community results
+/// never may, since anyone can post them.
+fn remote_pick_applies(model_source: &str, source: &str, model_installed: bool, any_installed: bool) -> bool {
+    model_source == "default" && (model_installed || (source == "registry" && !any_installed))
+}
+
 /// May a model change go ahead? A user's choice is never overridden by an automatic one,
 /// unless the model they chose is no longer installed and so there is no choice left to keep.
 pub fn allows_model_change(source: &str, auto: bool, chosen_installed: bool) -> bool {
@@ -742,14 +751,12 @@ impl Core {
         };
         drop(lookup);
         if let Some((model, source)) = found {
-            // A device the registry or community knows needs no benchmark. Switch only if that
-            // model is here, or if no model is installed yet (onboarding downloads the recommended
-            // one); never strand someone who has a working model on one they haven't downloaded.
-            let usable = models::installed(&model) || !models::MODELS.iter().any(|m| models::installed(m.id));
+            // A device the registry or community knows needs no benchmark.
+            let any_installed = models::MODELS.iter().any(|m| models::installed(m.id));
             // (applies, the model changed)
             let (apply, changed) = {
                 let mut s = self.settings.lock();
-                let apply = s.model_source == "default" && usable;
+                let apply = remote_pick_applies(&s.model_source, source, models::installed(&model), any_installed);
                 let changed = apply && s.model != model;
                 if apply {
                     s.model = model.clone();
@@ -2152,6 +2159,23 @@ mod tests {
         assert!(should_start_load(None, "parakeet-v3"));
         assert!(should_start_load(Some("cohere-int4"), "parakeet-v3"));
         assert!(!should_start_load(Some("parakeet-v3"), "parakeet-v3"));
+    }
+
+    /// Review first-F1 on #64: a community pick, which anyone can post, chose the model first-run
+    /// setup downloads.
+    #[test]
+    fn a_community_pick_never_chooses_a_download() {
+        // Nothing installed yet: the registry may choose the download, the community may not.
+        assert!(remote_pick_applies("default", "registry", false, false));
+        assert!(!remote_pick_applies("default", "community", false, false));
+        // A model that is here may be switched to from either.
+        assert!(remote_pick_applies("default", "community", true, true));
+        assert!(remote_pick_applies("default", "registry", true, true));
+        // Never to one that isn't downloaded while another works, and never over a choice.
+        assert!(!remote_pick_applies("default", "registry", false, true));
+        assert!(!remote_pick_applies("default", "community", false, true));
+        assert!(!remote_pick_applies("user", "registry", true, true));
+        assert!(!remote_pick_applies("benchmark", "community", true, true));
     }
 
     #[test]

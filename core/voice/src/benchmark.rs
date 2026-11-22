@@ -670,18 +670,19 @@ pub fn best_for_device() -> Option<String> {
 
 /// Same, for a report the caller already loaded.
 pub fn best_for_device_from(report: Option<&Report>) -> Option<String> {
+    trusted_best_for_device_from(report)
+        .or_else(|| report.is_none().then(|| cached_community().lookup(&device().key)).flatten())
+}
+
+/// The pick that may choose a download: this computer's own measurement, else the
+/// maintainer-approved registry. Never the community results, which anyone can post.
+pub fn trusted_best_for_device_from(report: Option<&Report>) -> Option<String> {
     match report {
         Some(r) => r
             .pick
             .clone()
             .filter(|p| r.results.iter().any(|x| &x.model == p && passes(x)) && models::spec(p).is_some()),
-        None => {
-            let key = &device().key;
-            cached_registry()
-                .lookup(key)
-                .map(|e| e.model.clone())
-                .or_else(|| cached_community().lookup(key))
-        }
+        None => cached_registry().lookup(&device().key).map(|e| e.model.clone()),
     }
 }
 
