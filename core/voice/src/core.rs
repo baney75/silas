@@ -1472,8 +1472,10 @@ impl Core {
             return;
         };
         self.cue("stop");
-        // Once the tail is recorded, what was playing plays again.
-        self.media.resume(tail_for(ending));
+        // Once the tail is recorded, what was playing plays again. Whether the tail is skipped is
+        // known only once write() reads the buffer, so wait out the longest one: media never
+        // resumes into a tail that is still recording.
+        self.media.resume(tail_for(ending, false));
         // Carried by value: a new dictation may start before this one finishes typing.
         let target = self.target.lock().take();
         let pieces = self.pieces.lock().take();
