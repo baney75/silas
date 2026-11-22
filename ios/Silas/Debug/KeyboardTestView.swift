@@ -1,12 +1,13 @@
 #if DEBUG
 import SwiftUI
 
-/// Debug builds only, for the UI test (`-keyboardtest`): a plain text field to type into with the
-/// Silas Keyboard, a button that opens Silas's page in Settings to turn the keyboard on, and
-/// `-handoff <text>`, which leaves text for the keyboard as a finished keyboard dictation would.
+/// Debug builds only, for the UI test (`-keyboardtest`): two plain text fields to type into with
+/// the Silas Keyboard, a button that opens Silas's page in Settings to turn the keyboard on, and
+/// `-handoff <text>`, which answers each dictation the keyboard starts with that text.
 struct KeyboardTestView: View {
     @Bindable var model: DictationModel
     @State private var text = ""
+    @State private var other = ""
     @Environment(\.openURL) private var openURL
 
     var body: some View {
@@ -19,6 +20,11 @@ struct KeyboardTestView: View {
                     .padding(12)
                     .card(radius: 12)
                     .accessibilityIdentifier("silas.testfield")
+                TextField("Or here", text: $other, axis: .vertical)
+                    .font(.system(size: 19))
+                    .padding(12)
+                    .card(radius: 12)
+                    .accessibilityIdentifier("silas.testfield2")
                 Button("Open Silas in Settings") {
                     if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
                 }

@@ -448,9 +448,40 @@ final class HandoffTests: XCTestCase {
         h.setSession(.init(phase: .listening, preview: "hello"))
         XCTAssertEqual(h.session().phase, .listening)
         XCTAssertEqual(h.session(now: Date().addingTimeInterval(60)).phase, .off)
-        h.publish("Hello from Silas.")
-        XCTAssertEqual(h.takePending()?.text, "Hello from Silas.")
-        XCTAssertNil(h.takePending(), "pending text is taken once")
+        let field = UUID()
+        h.send(.start, document: field)
+        h.publish("Hello from Silas.", dictation: h.request?.dictation)
+        XCTAssertEqual(h.takePending(for: field)?.text, "Hello from Silas.")
+        XCTAssertNil(h.takePending(for: field), "pending text is taken once")
         XCTAssertEqual(h.last?.text, "Hello from Silas.")
+    }
+
+    /// Text is typed by itself only into the field its dictation started in; elsewhere it waits
+    /// for "type last again".
+    func testPendingTextGoesOnlyToItsOwnField() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("silas-handoff-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let h = Handoff(directory: dir)
+        let notes = UUID(), mail = UUID()
+        h.send(.start, document: notes)
+        h.send(.stop)
+        let dictation = h.request?.dictation
+        XCTAssertNotNil(dictation)
+        XCTAssertEqual(h.request?.document, notes, "a stop keeps the field its dictation started in")
+        h.publish("For the note.", dictation: dictation)
+
+        XCTAssertNil(h.takePending(for: mail), "not typed into another field")
+        XCTAssertNil(h.takePending(for: nil))
+        XCTAssertEqual(h.last?.text, "For the note.", "still there for type last again")
+        XCTAssertEqual(h.takePending(for: notes)?.text, "For the note.")
+
+        // Text that answers no keyboard dictation, or an older one, is not typed by itself.
+        h.publish("From the app.")
+        XCTAssertNil(h.takePending(for: notes))
+        h.publish("Old answer.", dictation: UUID())
+        XCTAssertNil(h.takePending(for: notes))
+        // Nor is text that waited too long.
+        h.publish("Late.", date: Date().addingTimeInterval(-Handoff.pendingMaxAge - 1), dictation: dictation)
+        XCTAssertNil(h.takePending(for: notes))
     }
 }

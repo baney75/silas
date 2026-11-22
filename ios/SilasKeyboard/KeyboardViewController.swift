@@ -29,9 +29,6 @@ private extension UIColor {
 }
 
 final class KeyboardViewController: UIInputViewController {
-    /// Text older than this is not typed: it was meant for a field the person has since left.
-    private static let pendingMaxAge: TimeInterval = 600
-
     private lazy var handoff = Handoff()
     private var phase: Handoff.Phase = .off
     private var observer: DarwinNotify.Observer?
@@ -77,14 +74,15 @@ final class KeyboardViewController: UIInputViewController {
 
     // MARK: State
 
-    /// Read the session and type any text waiting for this field.
+    /// Read the session and type the text waiting for this field: only the answer to a dictation
+    /// started here. Text for another field waits for "type last again".
     private func refresh() {
         guard hasFullAccess, let handoff else {
             phase = .off
             render()
             return
         }
-        if let pending = handoff.takePending(), Date().timeIntervalSince(pending.date) < Self.pendingMaxAge {
+        if let pending = handoff.takePending(for: textDocumentProxy.documentIdentifier) {
             type(pending.text)
         }
         phase = handoff.session().phase
@@ -138,11 +136,13 @@ final class KeyboardViewController: UIInputViewController {
         switch handoff.session().phase {
         case .off:
             status.text = "Opening Silas…"
+            // The URL starts the dictation; the request records which field it is for.
+            handoff.send(.start, document: textDocumentProxy.documentIdentifier, notify: false)
             if !openContainingApp(Handoff.dictateURL) {
                 status.text = "Open Silas, then come back here."
             }
         case .armed:
-            handoff.send(.start)
+            handoff.send(.start, document: textDocumentProxy.documentIdentifier)
         case .listening:
             handoff.send(.stop)
         case .writing:

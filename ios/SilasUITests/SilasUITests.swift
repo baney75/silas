@@ -37,24 +37,66 @@ final class SilasUITests: XCTestCase {
         keep("ready")
     }
 
-    /// Turn on the Silas Keyboard with Full Access, then show it on a text field: it types the
-    /// text the app handed off, and "type last again" types it once more.
+    /// Turn on the Silas Keyboard with Full Access, then show it on a text field: the mic starts
+    /// a dictation, its text is typed there, and "type last again" types it once more.
     func testKeyboardTypesHandedOffText() {
+        let sentence = "Hello from Silas."
+        let app = launchWithKeyboard(answering: sentence)
+        let field = element(app, "silas.testfield")
+        let mic = showSilasKeyboard(on: field, in: app)
+        mic.tap()
+        let typed = waitFor(field, toRead: sentence)
+        keep("keyboard")
+        XCTAssertTrue(typed, "field reads: \(field.value as? String ?? ""):\n\(app.debugDescription)")
+
+        app.buttons["silas.kb.last"].tap()
+        XCTAssertTrue(waitFor(field, toRead: sentence + " " + sentence), "field reads: \(field.value as? String ?? "")")
+    }
+
+    /// A dictation started in one field and finished after the person moved to another is not
+    /// typed into the new field; "type last again" types it there when asked.
+    func testKeyboardKeepsTextForItsOwnField() {
+        let sentence = "Meant for the first field."
+        let app = launchWithKeyboard(answering: sentence)
+        let first = element(app, "silas.testfield")
+        let second = element(app, "silas.testfield2")
+        let mic = showSilasKeyboard(on: first, in: app)
+        mic.tap()
+        second.tap()
+        // The answer comes 4 s after the start; give it time to arrive and be (wrongly) typed.
+        sleep(8)
+        XCTAssertFalse(value(of: second).contains(sentence), "typed into the field it wasn't for: \(value(of: second))")
+        XCTAssertFalse(value(of: first).contains(sentence), "typed into a field not in use: \(value(of: first))")
+
+        app.buttons["silas.kb.last"].tap()
+        XCTAssertTrue(waitFor(second, toRead: sentence), "field reads: \(value(of: second))")
+        // A dictation started here is typed here.
+        mic.tap()
+        XCTAssertTrue(waitFor(second, toRead: sentence + " " + sentence), "field reads: \(value(of: second))")
+        keep("keyboard-own-field")
+    }
+
+    // MARK: Helpers
+
+    /// Turn the keyboard on, then launch the keyboard test screen with a session whose every
+    /// dictation comes back as `sentence`.
+    private func launchWithKeyboard(answering sentence: String) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-uitest", "-keyboardtest"]
         app.launch()
         XCTAssertEqual(element(app, "silas.appgroup").label, "App Group: on")
         enableKeyboard(from: app)
-
-        let sentence = "Hello from Silas."
         app.terminate()
         app.launchArguments = ["-uitest", "-keyboardtest", "-handoff", sentence]
         app.launch()
-        let field = element(app, "silas.testfield")
+        return app
+    }
+
+    /// Focus `field`, pick the Silas Keyboard from the globe key's list, and return its mic key
+    /// once a session is armed.
+    private func showSilasKeyboard(on field: XCUIElement, in app: XCUIApplication) -> XCUIElement {
         XCTAssertTrue(field.waitForExistence(timeout: 15))
         field.tap()
-
-        // Pick the Silas Keyboard from the globe key's list.
         let globe = app.keys["Next keyboard"].exists ? app.keys["Next keyboard"] : app.buttons["Next keyboard"]
         XCTAssertTrue(globe.waitForExistence(timeout: 10), "no globe key:\n\(app.debugDescription)")
         globe.press(forDuration: 1.2)
@@ -65,17 +107,16 @@ final class SilasUITests: XCTestCase {
             keep("keyboard-list")
             XCTFail("no Silas in the keyboard list:\n\(app.debugDescription)")
         }
-        let typed = waitFor(field, toRead: sentence)
-        keep("keyboard")
-        XCTAssertTrue(typed, "field reads: \(field.value as? String ?? ""):\n\(app.debugDescription)")
         let mic = app.buttons["silas.kb.mic"]
-        XCTAssertTrue(mic.waitForExistence(timeout: 5), "the Silas Keyboard's keys aren't visible:\n\(app.debugDescription)")
-
-        app.buttons["silas.kb.last"].tap()
-        XCTAssertTrue(waitFor(field, toRead: sentence + " " + sentence), "field reads: \(field.value as? String ?? "")")
+        XCTAssertTrue(mic.waitForExistence(timeout: 10), "the Silas Keyboard's keys aren't visible:\n\(app.debugDescription)")
+        let armed = NSPredicate(format: "value == 'armed'")
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: armed, object: mic)], timeout: 15), .completed,
+            "the keyboard never saw the session: \(mic.value as? String ?? "")")
+        return mic
     }
 
-    // MARK: Helpers
+    private func value(of field: XCUIElement) -> String { field.value as? String ?? "" }
 
     private func element(_ app: XCUIApplication, _ id: String) -> XCUIElement {
         app.descendants(matching: .any)[id].firstMatch

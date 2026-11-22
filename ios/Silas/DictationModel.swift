@@ -32,6 +32,8 @@ struct FailedClip {
     let id: UUID
     let date: Date
     let toKeyboard: Bool
+    /// The keyboard dictation it answers (`Handoff.Request.dictation`).
+    let dictation: UUID?
 }
 
 enum Sheet: String, Identifiable {
@@ -127,6 +129,10 @@ final class DictationModel {
     var hasFailedClip: Bool { failedClipCount > 0 }
     /// The capture in progress was started from the keyboard, so its text goes back to the keyboard.
     var captureToKeyboard = false
+    #if DEBUG
+    /// UI tests (`-handoff <text>`): every keyboard dictation comes back as this text.
+    @ObservationIgnored var debugDictation: String?
+    #endif
     /// A hands-free start asked for before the model was ready (App Intent, keyboard URL).
     var pendingStart: PendingStart?
     enum PendingStart { case app, keyboard }
@@ -432,6 +438,8 @@ final class DictationModel {
         machine.reset()
         let toKeyboard = captureToKeyboard
         captureToKeyboard = false
+        // The keyboard's start (or its stop, which carries it) names the dictation and its field.
+        let dictation = toKeyboard ? handoff?.request?.dictation : nil
         // In a keyboard session the engine stays armed for the next tap.
         let samples = keyboardSession && recorder.isRunning ? recorder.endCapture() : recorder.stop()
         level = 0
@@ -454,7 +462,7 @@ final class DictationModel {
         }
         beginBackgroundWork()
         Task {
-            await transcribe(samples, seconds: seconds, id: id, date: date, toKeyboard: toKeyboard)
+            await transcribe(samples, seconds: seconds, id: id, date: date, toKeyboard: toKeyboard, dictation: dictation)
             endBackgroundWork()
         }
     }
@@ -498,7 +506,7 @@ final class DictationModel {
         backgroundTaskID = .invalid
     }
 
-    private func transcribe(_ samples: [Float], seconds: Double, id: UUID, date: Date, toKeyboard: Bool) async {
+    private func transcribe(_ samples: [Float], seconds: Double, id: UUID, date: Date, toKeyboard: Bool, dictation: UUID? = nil) async {
         guard inFlight.insert(id).inserted else { return }
         defer { inFlight.remove(id) }
         do {
@@ -522,7 +530,7 @@ final class DictationModel {
             text = cleaned
             persist()
             if toKeyboard {
-                handoff?.publish(cleaned, id: id, date: date)
+                handoff?.publish(cleaned, id: id, date: date, dictation: dictation)
             } else {
                 handoff?.setLast(cleaned, date: date)
             }
@@ -534,7 +542,7 @@ final class DictationModel {
         } catch {
             // Never block recording over one bad clip: stay Ready and offer Try again / Discard.
             failed.removeAll { $0.id == id }
-            failed.append(FailedClip(samples: samples, seconds: seconds, id: id, date: date, toKeyboard: toKeyboard))
+            failed.append(FailedClip(samples: samples, seconds: seconds, id: id, date: date, toKeyboard: toKeyboard, dictation: dictation))
             failedClipCount = failed.count
             status = .ready
             preview = ""
@@ -590,7 +598,7 @@ final class DictationModel {
                     guard status == .ready else { return }
                     status = .writing
                 }
-                await transcribe(f.samples, seconds: f.seconds, id: f.id, date: f.date, toKeyboard: f.toKeyboard)
+                await transcribe(f.samples, seconds: f.seconds, id: f.id, date: f.date, toKeyboard: f.toKeyboard, dictation: f.dictation)
             }
         }
     }
@@ -779,9 +787,11 @@ final class DictationModel {
     }
 
     #if DEBUG
-    /// UI tests: put text where the keyboard picks it up, as a finished keyboard dictation would.
+    /// UI tests: a keyboard session with no microphone, in which every dictation the keyboard
+    /// starts comes back as `text` a few seconds later (DictationModel+Keyboard.swift).
     func debugHandoff(_ text: String) {
-        handoff?.publish(text)
+        debugDictation = text
+        openKeyboardSession()
     }
     #endif
 }

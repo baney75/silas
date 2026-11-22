@@ -5,8 +5,10 @@
 //
 // Each file has one writer, so the two processes never race on the same bytes:
 //   session.json  the app:      is a session on, is it listening or writing, a heartbeat
-//   request.json  the keyboard: start or stop, with a fresh id per tap
-//   pending.json  the app writes the finished text; the keyboard deletes it once inserted
+//   request.json  the keyboard: start or stop, with a fresh id per tap, and the dictation and
+//                 field it belongs to
+//   pending.json  the app writes the finished text, tagged with its dictation; the keyboard types
+//                 it only into the field that dictation started in, then deletes it
 //   last.json     the app:      the last dictation, for "type last again"
 // A Darwin notification tells the other side to look.
 
@@ -46,11 +48,17 @@ public struct Handoff {
         public var id: UUID
         public var command: Command
         public var at: Date
+        /// The dictation this tap belongs to: a start's own id, carried by the stop and cancel after it.
+        public var dictation: UUID?
+        /// `textDocumentProxy.documentIdentifier` of the field the dictation started in.
+        public var document: UUID?
 
-        public init(id: UUID = UUID(), command: Command, at: Date = Date()) {
+        public init(id: UUID = UUID(), command: Command, at: Date = Date(), dictation: UUID? = nil, document: UUID? = nil) {
             self.id = id
             self.command = command
             self.at = at
+            self.dictation = dictation
+            self.document = document
         }
     }
 
@@ -58,13 +66,19 @@ public struct Handoff {
         public var id: UUID
         public var text: String
         public var date: Date
+        /// The keyboard dictation (`Request.dictation`) this text answers; nil for any other.
+        public var dictation: UUID?
 
-        public init(id: UUID = UUID(), text: String, date: Date = Date()) {
+        public init(id: UUID = UUID(), text: String, date: Date = Date(), dictation: UUID? = nil) {
             self.id = id
             self.text = text
             self.date = date
+            self.dictation = dictation
         }
     }
+
+    /// Text older than this is never typed without being asked.
+    public static let pendingMaxAge: TimeInterval = 600
 
     /// A heartbeat older than this means the app is gone (killed, or the session ended badly).
     public static let staleAfter: TimeInterval = 8
@@ -112,9 +126,10 @@ public struct Handoff {
         setSession(Session(phase: .off))
     }
 
-    /// The finished text for the keyboard to insert, and the new "last" dictation.
-    public func publish(_ text: String, id: UUID = UUID(), date: Date = Date()) {
-        let t = Text(id: id, text: text, date: date)
+    /// The finished text for the keyboard to insert, and the new "last" dictation. `dictation` is
+    /// the keyboard dictation it answers; without one the keyboard types it only when asked.
+    public func publish(_ text: String, id: UUID = UUID(), date: Date = Date(), dictation: UUID? = nil) {
+        let t = Text(id: id, text: text, date: date, dictation: dictation)
         write(t, "pending.json")
         write(t, "last.json")
         DarwinNotify.post(Self.changed)
@@ -138,16 +153,42 @@ public struct Handoff {
         return s
     }
 
-    public func send(_ command: Request.Command) {
-        write(Request(command: command), "request.json")
-        DarwinNotify.post(Self.requested)
+    /// A mic key tap. A start begins a dictation in the field `document`; a stop or cancel belongs
+    /// to the dictation already on. `notify: false` when the tap opens Silas instead.
+    public func send(_ command: Request.Command, document: UUID? = nil, notify: Bool = true) {
+        var r = Request(command: command)
+        if command == .start {
+            r.dictation = r.id
+            r.document = document
+        } else if let on = request {
+            r.dictation = on.dictation
+            r.document = on.document
+        }
+        write(r, "request.json")
+        if notify { DarwinNotify.post(Self.requested) }
     }
 
-    /// Take the text waiting to be inserted, at most once.
-    public func takePending() -> Text? {
+    /// Whether the keyboard, now in the field `document`, may type `text` without being asked:
+    /// only the answer to its own latest dictation, in the field that dictation started in.
+    public static func typesAutomatically(_ text: Text, request: Request?, document: UUID?, now: Date = Date()) -> Bool {
+        guard let d = text.dictation, let r = request, r.dictation == d,
+            let doc = document, r.document == doc
+        else { return false }
+        return now.timeIntervalSince(text.date) < pendingMaxAge
+    }
+
+    /// Take the text waiting to be inserted into the field `document`, at most once. Text for
+    /// another field stays for "type last again"; text too old to type is dropped.
+    public func takePending(for document: UUID?, now: Date = Date()) -> Text? {
         guard let t: Text = read("pending.json") else { return nil }
-        try? FileManager.default.removeItem(at: url("pending.json"))
-        return t
+        if Self.typesAutomatically(t, request: request, document: document, now: now) {
+            try? FileManager.default.removeItem(at: url("pending.json"))
+            return t
+        }
+        if now.timeIntervalSince(t.date) >= Self.pendingMaxAge {
+            try? FileManager.default.removeItem(at: url("pending.json"))
+        }
+        return nil
     }
 
     public var last: Text? { read("last.json") }

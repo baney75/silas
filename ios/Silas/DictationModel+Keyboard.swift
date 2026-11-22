@@ -13,9 +13,17 @@ extension DictationModel {
     private static let beat: Duration = .seconds(2)
 
     func startKeyboardSession() {
+        guard openKeyboardSession() else { return }
+        startHandsFree(toKeyboard: true)
+        pushSession()
+    }
+
+    /// Hold the session (heartbeat, the keyboard's requests) without starting a dictation.
+    @discardableResult
+    func openKeyboardSession() -> Bool {
         guard let handoff else {
             show("This build has no App Group, so the Silas Keyboard can't reach it. Reinstall with ios/scripts/install.sh.")
-            return
+            return false
         }
         sessionIdleSince = Date()
         if !keyboardSession {
@@ -34,8 +42,8 @@ extension DictationModel {
                 }
             }
         }
-        startHandsFree(toKeyboard: true)
         pushSession()
+        return true
     }
 
     func endKeyboardSession() {
@@ -62,6 +70,16 @@ extension DictationModel {
         sessionIdleSince = Date()
         switch request.command {
         case .start:
+            #if DEBUG
+            if let text = debugDictation {
+                let dictation = request.dictation
+                Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(4))
+                    self?.handoff?.publish(text, dictation: dictation)
+                }
+                return
+            }
+            #endif
             startHandsFree(toKeyboard: true)
         case .stop:
             captureToKeyboard = true
