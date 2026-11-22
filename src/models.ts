@@ -115,7 +115,7 @@ const MIN_SPEED = 10;
 const MAX_WER = 0.08;
 
 const speedText = (r: ModelResult) =>
-  `${Math.round(r.speed)}× real time · a 10 s dictation in ${(10 / Math.max(r.speed, 0.01)).toFixed(1)} s`;
+  `${Math.round(r.speed)}× real time · a 10\u00a0s dictation in ${(10 / Math.max(r.speed, 0.01)).toFixed(1)}\u00a0s`;
 const accuracyText = (r: ModelResult) => `${(100 * Math.max(0, 1 - r.wer)).toFixed(1)}% of words right`;
 
 function mark(ok: boolean, good: string, bad: string): HTMLElement {
@@ -127,10 +127,9 @@ function resultRow(r: ModelResult, isPick: boolean): HTMLElement {
   return h(
     "li",
     { class: `bench-row${isPick ? " is-pick" : ""}` },
-    h("div", { class: "bench-name" }, name, isPick ? h("span", { class: "badge badge-gold" }, "Best here") : null),
-    h("div", { class: "bench-num" }, speedText(r)),
-    h("div", { class: "bench-num" }, accuracyText(r)),
+    h("div", { class: "bench-name" }, h("span", { class: "bench-model" }, name), isPick ? h("span", { class: "badge badge-gold" }, "Best here") : null),
     h("div", { class: "bench-marks" }, mark(r.speed >= MIN_SPEED, "Fast enough", "Too slow"), mark(r.wer <= MAX_WER, "Accurate enough", "Too many misses")),
+    h("div", { class: "bench-nums" }, h("span", null, speedText(r)), h("span", null, accuracyText(r))),
   );
 }
 
@@ -163,7 +162,7 @@ function thisComputer(): HTMLElement {
     ];
     body = h(
       "div",
-      null,
+      { class: "bench-result" },
       h("ul", { class: "bench-list" }, ...report.results.map((r) => resultRow(r, r.model === report.pick && r.speed >= MIN_SPEED && r.wer <= MAX_WER))),
       h("div", { class: "card-actions bench-actions" }, ...buttons),
       h(

@@ -3,9 +3,9 @@
 #   curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | sh
 # Remove it (your dictionary and history stay):
 #   curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | sh -s -- --uninstall
-# Installs the stable channel; SILAS_CHANNEL=nightly installs nightly (docs/channels.md).
-# Other knobs: SILAS_INSTALL_DIR (macOS, default /Applications),
-# SILAS_LINUX_FORMAT=appimage (skip the .deb/.rpm), SILAS_NO_OPEN=1 (don't launch Silas),
+# Installs the stable channel; SILAS_CHANNEL=nightly installs nightly (docs/channels.md). Arch
+# builds the native package from main. Other knobs: SILAS_INSTALL_DIR (macOS, default /Applications),
+# SILAS_LINUX_FORMAT=appimage (skip the .deb/.rpm/Arch package), SILAS_NO_OPEN=1 (don't launch Silas),
 # SILAS_ALLOW_NEW_SIGNATURE=1 (macOS: replace a Silas signed with a different certificate).
 set -eu
 # A CDPATH from the user's shell would send `cd` to some other folder of the same name.
@@ -274,6 +274,7 @@ package_installed() {
   # dpkg keeps a removed package as "config-files"; only an installed one counts.
   if command -v dpkg-query >/dev/null 2>&1 &&
     [ "$(dpkg-query -W -f='${Status}' silas 2>/dev/null)" = "install ok installed" ]; then return 0; fi
+  if command -v pacman >/dev/null 2>&1 && pacman -Q silas-git >/dev/null 2>&1; then return 0; fi
   command -v rpm >/dev/null 2>&1 && rpm -q silas >/dev/null 2>&1
 }
 
@@ -286,6 +287,25 @@ installed_package_version() {
   fi
 }
 
+# Arch and Omarchy: build the native package from main's PKGBUILD (a few minutes). It brings
+# silas-ctl and the Hyprland keybindings in /usr/share/silas/hyprland.lua.
+arch_install() {
+  say "Installing build tools"
+  as_root pacman -S --needed --noconfirm base-devel
+  mkdir -p "$tmp/arch"
+  for f in PKGBUILD silas.install; do
+    curl -fsSL "$RAW/packaging/arch/$f" -o "$tmp/arch/$f" || die "Could not download $RAW/packaging/arch/$f."
+  done
+  say "Building Silas (a few minutes)"
+  # makepkg installs what the build needs (Rust, Bun, WebKitGTK) through pacman itself.
+  (cd "$tmp/arch" && makepkg -s --noconfirm --nocheck) || die "Building the Silas package failed."
+  pkg=$(cd "$tmp/arch" && makepkg --packagelist | head -1)
+  stop_linux_silas
+  as_root pacman -U --noconfirm "$pkg"
+  if remove_appimage; then say "Removed the earlier AppImage install; the package replaces it."; fi
+  say "For Hyprland keys, add to ~/.config/hypr/bindings.lua: dofile(\"/usr/share/silas/hyprland.lua\")"
+}
+
 linux_uninstall() {
   # Stop Silas only once we know it's ours to remove.
   if package_installed || is_our_appimage; then stop_linux_silas; fi
@@ -294,6 +314,9 @@ linux_uninstall() {
     [ "$(dpkg-query -W -f='${Status}' silas 2>/dev/null)" = "install ok installed" ]; then
     as_root apt-get remove -y silas
     found=deb
+  elif command -v pacman >/dev/null 2>&1 && pacman -Q silas-git >/dev/null 2>&1; then
+    as_root pacman -R --noconfirm silas-git
+    found=pacman
   elif command -v rpm >/dev/null 2>&1 && rpm -q silas >/dev/null 2>&1; then
     # zypper rebuilds the package's full name from its version, and the hyphen in a nightly
     # version ("0.1.7-nightly…") makes rpm miss it, so remove by name with rpm itself.
@@ -322,11 +345,12 @@ linux_install() {
   if [ -z "$format" ]; then
     if command -v apt-get >/dev/null 2>&1; then format=deb
     elif command -v dnf >/dev/null 2>&1 || command -v zypper >/dev/null 2>&1; then format=rpm
+    elif command -v makepkg >/dev/null 2>&1 && command -v pacman >/dev/null 2>&1; then format=pacman
     else format=appimage; fi
   fi
   case "$format" in
-  deb | rpm | appimage) ;;
-  *) die "SILAS_LINUX_FORMAT must be deb, rpm or appimage." ;;
+  deb | rpm | pacman | appimage) ;;
+  *) die "SILAS_LINUX_FORMAT must be deb, rpm, pacman or appimage." ;;
   esac
   # Fail before any download or stopping Silas when the package tool is missing.
   if [ "$format" = deb ] && ! command -v apt-get >/dev/null 2>&1; then
@@ -335,11 +359,24 @@ linux_install() {
   if [ "$format" = rpm ] && ! command -v dnf >/dev/null 2>&1 && ! command -v zypper >/dev/null 2>&1; then
     die "SILAS_LINUX_FORMAT=rpm needs dnf or zypper."
   fi
+  if [ "$format" = pacman ] && ! command -v makepkg >/dev/null 2>&1; then
+    die "SILAS_LINUX_FORMAT=pacman needs makepkg (Arch Linux)."
+  fi
+  # makepkg refuses to run as root.
+  if [ "$format" = pacman ] && [ "$(id -u)" = 0 ]; then
+    die "Building the Arch package can't run as root. Run this as your own user; it asks for sudo when it needs it."
+  fi
   if [ "$format" = appimage ] && package_installed; then
     die "Silas is installed as a package. Remove it first: $UNINSTALL"
   fi
   if [ "$format" = appimage ] && { [ -e "$HOME/.local/bin/silas" ] || [ -L "$HOME/.local/bin/silas" ]; } && ! is_our_appimage; then
     die "$HOME/.local/bin/silas exists and isn't a Silas AppImage. Move it, then run this again."
+  fi
+
+  if [ "$format" = pacman ]; then
+    arch_install
+    linux_done /usr/bin/silas
+    return
   fi
 
   channel=${SILAS_CHANNEL:-}
@@ -407,9 +444,21 @@ linux_install() {
     if remove_appimage; then say "Removed the earlier AppImage install; the package replaces it."; fi
     bin=/usr/bin/silas
   fi
-  if [ -n "${WAYLAND_DISPLAY:-}" ] && ! command -v wtype >/dev/null 2>&1; then
-    say "Tip: install 'wtype' so Silas can type into Wayland apps."
-  fi
+  linux_done "$bin"
+}
+
+# Tips, then start Silas.
+linux_done() {
+  bin=$1
+  # Hyprland, Sway and other wlroots compositors take Silas's virtual keyboard; GNOME and KDE
+  # need ydotool.
+  case "${XDG_CURRENT_DESKTOP:-}" in
+  *GNOME* | *KDE*)
+    if [ -n "${WAYLAND_DISPLAY:-}" ] && ! command -v ydotool >/dev/null 2>&1; then
+      say "Tip: install 'ydotool' so Silas can type into Wayland apps on ${XDG_CURRENT_DESKTOP}."
+    fi
+    ;;
+  esac
   # Never start the app as root: it would own the user's data folder and miss their session.
   if [ -z "${SILAS_NO_OPEN:-}" ] && [ "$(id -u)" != 0 ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
     say "Done. Opening Silas…"
