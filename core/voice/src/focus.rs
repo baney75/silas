@@ -53,6 +53,96 @@ pub fn secure_input() -> bool {
     false
 }
 
+/// The focused app's id, for its style (`style.rs`): the bundle id on macOS
+/// (`com.mitchellh.ghostty`), the exe name on Windows (`windowsterminal.exe`), the window class on
+/// Hyprland (`kitty`). None where the system doesn't say (Linux outside Hyprland).
+#[cfg(target_os = "macos")]
+pub fn focused_app() -> Option<String> {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+    let cls = AnyClass::get(c"NSWorkspace")?;
+    unsafe {
+        let ws: *mut AnyObject = msg_send![cls, sharedWorkspace];
+        let app: *mut AnyObject = msg_send![ws.as_ref()?, frontmostApplication];
+        mac_bundle_id(app.as_ref()?)
+    }
+}
+
+/// The bundle id of the app with this process id.
+#[cfg(target_os = "macos")]
+fn mac_app_of(pid: i32) -> Option<String> {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+    let cls = AnyClass::get(c"NSRunningApplication")?;
+    unsafe {
+        let app: *mut AnyObject = msg_send![cls, runningApplicationWithProcessIdentifier: pid];
+        mac_bundle_id(app.as_ref()?)
+    }
+}
+
+/// # Safety
+/// `app` must be an `NSRunningApplication`.
+#[cfg(target_os = "macos")]
+unsafe fn mac_bundle_id(app: &objc2::runtime::AnyObject) -> Option<String> {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    let id: *mut AnyObject = msg_send![app, bundleIdentifier];
+    let utf8: *const std::ffi::c_char = msg_send![id.as_ref()?, UTF8String];
+    if utf8.is_null() {
+        return None;
+    }
+    Some(std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned())
+}
+
+#[cfg(target_os = "windows")]
+pub fn focused_app() -> Option<String> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_null() {
+            return None;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == 0 {
+            return None;
+        }
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return None;
+        }
+        let mut buf = [0u16; 1024];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(process, 0, buf.as_mut_ptr(), &mut len);
+        CloseHandle(process);
+        if ok == 0 {
+            return None;
+        }
+        exe_name(&String::from_utf16_lossy(&buf[..len as usize]))
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn focused_app() -> Option<String> {
+    hypr::active_class()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+pub fn focused_app() -> Option<String> {
+    None
+}
+
+/// `C:\Program Files\Git\usr\bin\mintty.exe` → `mintty.exe`: the file name in lower case.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn exe_name(path: &str) -> Option<String> {
+    let name = path.rsplit(['\\', '/']).next()?.trim();
+    (!name.is_empty()).then(|| name.to_lowercase())
+}
+
 /// Hyprland's focused window, through `hyprctl activewindow -j`. Built everywhere so the parsing
 /// is tested on every platform; only Linux calls it.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -79,6 +169,20 @@ mod hypr {
     }
 
     pub fn active() -> Option<Window> {
+        parse(&query()?)
+    }
+
+    /// The focused window and its class, from one question to Hyprland.
+    pub fn active_with_class() -> Option<(Window, Option<String>)> {
+        let json = query()?;
+        Some((parse(&json)?, class(&json)))
+    }
+
+    pub fn active_class() -> Option<String> {
+        class(&query()?)
+    }
+
+    fn query() -> Option<String> {
         if !available() {
             return None;
         }
@@ -89,7 +193,14 @@ mod hypr {
         if !out.status.success() {
             return None;
         }
-        parse(&String::from_utf8_lossy(&out.stdout))
+        Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    /// The window's class (`kitty`, `com.mitchellh.ghostty`), which names the app.
+    pub fn class(json: &str) -> Option<String> {
+        let v: serde_json::Value = serde_json::from_str(json).ok()?;
+        let c = v.get("class")?.as_str()?.trim();
+        (!c.is_empty()).then(|| c.to_string())
     }
 
     /// Gives the keyboard to the window at `address`. False when Hyprland refused.
@@ -137,6 +248,9 @@ pub struct Target {
     /// Hyprland: the window that had the keyboard, and the last check of it (`linux_here`).
     #[cfg(target_os = "linux")]
     window: hypr::Window,
+    /// Its class, which names the app (`style.rs`).
+    #[cfg(target_os = "linux")]
+    class: Option<String>,
     #[cfg(target_os = "linux")]
     checked: parking_lot::Mutex<Option<(std::time::Instant, bool)>>,
 }
@@ -182,11 +296,22 @@ impl Target {
 
     #[cfg(target_os = "linux")]
     pub fn capture() -> Option<Self> {
-        hypr::active().map(|window| Self { window, checked: parking_lot::Mutex::new(None) })
+        hypr::active_with_class().map(|(window, class)| Self { window, class, checked: parking_lot::Mutex::new(None) })
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub fn capture() -> Option<Self> {
+        None
+    }
+
+    /// The id of the app this target is in (see `focused_app`), as it was at key-down. None where
+    /// only the app with the keyboard now can be asked.
+    pub fn app(&self) -> Option<String> {
+        #[cfg(target_os = "macos")]
+        return mac_app_of(self.mac.pid());
+        #[cfg(target_os = "linux")]
+        return self.class.clone();
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         None
     }
 
@@ -658,6 +783,10 @@ mod mac {
             self.shared.spot.lock().clone()
         }
 
+        pub(super) fn pid(&self) -> i32 {
+            self.shared.spot.lock().pid
+        }
+
         /// Keystrokes would land in the target window, or the app is too slow to say
         /// otherwise. Only a clear sign (another app in front, another window focused) is No.
         pub(super) fn in_place(&self) -> bool {
@@ -974,6 +1103,24 @@ mod hypr_tests {
         // Another window, or the same address reused by another app: another id.
         assert_ne!(self::id(&RECORDED.replace("0x55ef19943100", "0x55ef19943200")), Some(id));
         assert_ne!(self::id(&RECORDED.replace("\"class\": \"org.omarchy.screensaver\"", "\"class\": \"foot\"")), Some(id));
+    }
+
+    #[test]
+    fn hyprland_names_the_app_by_its_window_class() {
+        assert_eq!(hypr::class(RECORDED).as_deref(), Some("org.omarchy.screensaver"));
+        let kitty = RECORDED.replace("\"class\": \"org.omarchy.screensaver\"", "\"class\": \"kitty\"");
+        assert_eq!(hypr::class(&kitty).as_deref(), Some("kitty"));
+        assert_eq!(crate::style::known("kitty").map(|a| a.style), Some(crate::style::Style::Terminal));
+        assert_eq!(hypr::class("{}"), None);
+        assert_eq!(hypr::class(r#"{"class": "  "}"#), None);
+    }
+
+    #[test]
+    fn windows_apps_are_named_by_their_exe() {
+        assert_eq!(exe_name(r"C:\Program Files\Git\usr\bin\MinTTY.exe").as_deref(), Some("mintty.exe"));
+        assert_eq!(exe_name(r"C:\Users\me\AppData\Local\Programs\cursor\Cursor.exe").as_deref(), Some("cursor.exe"));
+        assert_eq!(exe_name("pwsh.exe").as_deref(), Some("pwsh.exe"));
+        assert_eq!(exe_name(r"C:\dir\"), None);
     }
 
     #[test]

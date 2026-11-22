@@ -13,7 +13,10 @@ pub mod models;
 pub mod permissions;
 pub mod pieces;
 pub mod replay;
+pub mod snippets;
+pub mod spoken;
 pub mod store;
+pub mod style;
 pub mod typer;
 
 use std::time::Duration;

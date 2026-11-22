@@ -18,6 +18,10 @@ use crate::models::{self, Engine};
 use crate::store::{self, HistoryItem, Settings, Stats};
 use crate::typer;
 
+mod again;
+mod shaping;
+pub use again::Via;
+
 /// What the interface around the engine provides. The engine never names a UI toolkit:
 /// the Tauri app (Windows, Linux, Android) and the native Mac app both implement this.
 ///
@@ -127,6 +131,8 @@ pub struct Core {
     /// False while the interface has paused dictation: keys are ignored, nothing records.
     /// The model stays loaded.
     enabled: AtomicBool,
+    /// The id of the app the last dictation went to, for Settings (`shaping.rs`).
+    app: Mutex<Option<String>>,
 }
 
 pub type Shared = Arc<Core>;
@@ -405,6 +411,12 @@ impl Core {
         let trigger = Trigger::parse(&settings.hotkey).expect("default hotkey parses");
         let mut machine = Machine::new(trigger, settings.tap_to_toggle);
         machine.fallback = settings.hotkey_fallback.as_deref().and_then(Trigger::parse);
+        // A saved retype key this build can't use, or one that is now the dictation key, is dropped.
+        let again = again::trigger(&settings).unwrap_or_else(|_| {
+            settings.retype_hotkey = None;
+            None
+        });
+        machine.again.set(again);
         let mut history: Vec<HistoryItem> = store::load("history.json");
         history.truncate(store::HISTORY_KEEP);
         Arc::new(Core {
@@ -436,6 +448,7 @@ impl Core {
             dictations: AtomicU64::new(0),
             loading: Mutex::new(None),
             enabled: AtomicBool::new(true),
+            app: Mutex::new(None),
             settings: Mutex::new(settings),
         })
     }
@@ -957,6 +970,7 @@ impl Core {
         let mut settings = settings;
         let trigger = Trigger::parse(&settings.hotkey)
             .ok_or_else(|| format!("{} is not a key Silas can use", settings.hotkey))?;
+        let again = again::trigger(&settings)?;
         settings.update_channel = settings.effective_channel().into();
         let old = {
             let mut cur = self.settings.lock();
@@ -971,6 +985,7 @@ impl Core {
             m.trigger = trigger;
             m.fallback = settings.hotkey_fallback.as_deref().and_then(Trigger::parse);
             m.tap_to_toggle = settings.tap_to_toggle;
+            m.again.set(again);
         }
         self.sync_blocked();
         self.save_settings();
@@ -1065,6 +1080,7 @@ impl Core {
             self.feed_watch(ev, now);
         }
         self.act(out);
+        self.again_key(ev);
     }
 
     /// A pending "pick the hotkey" request takes this key event. True when it did. Escape
@@ -1343,7 +1359,9 @@ impl Core {
             }
         };
         let s = me.settings.lock().clone();
-        let mut text = me.dict.lock().apply(&raw, s.remove_fillers);
+        let text = me.dict.lock().apply(&raw, s.remove_fillers);
+        // The app's style, spoken code and snippets (`core/shaping.rs`).
+        let (mut text, s) = me.shape(target.as_ref(), &text, s);
         if text.trim().is_empty() {
             me.set_status(Status::Ready, None);
             return;

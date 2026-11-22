@@ -1,8 +1,9 @@
 import { api, errorText, type Dictionary, type Source } from "./api";
+import { findSnippet, snippetPreview } from "./appstyles";
 import { setDict, store, subscribe } from "./store";
 import { clear, fixChip, h, icon, num, timeAgo, toast } from "./ui";
 
-type Tab = "words" | "corrections" | "learning";
+type Tab = "words" | "corrections" | "snippets" | "learning";
 let tab: Tab = "words";
 
 const sourceLabel: Record<Source, string> = { learned: "learned", user: "you", import: "imported" };
@@ -22,11 +23,11 @@ export function mountDictionary(root: HTMLElement): () => void {
     const file = fileInput.files?.[0];
     fileInput.value = "";
     if (!file) return;
-    const before = store.dict.terms.length + store.dict.corrections.length;
+    const before = store.dict.terms.length + store.dict.corrections.length + store.dict.snippets.length;
     try {
       const d = await api.importDictionary(await file.text());
       setDict(d);
-      const added = d.terms.length + d.corrections.length - before;
+      const added = d.terms.length + d.corrections.length + d.snippets.length - before;
       toast(added > 0 ? `Imported ${num(added)} entr${added === 1 ? "y" : "ies"}` : "Imported. Everything was already here.");
     } catch (e) {
       toast(`Couldn't import that file. ${errorText(e)}`, "error", 6000);
@@ -57,6 +58,7 @@ export function mountDictionary(root: HTMLElement): () => void {
   const tabDefs: Array<{ id: Tab; label: string; count: () => number }> = [
     { id: "words", label: "Words", count: () => store.dict.terms.length },
     { id: "corrections", label: "Corrections", count: () => store.dict.corrections.length },
+    { id: "snippets", label: "Snippets", count: () => store.dict.snippets.length },
     { id: "learning", label: "Learning", count: () => store.dict.pending.length },
   ];
 
@@ -186,6 +188,62 @@ export function mountDictionary(root: HTMLElement): () => void {
     ];
   }
 
+  function snippets() {
+    const trigger = h("input", { class: "input", type: "text", placeholder: "When you say…", "aria-label": "Say", autocomplete: "off", spellcheck: "false" });
+    const text = h("textarea", { class: "input snippet-input", rows: 2, placeholder: "Type this", "aria-label": "Type", spellcheck: "false" });
+    const add = async () => {
+      const t = trigger.value.trim();
+      const body = text.value;
+      if (!t) return trigger.focus();
+      if (!body.trim()) return text.focus();
+      const replacing = findSnippet(store.dict.snippets, t);
+      await run(api.addSnippet(t, body), replacing ? `Updated: ${replacing.trigger}` : `Added: ${t}`);
+      requestAnimationFrame(() => (panel.querySelector("input") as HTMLInputElement | null)?.focus());
+    };
+    trigger.addEventListener("keydown", (e) => e.key === "Enter" && (text.value.trim() ? void add() : text.focus()));
+    // Enter adds; Shift+Enter starts a new line in the snippet.
+    text.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.shiftKey) return;
+      e.preventDefault();
+      void add();
+    });
+    const list = store.dict.snippets;
+    return [
+      h(
+        "p",
+        { class: "panel-note" },
+        "Say the phrase on its own and Silas types the text. In the middle of a sentence, say “insert” first: “send it to insert my address”.",
+      ),
+      h(
+        "div",
+        { class: "add-row pair snippet-add" },
+        trigger,
+        h("span", { class: "pair-arrow", "aria-hidden": "true" }, "→"),
+        text,
+        h("button", { class: "btn btn-primary", type: "button", onclick: () => void add() }, "Add"),
+      ),
+      list.length
+        ? h(
+            "ul",
+            { class: "rows" },
+            ...list.map((sn) =>
+              h(
+                "li",
+                { class: "row", title: sn.text },
+                h("span", { class: "snippet" }, h("span", { class: "snippet-trigger" }, sn.trigger), h("span", { class: "snippet-text" }, snippetPreview(sn.text))),
+                h("span", { class: "row-meta" }, timeAgo(sn.added)),
+                h(
+                  "button",
+                  { class: "icon-btn", type: "button", "aria-label": `Remove ${sn.trigger}`, title: "Remove", onclick: () => void run(api.removeSnippet(sn.trigger)) },
+                  icon("x", 16),
+                ),
+              ),
+            ),
+          )
+        : h("div", { class: "empty" }, h("p", null, "No snippets yet. Save your address, an email sign-off or a command you type often.")),
+    ];
+  }
+
   function learning() {
     const list = store.dict.pending;
     return [
@@ -220,7 +278,8 @@ export function mountDictionary(root: HTMLElement): () => void {
 
   function draw() {
     drawTabs();
-    clear(panel, ...(tab === "words" ? words() : tab === "corrections" ? corrections() : learning()));
+    const views: Record<Tab, () => Array<HTMLElement>> = { words, corrections, snippets, learning };
+    clear(panel, ...views[tab]());
   }
 
   draw();
