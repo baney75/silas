@@ -66,7 +66,7 @@ for your key.
 | Tap the key once | listens hands-free until you tap it again |
 | Press **Esc** while it listens | cancels |
 | Press the key with another key (Right ⌘ + C) | does nothing; your shortcut still works |
-| Press your **Type it again** key, or pick *Type Last Dictation Again* in the tray menu | types your last dictation again where you are |
+| Press your **Type it again** key, or pick *Type Last Dictation Again* in the tray menu | types your last dictation again where you are (Windows: the key only; the menu item is off until Silas can put your window back in front) |
 
 New lines are typed as Shift+Return, so chat boxes don't send early. Change the key,
 typing speed and the rest in Settings. The *Type it again* key is unset until you pick one
@@ -90,7 +90,11 @@ underscore env equals production" types `NODE_ENV=production`; "print open paren
 paren" types `print(name)`; "camel case user name" types `userName`. Also: dot, slash, back
 slash, underscore, tilde, pipe, equals, double equals, at sign, dollar sign, open and close
 bracket or brace, snake case, pascal case, kebab case, constant case, new line, new paragraph.
-Words that read as prose stay words: "a dash of salt" is typed as you said it.
+Words that read as prose stay words: "a dash of salt", "results underscore the need" and "a red
+dot appears" are typed as you said them. Underscore, equals, pipe, dot, tilde and all caps turn
+into code only next to other code ("node underscore env equals production", "console dot log",
+"pipe grep"). Say "new line" on its own, between pauses, for a line break in a Code app; a
+Terminal never gets one from spoken code, since it would press Return.
 
 **Snippets.** Dictionary → Snippets saves text to type when you say a phrase: say "my
 address" on its own and Silas types your address. Inside a sentence, say "insert" first:

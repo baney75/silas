@@ -27,8 +27,11 @@ interface AppState {
 //   prose    as spoken (the default for apps not in the table)
 //   chat     prose; new lines go out as Shift+Return whatever newlineAsShiftEnter says
 //   code     spoken code on (core/voice/src/spoken.rs): "dash dash", "dot", "open paren",
-//            "camel case user name"; the trailing period is dropped when the text reads as code
-//   terminal spoken code on, no capital at the start, never a trailing period
+//            "camel case user name"; the trailing period is dropped when the text reads as code.
+//            Words that are also English (underscore, equals, pipe, dot, tilde, all caps) turn
+//            into code only next to other code; "new line" breaks only when said on its own
+//   terminal spoken code on, no capital at the start, never a trailing period, and spoken code
+//            never types a line break (it would be Return)
 type AppStyle = "prose" | "chat" | "code" | "terminal";
 
 interface AppInfo {
@@ -174,7 +177,7 @@ interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string
 | `export_dictionary` | | `string` (pretty JSON) |
 | `get_stats` | | `Stats` |
 | `toggle_recording` | | `null` (same as tapping the hotkey) |
-| `type_again` | | `null` once the retype has started. Types the newest History item (its taught fix, if any) into the field with the keyboard, with a dictation's guards: never into a password field or a window that took the keyboard, and Escape stops it. The tray item and `retypeHotkey` do the same. Errors with the reason when paused, busy, or History is empty |
+| `type_again` | | `null` once the retype has started. Types the newest History item (its taught fix, if any) into the field with the keyboard, with a dictation's guards: never into a password field or a window that took the keyboard, and Escape stops it. The tray item and `retypeHotkey` do the same. Errors with the reason when paused, busy, or History is empty. Windows: errors, and the tray item is disabled, because Silas can't yet remember and restore the window the user was typing in and the command and the menu leave Silas's own window in front; only `retypeHotkey` types there |
 | `capture_hotkey` | | `string` next key/modifier pressed, e.g. `"CmdRight"` (10 s timeout) |
 | `open_permission` | `{ kind: "microphone" \| "accessibility" \| "input" }` | `null`. Reads first; shows the system prompt at most once per run and never when already granted, otherwise opens the OS settings pane |
 | `reset_accessibility` | | `null`. macOS onboarding: when not trusted, clears Silas's Accessibility entry, asks at most once per run, opens Settings |

@@ -4,7 +4,8 @@
 //! marks it inside other speech ("send it to insert my address"). A sentence that only
 //! contains the trigger's words ("I changed my address last week") is typed as spoken.
 //! Matching ignores case and punctuation. Snippets live in the dictionary JSON so sync
-//! (docs/sync.md, keys `s:` + norm(trigger)) carries them.
+//! (docs/sync.md, keys `s:` + match_key(trigger)) carries them. `match_key` is part of the
+//! sync spec: change it and docs/sync.md together.
 
 use serde::{Deserialize, Serialize};
 
@@ -150,6 +151,22 @@ mod tests {
 
     fn snip(trigger: &str, text: &str) -> Snippet {
         Snippet { trigger: trigger.into(), text: text.into(), added: String::new() }
+    }
+
+    /// The examples docs/sync.md gives for the snippet sync key (`s:` + match_key).
+    #[test]
+    fn match_key_gives_the_sync_spec_examples() {
+        for (trigger, key) in [
+            ("My Address.", "my address"),
+            ("my address", "my address"),
+            ("e-mail", "e mail"),
+            ("e mail", "e mail"),
+            ("Donovan's phone", "donovans phone"),
+            ("Donovan\u{2019}s phone", "donovans phone"),
+            ("  !!  ", ""),
+        ] {
+            assert_eq!(match_key(trigger), key, "{trigger}");
+        }
     }
 
     fn typed(text: &str, snippets: &[Snippet]) -> String {
