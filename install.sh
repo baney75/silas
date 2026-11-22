@@ -3,8 +3,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | sh
 # Remove it (your dictionary and history stay):
 #   curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | sh -s -- --uninstall
-# macOS gets the stable channel (SILAS_CHANNEL=nightly for nightly); Linux gets nightly
-# until a stable release carries Linux (docs/channels.md). Other knobs: SILAS_INSTALL_DIR (macOS, default /Applications),
+# Installs the stable channel; SILAS_CHANNEL=nightly installs nightly (docs/channels.md).
+# Other knobs: SILAS_INSTALL_DIR (macOS, default /Applications),
 # SILAS_LINUX_FORMAT=appimage (skip the .deb/.rpm), SILAS_NO_OPEN=1 (don't launch Silas),
 # SILAS_ALLOW_NEW_SIGNATURE=1 (macOS: replace a Silas signed with a different certificate).
 set -eu
@@ -333,12 +333,16 @@ linux_install() {
     die "$HOME/.local/bin/silas exists and isn't a Silas AppImage. Move it, then run this again."
   fi
 
-  api="https://api.github.com/repos/baney75/silas/releases/tags/nightly"
+  if [ "${SILAS_CHANNEL:-stable}" = nightly ]; then
+    channel=nightly api="https://api.github.com/repos/baney75/silas/releases/tags/nightly"
+  else
+    channel=stable api="https://api.github.com/repos/baney75/silas/releases/latest"
+  fi
   # SILAS_GITHUB_TOKEN (CI sets it) lifts the API's 60-requests-an-hour limit on shared IPs.
   # It goes to curl on stdin, never in argv.
   if [ -n "${SILAS_GITHUB_TOKEN:-}" ]; then
     json=$(printf 'header = "Authorization: Bearer %s"\n' "$SILAS_GITHUB_TOKEN" | curl -K - -fsSL "$api") ||
-      die "Couldn't read the nightly release from GitHub with SILAS_GITHUB_TOKEN."
+      die "Couldn't read the $channel release from GitHub with SILAS_GITHUB_TOKEN."
   else
     json=$(curl -fsSL "$api") || die "Couldn't reach GitHub ($api). Check your connection and try again."
   fi
@@ -348,7 +352,7 @@ linux_install() {
   rpm) url=$(echo "$assets" | grep '\.rpm$' | head -1) ;;
   appimage) url=$(echo "$assets" | grep '\.AppImage$' | head -1) ;;
   esac
-  [ -n "$url" ] || die "The nightly release is being rebuilt. Try again in a few minutes."
+  [ -n "$url" ] || die "The $channel release has no $format for Linux yet. Try again in a few minutes, or set SILAS_CHANNEL=nightly."
 
   if [ "$format" = appimage ]; then
     # Stage beside the target so the final mv is a rename on one filesystem.

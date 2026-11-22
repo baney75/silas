@@ -1,6 +1,6 @@
 [package]
 name = "polycarp-voice"
-version = "0.1.6"
+version = "0.2.0"
 description = "Silas voice engine: hold a key, speak, and it types what you said. No UI toolkit."
 authors = ["Donovan Baney"]
 license = "MIT"

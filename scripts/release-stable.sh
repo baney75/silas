@@ -157,14 +157,16 @@ have=$(gh api "repos/$REPO/releases/$draft" -q '.assets[].name')
 for name in $(jq -r '.platforms[].url | split("/") | last' "$dir/latest.json") latest.json; do
   grep -qxF "$name" <<<"$have" || { echo "the $tag draft lacks $name, which latest.json needs" >&2; exit 1; }
 done
-# Move stable and tag it only now, with every file in the draft. A plain push refuses anything but
-# a fast-forward, and a re-run finds both already there.
-git push origin "$sha:refs/heads/stable"
-git rev-parse -q --verify "refs/tags/$tag" >/dev/null || git tag "$tag" "$sha"
-git push origin "refs/tags/$tag"
+# Move stable and tag it only now, with every file in the draft. Through the API, not git push:
+# GitHub's email-privacy check refuses a push of main's commits to another branch when they carry
+# a private author address (v0.1.7, 2026-11-22). force=false still refuses anything but a
+# fast-forward, and a re-run finds both already there.
+gh api -X PATCH "repos/$REPO/git/refs/heads/stable" -f sha="$sha" -F force=false >/dev/null
+gh api "repos/$REPO/git/refs/tags/$tag" >/dev/null 2>&1 ||
+  gh api "repos/$REPO/git/refs" -f ref="refs/tags/$tag" -f sha="$sha" >/dev/null
 git fetch -q origin stable --tags --force
 [ "$(git rev-parse "$tag^{commit}")" = "$(git rev-parse origin/stable)" ] || { echo "$tag is not stable's head; the draft is unpublished" >&2; exit 1; }
-gh api -X PATCH "repos/$REPO/releases/$draft" -F draft=false -f make_latest=true >/dev/null
+gh api -X PATCH "repos/$REPO/releases/$draft" -f tag_name="$tag" -F draft=false -f make_latest=true >/dev/null
 echo "Released Silas $version (stable: macOS, Windows, Linux)."
 echo "Next: bump main's base version in a pull request (docs/channels.md)."
 git diff --quiet -- scripts/release-requirement.txt ||
