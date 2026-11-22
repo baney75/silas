@@ -769,8 +769,8 @@ impl SyncEngine {
         let ep = self.epoch()?;
         let key = ep.key.clone();
         let listener = match self.o.port {
-            Some(p) => TcpListener::bind((self.o.bind, p))?,
-            None => TcpListener::bind((self.o.bind, PORT)).or_else(|_| TcpListener::bind((self.o.bind, 0)))?,
+            Some(p) => bind_retrying(self.o.bind, p)?,
+            None => bind_retrying(self.o.bind, PORT).or_else(|_| TcpListener::bind((self.o.bind, 0)))?,
         };
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
@@ -979,6 +979,21 @@ impl SyncEngine {
     fn folder_round(&self, ep: &Epoch) {
         if let Err(e) = self.folder_with(ep) {
             log::warn!("sync: the sync folder: {e:#}");
+        }
+    }
+}
+
+/// Binds `port`, trying again for up to a second while it is in use: a restart binds the port it
+/// has just let go of, and on a busy machine an outgoing connection can hold that number briefly.
+fn bind_retrying(ip: std::net::IpAddr, port: u16) -> io::Result<TcpListener> {
+    let mut tries = 0;
+    loop {
+        match TcpListener::bind((ip, port)) {
+            Err(e) if e.kind() == io::ErrorKind::AddrInUse && tries < 10 => {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            bound => return bound,
         }
     }
 }
@@ -1331,6 +1346,19 @@ mod tests {
         e2.stop();
         let _ = std::fs::remove_dir_all(dir);
         let _ = std::fs::remove_dir_all(dir2);
+    }
+
+    #[test]
+    fn a_port_held_for_a_moment_is_bound_once_it_frees() {
+        let held = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = held.local_addr().unwrap().port();
+        let freed = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            drop(held);
+        });
+        let bound = bind_retrying("127.0.0.1".parse().unwrap(), port).unwrap();
+        assert_eq!(bound.local_addr().unwrap().port(), port);
+        freed.join().unwrap();
     }
 
     #[test]
