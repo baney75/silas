@@ -175,18 +175,32 @@ export async function recompute(db: D1Database, key: string): Promise<DeviceSumm
   return summary;
 }
 
+/**
+ * Delete clients rows and clear report senders from before `yesterday`, so no network HMAC
+ * lives past 48 hours. Runs on every POST and daily on the cron trigger, so a quiet day still
+ * forgets.
+ */
+function prune(db: D1Database, yesterday: string): D1PreparedStatement[] {
+  return [
+    db.prepare("DELETE FROM clients WHERE day < ?1").bind(yesterday),
+    db.prepare("UPDATE reports SET client = NULL WHERE day < ?1 AND client IS NOT NULL").bind(yesterday),
+  ];
+}
+
+function yesterdayOf(t: Date): string {
+  return utcDay(new Date(t.getTime() - 86_400_000));
+}
+
 async function submit(request: Request, env: Env): Promise<Response> {
   if (!env.RATE_KEY) return json({ error: "The registry isn't taking reports right now." }, 503);
   const now = new Date();
   const day = utcDay(now);
-  const yesterday = utcDay(new Date(now.getTime() - 86_400_000));
   const retry = { "Retry-After": String(secondsToMidnight(now)) };
 
   // 1. Per-client limit. Every POST counts, accepted or not.
   const client = await clientId(env.RATE_KEY, day, request.headers.get("CF-Connecting-IP") ?? "unknown");
   const [, , counted] = await env.DB.batch<{ posts: number }>([
-    env.DB.prepare("DELETE FROM clients WHERE day < ?1").bind(yesterday),
-    env.DB.prepare("UPDATE reports SET client = NULL WHERE day < ?1 AND client IS NOT NULL").bind(yesterday),
+    ...prune(env.DB, yesterdayOf(now)),
     env.DB
       .prepare(
         "INSERT INTO clients (day, client, posts) VALUES (?1, ?2, 1) " +
@@ -298,5 +312,9 @@ export const handler = {
       // Nothing about the request is logged, not even the error.
       return json({ error: "Something went wrong. Try again later." }, 500);
     }
+  },
+
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(env.DB.batch(prune(env.DB, yesterdayOf(new Date(controller.scheduledTime)))));
   },
 } satisfies ExportedHandler<Env>;

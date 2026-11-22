@@ -84,8 +84,8 @@ Any other path is `404`; a known path with the wrong method is `405`.
   about requests.
 - The rate-limit table holds only a daily-rotating HMAC of the IP: `HMAC-SHA256(dayKey, ip)`
   with `dayKey = HMAC-SHA256(RATE_KEY, "YYYY-MM-DD")`. It can't be turned back into an IP or
-  matched across days, and rows are deleted once they are older than yesterday, so none lives
-  past 48 hours. Each stored report carries the same HMAC, so a sender counts once a day, and
+  matched across days, and rows are deleted once they are older than yesterday (on each POST
+  and by a daily cron trigger at 00:05 UTC), so none lives past 48 hours. Each stored report carries the same HMAC, so a sender counts once a day, and
   it is cleared on the same schedule; only a flag saying whether the report still counts stays.
 
 ## Limits
@@ -96,7 +96,8 @@ Any other path is `404`; a known path with the wrong method is `405`.
 | POSTs per client | 20 per UTC day |
 | Accepted reports, everyone | 5,000 per UTC day |
 
-All on the Workers and D1 free plans: no Rate Limiting binding, no paid features, no routes.
+All on the Workers and D1 free plans: no Rate Limiting binding, no paid features, no routes. The
+one cron trigger fits the free plan's allowance.
 
 ## Deploy (maintainer)
 

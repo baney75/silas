@@ -4,6 +4,8 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
   "workers_dev": true,
+  // Daily, just after UTC midnight: forget client HMACs older than yesterday even with no POST.
+  "triggers": { "crons": ["5 0 * * *"] },
   "d1_databases": [
     {
       "binding": "DB",

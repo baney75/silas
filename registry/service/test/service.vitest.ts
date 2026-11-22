@@ -1,6 +1,7 @@
+import { createExecutionContext, createScheduledController, waitOnExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
-import { ACCEPTED_PER_DAY, CLIENT_POSTS_PER_DAY, EXPORT_PAGE, MAX_BODY, MIN_AGREE, store, utcDay } from "../src/service";
+import { ACCEPTED_PER_DAY, CLIENT_POSTS_PER_DAY, EXPORT_PAGE, MAX_BODY, MIN_AGREE, handler, store, utcDay } from "../src/service";
 import { MAX_SPEED, MAX_WER, MIN_SPEED, SUITE_ID, TIE_WER, validate } from "../src/validate";
 import * as main from "../src/index";
 import { ORIGIN, call, post } from "./helpers";
@@ -186,6 +187,26 @@ describe("POST /v1/reports", () => {
     for (const needle of [ip, "203.0.113", ipv6, "2001:db8", ua, "unique-ua-marker", "SilasProbe", "referer-marker"]) {
       expect(dump).not.toContain(needle);
     }
+  });
+});
+
+describe("scheduled", () => {
+  it("deletes client rows and clears report senders older than yesterday with no POST", async () => {
+    // Review first-F3 on #64: rows were deleted only inside a POST, so a quiet registry kept them
+    // past the 48 hours the README promises.
+    const seed = env.DB.prepare("INSERT INTO clients (day, client, posts) VALUES (?, ?, 3)");
+    await env.DB.batch([seed.bind(daysAgo(2), "old"), seed.bind(daysAgo(30), "older"), seed.bind(daysAgo(1), "recent"), seed.bind(today(), "now")]);
+    const rep = validate(JSON.parse(report([result("parakeet-v3", 20.5, 0.061, 0.38)])));
+    for (const [day, client] of [[daysAgo(2), "old"], [daysAgo(1), "recent"], [today(), "now"]]) {
+      expect(await store(env.DB, day, client, rep)).toBeTypeOf("number");
+    }
+    const ctx = createExecutionContext();
+    await handler.scheduled(createScheduledController({ scheduledTime: Date.now(), cron: "5 0 * * *" }), env, ctx);
+    await waitOnExecutionContext(ctx);
+    const clients = await env.DB.prepare("SELECT client FROM clients ORDER BY day").all<{ client: string }>();
+    expect(clients.results.map((r) => r.client)).toEqual(["recent", "now"]);
+    const senders = await env.DB.prepare("SELECT client FROM reports ORDER BY id").all<{ client: string | null }>();
+    expect(senders.results.map((r) => r.client)).toEqual([null, "recent", "now"]);
   });
 });
 
