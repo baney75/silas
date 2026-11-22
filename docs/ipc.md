@@ -17,7 +17,34 @@ interface AppState {
   model: string | null;           // active model id, null if none installed
   hotkey: string;                 // e.g. "CmdRight"
   hotkeyLabel: string;            // e.g. "Right ⌘"
+  retypeHotkeyLabel: string | null; // label of Settings.retypeHotkey, null when unset
+  app: AppInfo | null;            // the app the last dictation went to; null before the first one,
+                                  // or where the system doesn't name apps (Linux outside Hyprland)
   permissions: Permissions;
+}
+
+// How Silas shapes text for an app (core/voice/src/style.rs):
+//   prose    as spoken (the default for apps not in the table)
+//   chat     prose; new lines go out as Shift+Return whatever newlineAsShiftEnter says
+//   code     spoken code on (core/voice/src/spoken.rs): "dash dash", "dot", "open paren",
+//            "camel case user name"; the trailing period is dropped when the text reads as code.
+//            Words that are also English (underscore, equals, pipe, dot, tilde, all caps) turn
+//            into code only next to other code; "new line" breaks only when said on its own
+//   terminal spoken code on, no capital at the start, never a trailing period, and spoken code
+//            never types a line break (it would be Return)
+type AppStyle = "prose" | "chat" | "code" | "terminal";
+
+interface AppInfo {
+  id: string;                     // macOS bundle id, Windows exe name ("code.exe"), Hyprland window class
+  name: string;                   // from the built-in table (style.rs KNOWN), else the id
+  style: AppStyle;                // what it gets now: Settings.appStyles, else `builtin`
+  builtin: AppStyle;              // Silas's own style for it: the table, else "prose"
+}
+
+interface Snippet {
+  trigger: string;                // what you say; matched without case or punctuation
+  text: string;                   // typed exactly as saved, new lines included
+  added: string;                  // RFC 3339
 }
 
 interface Permissions {
@@ -35,6 +62,9 @@ interface Settings {
   trailingSpace: boolean;
   typingSpeed: "steady" | "fast" | "instant"; // chars/sec 250 | 700 | 2000
   newlineAsShiftEnter: boolean;   // so chat boxes do not send early
+  retypeHotkey: string | null;    // handy-keys string for "type the last dictation again"; null = unset.
+                                  // set_settings rejects the dictation hotkey itself or a string that isn't a key
+  appStyles: Record<string, AppStyle>; // app id -> style the user chose; ids match without case
   learnFromEdits: boolean;
   sounds: boolean;
   showOverlay: boolean;
@@ -107,6 +137,7 @@ interface Dictionary {
   corrections: Correction[];
   pending: Pending[];             // seen fixes not yet trusted (needs 2 sightings)
   fillers: string[];              // words removed when removeFillers is on
+  snippets: Snippet[];            // one per trigger match form; sync key "s:" + norm(trigger) (docs/sync.md)
 }
 
 interface Stats {
@@ -139,11 +170,14 @@ interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string
 | `add_term` / `remove_term` | `{ text }` | `Dictionary` |
 | `add_correction` | `{ from, to }` | `Dictionary` |
 | `remove_correction` | `{ from }` | `Dictionary` |
+| `add_snippet` | `{ trigger, text }` | `Dictionary`. Replaces the text of a snippet with the same trigger. Errors when either is empty |
+| `remove_snippet` | `{ trigger }` | `Dictionary` |
 | `accept_pending` / `dismiss_pending` | `{ from }` | `Dictionary` |
 | `import_dictionary` | `{ json }` | `Dictionary` (accepts Silas export or a TypeWhisper export) |
 | `export_dictionary` | | `string` (pretty JSON) |
 | `get_stats` | | `Stats` |
 | `toggle_recording` | | `null` (same as tapping the hotkey) |
+| `type_again` | | `null` once the retype has started. Types the newest History item (its taught fix, if any) into the field with the keyboard, with a dictation's guards: never into a password field or a window that took the keyboard, and Escape stops it. The tray item and `retypeHotkey` do the same. Errors with the reason when paused, busy, or History is empty. Windows: errors, and the tray item is disabled, because Silas can't yet remember and restore the window the user was typing in and the command and the menu leave Silas's own window in front; only `retypeHotkey` types there |
 | `capture_hotkey` | | `string` next key/modifier pressed, e.g. `"CmdRight"` (10 s timeout) |
 | `open_permission` | `{ kind: "microphone" \| "accessibility" \| "input" }` | `null`. Reads first; shows the system prompt at most once per run and never when already granted, otherwise opens the OS settings pane |
 | `reset_accessibility` | | `null`. macOS onboarding: when not trusted, clears Silas's Accessibility entry, asks at most once per run, opens Settings |
@@ -163,6 +197,7 @@ interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string
 | `level` | `number` 0..1 microphone level, ~30 Hz while recording (overlay) |
 | `transcript` | `HistoryItem` just typed |
 | `learned` | `LearnResult` when Silas learned from an edit |
+| `app` | `AppInfo` of the app a dictation or retype is going to, sent as it is typed |
 | `notice` | `{ kind: "error" \| "busy" \| "stopped", message }` why a press did nothing or a dictation stopped. The overlay shows it for 4 s (`NOTICE_FOR`) even when its setting is off; the main window shows it as a toast |
 | `benchmark-progress` | `{ model, clip, clips }` clips finished so far for `model` (0 when it starts) |
 | `benchmark-done` | `Report` just saved |

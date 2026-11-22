@@ -27,6 +27,10 @@ pub struct AppState {
     model: Option<String>,
     hotkey: String,
     hotkey_label: String,
+    /// The retype key's label, or None when no retype key is set.
+    retype_hotkey_label: Option<String>,
+    /// The app the last dictation went to and its style (`style.rs`).
+    app: Option<crate::style::AppInfo>,
     permissions: permissions::Permissions,
 }
 
@@ -44,6 +48,7 @@ pub fn platform() -> &'static str {
 pub fn get_state(core: State<Shared>, app: AppHandle) -> AppState {
     let (status, detail) = core.status();
     let hotkey = core.settings.lock().hotkey.clone();
+    let retype = core.settings.lock().retype_hotkey.clone();
     AppState {
         status,
         detail,
@@ -52,6 +57,8 @@ pub fn get_state(core: State<Shared>, app: AppHandle) -> AppState {
         model: core.active_model(),
         hotkey_label: store::hotkey_label(&hotkey),
         hotkey,
+        retype_hotkey_label: retype.filter(|k| !k.trim().is_empty()).map(|k| store::hotkey_label(&k)),
+        app: core.last_app(),
         permissions: permissions::check(),
     }
 }
@@ -192,6 +199,22 @@ pub fn dismiss_pending(core: State<Shared>, from: String) -> Dictionary {
 }
 
 #[tauri::command]
+pub fn add_snippet(core: State<Shared>, trigger: String, text: String) -> R<Dictionary> {
+    let mut added = false;
+    let d = with_dict(&core, |d| added = d.add_snippet(&trigger, &text));
+    if added {
+        Ok(d)
+    } else {
+        Err("A snippet needs a phrase to say and the text to type.".into())
+    }
+}
+
+#[tauri::command]
+pub fn remove_snippet(core: State<Shared>, trigger: String) -> Dictionary {
+    with_dict(&core, |d| d.remove_snippet(&trigger))
+}
+
+#[tauri::command]
 pub fn import_dictionary(core: State<Shared>, json: String) -> R<Dictionary> {
     let mut d = core.dict.lock();
     d.import(&json)
@@ -226,6 +249,12 @@ pub fn get_stats(core: State<Shared>) -> Stats {
 pub fn toggle_recording(core: State<Shared>) {
     let out = core.machine.lock().toggle_from_ui();
     core.inner().act(out);
+}
+
+/// Types the last dictation again. Async: it returns at once and the typing runs on the core's thread.
+#[tauri::command]
+pub async fn type_again(core: State<'_, Shared>) -> R<()> {
+    core.inner().type_again(crate::core::Via::Command)
 }
 
 #[tauri::command]
@@ -378,6 +407,7 @@ mod tests {
     const ON_MAIN_THREAD: &[&str] = &[
         "accept_pending",
         "add_correction",
+        "add_snippet",
         "add_term",
         "clear_history",
         "correct_history",
@@ -394,6 +424,7 @@ mod tests {
         "import_dictionary",
         "open_permission",
         "remove_correction",
+        "remove_snippet",
         "remove_term",
         "reset_accessibility",
         "save_dictionary",

@@ -93,7 +93,7 @@ pub fn pick(ev: &KeyEvent) -> Option<Picked> {
     });
     Some(match typing {
         Some(what) => Picked::Refused(format!(
-            "{what} types text, so it can't be the dictation key. Try Right \u{2318}, Right \u{2325} or F13."
+            "{what} types text, so it can't be a Silas key. Try Right \u{2318}, Right \u{2325} or F13."
         )),
         None => Picked::Key(name),
     })
@@ -153,10 +153,46 @@ pub struct Machine {
     /// A second key that does the same, until the microphone key is first seen (`Settings::hotkey_fallback`).
     pub fallback: Option<Trigger>,
     pub tap_to_toggle: bool,
+    /// The key that types the last dictation again (`Settings::retype_hotkey`).
+    pub again: AgainKey,
     state: State,
     /// A `silas-ctl release` that arrived with nothing held. The press and release run as
     /// separate processes, so on a quick tap the release can reach Silas first.
     early_release: Option<Instant>,
+}
+
+/// The key that types the last dictation again. It acts on release, and only when no other key
+/// went down while it was held, so a modifier that is also part of shortcuts (Right ⌥ + E)
+/// never retypes.
+#[derive(Debug, Default)]
+pub struct AgainKey {
+    trigger: Option<Trigger>,
+    armed: bool,
+}
+
+impl AgainKey {
+    pub fn set(&mut self, trigger: Option<Trigger>) {
+        self.trigger = trigger;
+        self.armed = false;
+    }
+
+    /// True on the release that should type the last dictation again.
+    pub fn on_event(&mut self, ev: &KeyEvent) -> bool {
+        let Some(t) = self.trigger else { return false };
+        match t.matches(ev) {
+            Some(true) => {
+                self.armed = true; // a held key repeats; it stays armed
+                false
+            }
+            Some(false) => std::mem::take(&mut self.armed),
+            None => {
+                if ev.is_key_down && (ev.key.is_some() || ev.changed_modifier.is_some()) {
+                    self.armed = false;
+                }
+                false
+            }
+        }
+    }
 }
 
 impl Machine {
@@ -165,6 +201,7 @@ impl Machine {
             trigger,
             fallback: None,
             tap_to_toggle,
+            again: AgainKey::default(),
             state: State::Idle,
             early_release: None,
         }
@@ -545,7 +582,7 @@ mod tests {
             (Key::Comma, "The , key"),
         ] {
             match pick(&key(k, Modifiers::empty())) {
-                Some(Picked::Refused(m)) => assert!(m.starts_with(what) && m.contains("can't be the dictation key"), "{m}"),
+                Some(Picked::Refused(m)) => assert!(m.starts_with(what) && m.contains("can't be a Silas key"), "{m}"),
                 other => panic!("{k:?}: {other:?}"),
             }
         }
@@ -578,6 +615,27 @@ mod tests {
         let mut up = esc;
         up.is_key_down = false;
         assert_eq!(m.on_event(&up, t0 + Duration::from_secs(4)), Out::Nothing);
+    }
+
+    #[test]
+    fn the_again_key_fires_on_a_clean_release_only() {
+        let mut a = AgainKey::default();
+        let f14 = |down| KeyEvent { is_key_down: down, ..key(Key::F14, Modifiers::empty()) };
+        // Unset: nothing.
+        assert!(!a.on_event(&f14(true)) && !a.on_event(&f14(false)));
+        a.set(Some(Trigger::Key(Key::F14)));
+        assert!(!a.on_event(&f14(true)));
+        assert!(!a.on_event(&f14(true)), "a repeat is not a press");
+        assert!(a.on_event(&f14(false)));
+        assert!(!a.on_event(&f14(false)), "one release, one retype");
+        // A modifier used in a shortcut (Right ⌥ + E) never retypes.
+        a.set(Some(Trigger::Modifier(Modifiers::OPT_RIGHT)));
+        assert!(!a.on_event(&modifier(Modifiers::OPT_RIGHT, true)));
+        assert!(!a.on_event(&key(Key::E, Modifiers::OPT_RIGHT)));
+        assert!(!a.on_event(&modifier(Modifiers::OPT_RIGHT, false)));
+        // Alone, it does.
+        assert!(!a.on_event(&modifier(Modifiers::OPT_RIGHT, true)));
+        assert!(a.on_event(&modifier(Modifiers::OPT_RIGHT, false)));
     }
 
     #[test]

@@ -18,6 +18,10 @@ use crate::models::{self, Engine};
 use crate::store::{self, HistoryItem, Settings, Stats};
 use crate::typer;
 
+mod again;
+mod shaping;
+pub use again::Via;
+
 /// What the interface around the engine provides. The engine never names a UI toolkit:
 /// the Tauri app (Windows, Linux, Android) and the native Mac app both implement this.
 ///
@@ -146,6 +150,8 @@ pub struct Core {
     /// False while the interface has paused dictation: keys are ignored, nothing records.
     /// The model stays loaded.
     enabled: AtomicBool,
+    /// The id of the app the last dictation went to, for Settings (`shaping.rs`).
+    app: Mutex<Option<String>>,
 }
 
 pub type Shared = Arc<Core>;
@@ -424,6 +430,12 @@ impl Core {
         let trigger = Trigger::parse(&settings.hotkey).expect("default hotkey parses");
         let mut machine = Machine::new(trigger, settings.tap_to_toggle);
         machine.fallback = settings.hotkey_fallback.as_deref().and_then(Trigger::parse);
+        // A saved retype key this build can't use, or one that is now the dictation key, is dropped.
+        let again = again::trigger(&settings).unwrap_or_else(|_| {
+            settings.retype_hotkey = None;
+            None
+        });
+        machine.again.set(again);
         let mut history: Vec<HistoryItem> = store::load("history.json");
         history.truncate(store::HISTORY_KEEP);
         Arc::new(Core {
@@ -457,6 +469,7 @@ impl Core {
             dictations: AtomicU64::new(0),
             loading: Mutex::new(None),
             enabled: AtomicBool::new(true),
+            app: Mutex::new(None),
             settings: Mutex::new(settings),
         })
     }
@@ -978,13 +991,18 @@ impl Core {
         let mut settings = settings;
         let trigger = Trigger::parse(&settings.hotkey)
             .ok_or_else(|| format!("{} is not a key Silas can use", settings.hotkey))?;
+        // Choosing a key ends the second key. Otherwise it's the core's, like the model: the
+        // interface's copy may lag. The retype key is checked against this one.
+        settings.hotkey_fallback = {
+            let cur = self.settings.lock();
+            if settings.hotkey == cur.hotkey { cur.hotkey_fallback.clone() } else { None }
+        };
+        let again = again::trigger(&settings)?;
         settings.update_channel = settings.effective_channel().into();
         let old = {
             let mut cur = self.settings.lock();
             settings.model = cur.model.clone();
             settings.model_source = cur.model_source.clone();
-            // Choosing a key ends the second key. Otherwise it's the core's, like the model: the interface's copy may lag.
-            settings.hotkey_fallback = if settings.hotkey == cur.hotkey { cur.hotkey_fallback.clone() } else { None };
             std::mem::replace(&mut *cur, settings.clone())
         };
         {
@@ -992,6 +1010,7 @@ impl Core {
             m.trigger = trigger;
             m.fallback = settings.hotkey_fallback.as_deref().and_then(Trigger::parse);
             m.tap_to_toggle = settings.tap_to_toggle;
+            m.again.set(again);
         }
         self.sync_blocked();
         self.save_settings();
@@ -1088,6 +1107,7 @@ impl Core {
             self.feed_watch(ev, now);
         }
         self.act(out);
+        self.again_key(ev);
     }
 
     /// A pending "pick the hotkey" request takes this key event. True when it did. Escape
@@ -1433,8 +1453,10 @@ impl Core {
             }
         };
         let s = me.settings.lock().clone();
-        let mut text = me.dict.lock().apply(&raw, s.remove_fillers);
-        if text.trim().is_empty() {
+        let text = me.dict.lock().apply(&raw, s.remove_fillers);
+        // The app's style, spoken code and snippets (`core/shaping.rs`).
+        let (mut text, s) = me.shape(target.as_ref(), &text, s);
+        if nothing_to_type(&text) {
             me.set_status(Status::Ready, None);
             return;
         }
@@ -1695,6 +1717,11 @@ fn after_mic_opened(active: bool, pending: u8) -> MicOpened {
     }
 }
 
+/// An empty or blank result types nothing, but a spoken "new line" alone is a line break to type.
+fn nothing_to_type(text: &str) -> bool {
+    text.trim().is_empty() && !text.contains('\n')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1729,6 +1756,16 @@ mod tests {
 
     /// Review sol-F2 on #23: an error's notice went out while its status hid the overlay, and
     /// with the main window hidden nothing showed it.
+    #[test]
+    fn a_spoken_line_break_alone_is_still_typed() {
+        let none: &[crate::snippets::Snippet] = &[];
+        let shaped = crate::style::render("new line", crate::style::Style::Code, none);
+        assert_eq!(shaped, "\n");
+        assert!(!nothing_to_type(&shaped));
+        assert!(nothing_to_type(""));
+        assert!(nothing_to_type("  "));
+    }
+
     #[test]
     fn a_notice_keeps_the_overlay_up_until_it_runs_out() {
         let now = Instant::now();

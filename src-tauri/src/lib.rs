@@ -9,7 +9,7 @@ pub mod updates;
 
 // The engine lives in core/voice (polycarp-voice). Re-exported so `crate::core::Shared`,
 // `silas_lib::models` and the other old paths keep working.
-pub use polycarp_voice::{audio, benchmark, core, dictionary, focus, keys, models, permissions, store, typer};
+pub use polycarp_voice::{audio, benchmark, core, dictionary, focus, keys, models, permissions, store, style, typer};
 #[cfg(unix)]
 pub use polycarp_voice::ctl;
 
@@ -118,6 +118,8 @@ pub fn run() {
             commands::remove_term,
             commands::add_correction,
             commands::remove_correction,
+            commands::add_snippet,
+            commands::remove_snippet,
             commands::accept_pending,
             commands::dismiss_pending,
             commands::import_dictionary,
@@ -125,6 +127,7 @@ pub fn run() {
             commands::save_dictionary,
             commands::get_stats,
             commands::toggle_recording,
+            commands::type_again,
             commands::capture_hotkey,
             commands::open_permission,
             commands::reset_accessibility,

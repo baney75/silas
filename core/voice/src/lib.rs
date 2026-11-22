@@ -17,7 +17,10 @@ pub mod models;
 pub mod permissions;
 pub mod pieces;
 pub mod replay;
+pub mod snippets;
+pub mod spoken;
 pub mod store;
+pub mod style;
 pub mod typer;
 #[cfg(target_os = "linux")]
 pub mod wayland;

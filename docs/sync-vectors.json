@@ -1,0 +1,559 @@
+{
+  "about": "Shared test vectors for docs/sync.md. Both core/voice/src/sync.rs and SilasCore must pass all of them.",
+  "pairing": {
+    "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "code": "AAAQ-EAYE-AUDA-OCAJ-BIFQ-YDIO-B4IB-CEQT-CQKR-MFYY-DENB-WHA5-DYPQ",
+    "parse_ok": [
+      "AAAQ-EAYE-AUDA-OCAJ-BIFQ-YDIO-B4IB-CEQT-CQKR-MFYY-DENB-WHA5-DYPQ",
+      "aaaq eaye auda ocaj bifq ydio b4ib ceqt cqkr mfyy denb wha5 dypq",
+      "AAAQ-EAYE-AUDA-0CAJ-8IFQ-YDI0-84I8-CEQT-CQKR-MFYY-DEN8-WHA5-DYPQ"
+    ],
+    "parse_fail": [
+      "",
+      "AAAQ-EAYE-AUDA-OCAJ-BIFQ-YDIO-B4IB-CEQT-CQKR-MFYY-DENB-WHA5",
+      "!!!!"
+    ]
+  },
+  "group_id": "b9b033c85d70c13f",
+  "frame_key_hex": "5ce465de0c99f7481068ce3ee3b8266c81d949cdca5d6ca3eef327a23a7e31ab",
+  "frame": {
+    "nonce_hex": "6465666768696a6b6c6d6e6f",
+    "aad": "silas-sync v1",
+    "plaintext": "{\"type\":\"state\",\"v\":1,\"device\":\"00112233445566778899aabbccddeeff\",\"name\":\"Test\",\"platform\":\"linux\",\"sent\":1795370000000,\"entries\":{\"t:parish1\":{\"v\":{\"text\":\"Parish1\",\"added\":\"2026-11-22T00:00:00Z\",\"source\":\"edit\"},\"h\":{\"ms\":1795370000000,\"c\":0,\"d\":\"00112233445566778899aabbccddeeff\"}}}}",
+    "frame_hex": "6465666768696a6b6c6d6e6f6ba2cdb578fcdffea8442c43f137caa46c4591c3e6110b5fee08363bf2a0a1dec09807aa319677907e39f6d5c262c223e5b1bd39de6e67e5476ee44703caa92ebf1b5061cf51c3b62af49093cb539904cd71f1913c92f09a872317156638a29860933f4b105aa3762a1e83182fbf9a235bb46dd73d3439984b3c8b94dff8000940797ddba98626a3d87c0afd0f4501829156b6a58ac563a680cca84bcbf58ef03abd495a7c59c1cf1d873b1b6e4e80eeb8a61a6c91d0d1be591d00ee90b6ced05f2ba4ba33910a1adac2d6e94f7b9807a5464e81dc85c2a8b88185e0e7a4c3ba006ad80fd1bfa1e27f01f0237c7750fc337108bc23dbc1792f7f899f50c17567a2589b3f021f2dc389ac704858562a3120273d8e57003fb421f8e4a7b3de7999c48f42809b133009b907d3ea1c2e"
+  },
+  "norm": [
+    [
+      "  Parish1 ",
+      "parish1"
+    ],
+    [
+      "New\t York",
+      "new york"
+    ],
+    [
+      "Café",
+      "café"
+    ],
+    [
+      "ÄRGER",
+      "ärger"
+    ],
+    [
+      "Mc Donald's",
+      "mc donald's"
+    ]
+  ],
+  "hlc_order": [
+    {
+      "a": {
+        "ms": 1,
+        "c": 0,
+        "d": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "b": {
+        "ms": 1,
+        "c": 0,
+        "d": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "cmp": -1
+    },
+    {
+      "a": {
+        "ms": 2,
+        "c": 0,
+        "d": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "b": {
+        "ms": 1,
+        "c": 9,
+        "d": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "cmp": 1
+    },
+    {
+      "a": {
+        "ms": 1,
+        "c": 2,
+        "d": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "b": {
+        "ms": 1,
+        "c": 3,
+        "d": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "cmp": -1
+    },
+    {
+      "a": {
+        "ms": 5,
+        "c": 5,
+        "d": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "b": {
+        "ms": 5,
+        "c": 5,
+        "d": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "cmp": 0
+    }
+  ],
+  "clock": [
+    {
+      "name": "local change, clock behind wall time",
+      "clock": {
+        "ms": 100,
+        "c": 3
+      },
+      "now": 200,
+      "local": {
+        "ms": 200,
+        "c": 0
+      }
+    },
+    {
+      "name": "local change, same ms bumps counter",
+      "clock": {
+        "ms": 200,
+        "c": 3
+      },
+      "now": 200,
+      "local": {
+        "ms": 200,
+        "c": 4
+      }
+    },
+    {
+      "name": "local change, wall clock went back",
+      "clock": {
+        "ms": 300,
+        "c": 1
+      },
+      "now": 200,
+      "local": {
+        "ms": 300,
+        "c": 2
+      }
+    }
+  ],
+  "merge": [
+    {
+      "name": "concurrent edit: later ms wins",
+      "states": [
+        {
+          "t:x": {
+            "v": {
+              "text": "X1",
+              "added": "2026-11-22T00:00:00Z",
+              "source": "user"
+            },
+            "h": {
+              "ms": 10,
+              "c": 0,
+              "d": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        },
+        {
+          "t:x": {
+            "v": {
+              "text": "X2",
+              "added": "2026-11-22T00:00:00Z",
+              "source": "user"
+            },
+            "h": {
+              "ms": 11,
+              "c": 0,
+              "d": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          }
+        }
+      ],
+      "merged": {
+        "t:x": {
+          "v": {
+            "text": "X2",
+            "added": "2026-11-22T00:00:00Z",
+            "source": "user"
+          },
+          "h": {
+            "ms": 11,
+            "c": 0,
+            "d": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        }
+      }
+    },
+    {
+      "name": "same ms: higher counter wins",
+      "states": [
+        {
+          "t:x": {
+            "v": {
+              "text": "X1",
+              "added": "2026-11-22T00:00:00Z",
+              "source": "user"
+            },
+            "h": {
+              "ms": 10,
+              "c": 5,
+              "d": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        },
+        {
+          "t:x": {
+            "v": {
+              "text": "X2",
+              "added": "2026-11-22T00:00:00Z",
+              "source": "user"
+            },
+            "h": {
+              "ms": 10,
+              "c": 4,
+              "d": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          }
+        }
+      ],
+      "merged": {
+        "t:x": {
+          "v": {
+            "text": "X1",
+            "added": "2026-11-22T00:00:00Z",
+            "source": "user"
+          },
+          "h": {
+            "ms": 10,
+            "c": 5,
+            "d": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      }
+    },
+    {
+      "name": "same ms and counter: device id breaks the tie",
+      "states": [
+        {
+          "t:x": {
+            "v": {
+              "text": "X1",
+              "added": "2026-11-22T00:00:00Z",
+              "source": "user"
+            },
+            "h": {
+              "ms": 10,
+              "c": 0,
+              "d": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          }
+        },
+        {
+          "t:x": {
+            "v": {
+              "text": "X2",
+              "added": "2026-11-22T00:00:00Z",
+              "source": "user"
+            },
+            "h": {
+              "ms": 10,
+              "c": 0,
+              "d": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        }
+      ],
+      "merged": {
+        "t:x": {
+          "v": {
+            "text": "X1",
+            "added": "2026-11-22T00:00:00Z",
+            "source": "user"
+          },
+          "h": {
+            "ms": 10,
+            "c": 0,
+            "d": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        }
+      }
+    },
+    {
+      "name": "delete after edit wins",
+      "states": [
+        {
+          "c:parish one": {
+            "v": {
+              "from": "parish one",
+              "to": "Parish1",
+              "added": "2026-11-22T00:00:00Z",
+              "source": "user"
+            },
+            "h": {
+              "ms": 10,
+              "c": 0,
+              "d": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        },
+        {
+          "c:parish one": {
+            "v": null,
+            "h": {
+              "ms": 12,
+              "c": 0,
+              "d": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          }
+        }
+      ],
+      "merged": {
+        "c:parish one": {
+          "v": null,
+          "h": {
+            "ms": 12,
+            "c": 0,
+            "d": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        }
+      }
+    },
+    {
+      "name": "re-add after delete wins",
+      "states": [
+        {
+          "t:x": {
+            "v": null,
+            "h": {
+              "ms": 12,
+              "c": 0,
+              "d": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        },
+        {
+          "t:x": {
+            "v": {
+              "text": "X",
+              "added": "2026-11-22T00:00:00Z",
+              "source": "user"
+            },
+            "h": {
+              "ms": 13,
+              "c": 0,
+              "d": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          }
+        }
+      ],
+      "merged": {
+        "t:x": {
+          "v": {
+            "text": "X",
+            "added": "2026-11-22T00:00:00Z",
+            "source": "user"
+          },
+          "h": {
+            "ms": 13,
+            "c": 0,
+            "d": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        }
+      }
+    },
+    {
+      "name": "disjoint keys union",
+      "states": [
+        {
+          "t:x": {
+            "v": {
+              "text": "X",
+              "added": "2026-11-22T00:00:00Z",
+              "source": "user"
+            },
+            "h": {
+              "ms": 1,
+              "c": 0,
+              "d": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        },
+        {
+          "s:my address": {
+            "v": {
+              "trigger": "my address",
+              "text": "12 Benson Rd",
+              "added": "2026-11-22T00:00:00Z"
+            },
+            "h": {
+              "ms": 2,
+              "c": 0,
+              "d": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          }
+        },
+        {
+          "f:um": {
+            "v": {
+              "word": "um"
+            },
+            "h": {
+              "ms": 3,
+              "c": 0,
+              "d": "cccccccccccccccccccccccccccccccc"
+            }
+          }
+        }
+      ],
+      "merged": {
+        "f:um": {
+          "v": {
+            "word": "um"
+          },
+          "h": {
+            "ms": 3,
+            "c": 0,
+            "d": "cccccccccccccccccccccccccccccccc"
+          }
+        },
+        "s:my address": {
+          "v": {
+            "trigger": "my address",
+            "text": "12 Benson Rd",
+            "added": "2026-11-22T00:00:00Z"
+          },
+          "h": {
+            "ms": 2,
+            "c": 0,
+            "d": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        },
+        "t:x": {
+          "v": {
+            "text": "X",
+            "added": "2026-11-22T00:00:00Z",
+            "source": "user"
+          },
+          "h": {
+            "ms": 1,
+            "c": 0,
+            "d": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      }
+    },
+    {
+      "name": "three-way",
+      "states": [
+        {
+          "t:x": {
+            "v": {
+              "text": "A",
+              "added": "2026-11-22T00:00:00Z",
+              "source": "user"
+            },
+            "h": {
+              "ms": 5,
+              "c": 0,
+              "d": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          "t:y": {
+            "v": null,
+            "h": {
+              "ms": 9,
+              "c": 0,
+              "d": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        },
+        {
+          "t:x": {
+            "v": {
+              "text": "B",
+              "added": "2026-11-22T00:00:00Z",
+              "source": "user"
+            },
+            "h": {
+              "ms": 7,
+              "c": 0,
+              "d": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          },
+          "t:y": {
+            "v": {
+              "text": "Y",
+              "added": "2026-11-22T00:00:00Z",
+              "source": "user"
+            },
+            "h": {
+              "ms": 8,
+              "c": 0,
+              "d": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          }
+        },
+        {
+          "t:x": {
+            "v": {
+              "text": "C",
+              "added": "2026-11-22T00:00:00Z",
+              "source": "user"
+            },
+            "h": {
+              "ms": 6,
+              "c": 0,
+              "d": "cccccccccccccccccccccccccccccccc"
+            }
+          },
+          "t:z": {
+            "v": {
+              "text": "Z",
+              "added": "2026-11-22T00:00:00Z",
+              "source": "user"
+            },
+            "h": {
+              "ms": 1,
+              "c": 0,
+              "d": "cccccccccccccccccccccccccccccccc"
+            }
+          }
+        }
+      ],
+      "merged": {
+        "t:x": {
+          "v": {
+            "text": "B",
+            "added": "2026-11-22T00:00:00Z",
+            "source": "user"
+          },
+          "h": {
+            "ms": 7,
+            "c": 0,
+            "d": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        },
+        "t:y": {
+          "v": null,
+          "h": {
+            "ms": 9,
+            "c": 0,
+            "d": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "t:z": {
+          "v": {
+            "text": "Z",
+            "added": "2026-11-22T00:00:00Z",
+            "source": "user"
+          },
+          "h": {
+            "ms": 1,
+            "c": 0,
+            "d": "cccccccccccccccccccccccccccccccc"
+          }
+        }
+      }
+    }
+  ]
+}
