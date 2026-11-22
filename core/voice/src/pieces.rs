@@ -401,11 +401,20 @@ impl Cutter {
     }
 }
 
-/// Whether release can take the guess as the rest's text: it starts where the pieces end and only silence follows it.
+/// Whether release can take the guess as the rest's text: it starts where the pieces end and nothing after it stands
+/// out from the guess's own pause. Judged against that pause as well as `SILENCE_RMS`, the way `find_cut` judges a
+/// pause against the room, so a soft last word in a quiet room still counts as speech and the whole rest is transcribed.
 pub fn guess_ends_it(done: &Done, rest: &[f32]) -> bool {
-    done.guess
-        .as_ref()
-        .is_some_and(|g| g.from == done.raw_samples && is_silence(&rest[g.samples.min(rest.len())..]))
+    done.guess.as_ref().is_some_and(|g| {
+        let end = g.samples.min(rest.len());
+        let pause = (GUESS_PAUSE_SECONDS * RATE as f32) as usize;
+        let room = rms(&rest[end.saturating_sub(pause)..end]);
+        let quiet = (room.max(0.0005) * 3.0).min(SILENCE_RMS);
+        g.from == done.raw_samples
+            && rest[end..]
+                .chunks((RATE as f32 * FRAME_SECONDS) as usize)
+                .all(|f| rms(f) < quiet)
+    })
 }
 
 /// The whole dictation's text: what the pieces got through, then `rest`, the audio after them. If a guess covers the
@@ -734,6 +743,16 @@ mod tests {
     #[test]
     fn a_guess_that_speech_came_after_is_never_typed() {
         let rest = [speech(2.0), pause(0.5), speech(0.5)].concat();
+        let text = transcript(guessed("Guess.", 0, GUESSED), &rest, redo).unwrap();
+        assert_eq!(text, format!("Before. redo {}", rest.len()));
+    }
+
+    #[test]
+    fn a_soft_word_after_a_guess_is_still_transcribed() {
+        // #69 r1 first-F1: "thanks" said softly, under SILENCE_RMS but well above the room, after a guessed pause.
+        let soft: Vec<f32> = (0..(0.4 * RATE as f32) as usize).map(|i| 0.0028 * (i as f32 * 0.05).sin()).collect();
+        assert!(is_silence(&soft), "the word is quieter than SILENCE_RMS");
+        let rest = [speech(2.0), pause(0.5), soft, pause(0.3)].concat();
         let text = transcript(guessed("Guess.", 0, GUESSED), &rest, redo).unwrap();
         assert_eq!(text, format!("Before. redo {}", rest.len()));
     }
