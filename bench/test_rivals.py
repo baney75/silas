@@ -183,6 +183,19 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("busy machine", err.getvalue())
         self.assertEqual(path.read_text(), before)
 
+    def test_a_rivals_busy_times_are_not_recorded_beside_quiet_silas_rows(self):
+        # #71 r1 first-F1: quiet Silas rows let Hex's busy times through, flattering Silas.
+        busy = ROWS / "under-load/hex-api.jsonl.gz"
+        self.assertGreater(rivals.machine_load(score.read_rows(busy), silas=False), rivals.RIVAL_BUSY_LOAD)
+        path = ROOT / "bench/rivals/opencode.json"
+        before = path.read_text()
+        with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+            rivals.main(["opencode", "--silas", str(ROWS / "silas-real-time.jsonl.gz"), "--rival", str(busy),
+                         "--gate", "latency", "--cpu", CPU, "--record"])
+        self.assertIn("busy machine", err.getvalue())
+        self.assertIn(busy.name, err.getvalue())
+        self.assertEqual(path.read_text(), before)
+
     def test_rows_that_skip_clips_fail(self):
         rows = score.read_rows(ROWS / "silas-fast.jsonl.gz")
         easy = Path(tempfile.mkdtemp()) / "easy.jsonl"

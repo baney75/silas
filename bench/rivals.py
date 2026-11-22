@@ -129,11 +129,16 @@ POLLED = ("time_to_first_word_ms", "wait_after_key_up_ms", "wait_after_key_up_p9
 # on a quiet chapel1. Above this, other work is slowing the run, and a rival that uses every thread (Hex) slows far
 # more than Silas, so times taken then would misstate both and set the check's bar where a quiet run never misses it.
 BUSY_LOAD = 2.0
+# A rival's own real-time rows count its own threads too: on a busy chapel1 Hex's read 10.5 where Silas's beside them
+# read 9.5. Above this its times were taken on a busy machine, whatever Silas's rows say (#71 r1 first-F1).
+RIVAL_BUSY_LOAD = 6.0
 
 
-def machine_load(rows):
-    """Median 1-minute load average over Silas's real-time rows, or None when they record none."""
-    loads = [r["load1"] for r in rows if r.get("engine") == "silas" and r.get("paced") and r.get("load1") is not None]
+def machine_load(rows, silas=True):
+    """Median 1-minute load average over the real-time rows of Silas (or, with silas=False, any other engine), or None
+    when they record none."""
+    loads = [r["load1"] for r in rows
+             if (r.get("engine") == "silas") == silas and r.get("paced") and r.get("load1") is not None]
     return statistics.median(loads) if loads else None
 
 
@@ -299,6 +304,10 @@ def main(argv=None):
                 if (busy := machine_load(load(f))) is not None and busy > BUSY_LOAD:
                     p.error(f"--record of latency: {f.name} ran on a busy machine (load average {busy:.1f}, over"
                             f" {BUSY_LOAD}); time both sides again when it is quiet, or record --gate accuracy,setup")
+            for f in a.rival_rows:
+                if (busy := machine_load(load(f), silas=False)) is not None and busy > RIVAL_BUSY_LOAD:
+                    p.error(f"--record of latency: {f.name} ran on a busy machine (load average {busy:.1f}, over"
+                            f" {RIVAL_BUSY_LOAD}); time both sides again when it is quiet, or record --gate accuracy,setup")
         rival = best([measure(load(f), manifest) for f in a.rival_rows], results["metrics"])
         fails = [] if a.allow_worse else check(results, current, gates, cpu, new_rival=rival)
         if fails or problems:
