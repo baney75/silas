@@ -122,6 +122,9 @@ pub struct Core {
     typed_over: AtomicBool,
     /// The user pressed Escape while Silas was typing: stop, and leave the rest in History.
     stop_typing: AtomicBool,
+    /// How the key gesture ended while the mic was still opening: `END_*`. Set under the
+    /// recording lock, so `start_recording` sees it or the end sees the recording.
+    pending_end: std::sync::atomic::AtomicU8,
     /// When the last busy cue played (`busy_cue_due`).
     last_busy: Mutex<Option<Instant>>,
     /// Bumped per recording so the length limit only stops the one it was set for.
@@ -442,6 +445,7 @@ impl Core {
             mods_held: AtomicBool::new(false),
             typed_over: AtomicBool::new(false),
             stop_typing: AtomicBool::new(false),
+            pending_end: std::sync::atomic::AtomicU8::new(END_NONE),
             last_busy: Mutex::new(None),
             recording_gen: std::sync::atomic::AtomicU64::new(0),
             recover_gen: std::sync::atomic::AtomicU64::new(0),
@@ -1123,6 +1127,11 @@ impl Core {
             if !self.is_enabled() {
                 return;
             }
+            // As with the physical key: nothing starts while the last dictation is being typed.
+            if self.typing.load(Ordering::Relaxed) && matches!(command, Control::Press | Control::Toggle) {
+                self.refuse(Notice::Busy, "Still typing your last dictation. Press Escape to stop it.");
+                return;
+            }
             let out = {
                 let mut m = self.machine.lock();
                 match command {
@@ -1251,6 +1260,7 @@ impl Core {
         // The overlay comes up now, before the microphone is open (that can take a moment with
         // a Bluetooth headset); its dot fills in when the first sound arrives.
         self.set_status(Status::Recording, None);
+        self.pending_end.store(END_NONE, Ordering::Relaxed);
         let device = self.settings.lock().microphone.clone();
         let host = self.host.clone();
         match Recording::start(device.as_deref(), move |lvl| host.level(lvl)) {
@@ -1274,15 +1284,27 @@ impl Core {
                     // under the recording lock means a cancel either sees this recording or
                     // happened before the check.
                     let mut live = self.recording.lock();
-                    if !self.machine.lock().is_active() {
-                        drop(live);
-                        self.target.lock().take();
-                        self.pieces.lock().take();
-                        drop(r);
-                        self.set_status(Status::Ready, None);
-                        return;
+                    let active = self.machine.lock().is_active();
+                    match after_mic_opened(active, self.pending_end.load(Ordering::Relaxed)) {
+                        MicOpened::Keep => *live = Some(Live { rec: r, started: Instant::now(), pressed }),
+                        MicOpened::Drop => {
+                            drop(live);
+                            self.target.lock().take();
+                            self.pieces.lock().take();
+                            drop(r);
+                            self.set_status(Status::Ready, None);
+                            return;
+                        }
+                        // Released before the mic opened (a slow Bluetooth headset): the
+                        // release found nothing to finish, so finish what was heard now.
+                        MicOpened::Finish => {
+                            *live = Some(Live { rec: r, started: Instant::now(), pressed });
+                            drop(live);
+                            self.pending_end.store(END_NONE, Ordering::Relaxed);
+                            self.finish_recording(Ending::Key);
+                            return;
+                        }
                     }
-                    *live = Some(Live { rec: r, started: Instant::now(), pressed });
                 }
                 let gen = self.recording_gen.fetch_add(1, Ordering::Relaxed) + 1;
                 self.cue("start");
@@ -1326,7 +1348,13 @@ impl Core {
 
     fn cancel_recording(self: &Shared) {
         // Release the lock before set_status, which waits on the main thread for the tray.
-        let recording = self.recording.lock().take();
+        let recording = {
+            let mut live = self.recording.lock();
+            if live.is_none() {
+                self.pending_end.store(END_CANCEL, Ordering::Relaxed);
+            }
+            live.take()
+        };
         self.target.lock().take();
         self.pieces.lock().take();
         if let Some(live) = recording {
@@ -1336,7 +1364,14 @@ impl Core {
     }
 
     fn finish_recording(self: &Shared, ending: Ending) {
-        let recording = self.recording.lock().take();
+        let recording = {
+            let mut live = self.recording.lock();
+            if live.is_none() {
+                // A release while the mic is still opening: start_recording finishes it.
+                self.pending_end.store(END_FINISH, Ordering::Relaxed);
+            }
+            live.take()
+        };
         let Some(live) = recording else {
             return;
         };
@@ -1638,9 +1673,59 @@ pub fn overlay_shown(status: Status, enabled: bool, notice_until: Option<Instant
     (enabled && overlay_status(status)) || notice_until.is_some_and(|until| now < until)
 }
 
+const END_NONE: u8 = 0;
+const END_FINISH: u8 = 1;
+const END_CANCEL: u8 = 2;
+
+#[derive(Debug, PartialEq)]
+enum MicOpened {
+    Keep,
+    Finish,
+    Drop,
+}
+
+/// What to do with a mic that just opened. `active`: the key gesture is still going. `pending`:
+/// how it ended if the end already ran and found no recording. An end that hasn't run yet will
+/// find the recording kept here.
+fn after_mic_opened(active: bool, pending: u8) -> MicOpened {
+    match (active, pending) {
+        (true, _) | (false, END_NONE) => MicOpened::Keep,
+        (false, END_FINISH) => MicOpened::Finish,
+        _ => MicOpened::Drop,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review first-F2 on #56: a release before a slow mic opened threw the dictation away,
+    /// the same as a cancel.
+    #[test]
+    fn a_release_before_the_mic_opens_still_finishes_and_a_cancel_drops() {
+        assert_eq!(after_mic_opened(false, END_FINISH), MicOpened::Finish);
+        assert_eq!(after_mic_opened(false, END_CANCEL), MicOpened::Drop);
+        // The end hasn't run yet: keep it, and the end takes it.
+        assert_eq!(after_mic_opened(false, END_NONE), MicOpened::Keep);
+        assert_eq!(after_mic_opened(true, END_NONE), MicOpened::Keep);
+    }
+
+    /// Review first-F1 on #56: `silas-ctl press` while typing went on to start a recording
+    /// instead of saying why nothing starts, as the physical key does.
+    #[test]
+    fn a_control_press_while_typing_is_refused_as_busy() {
+        let _store = STORE_LOCK.lock();
+        let (core, seen, dir) = seen_core("ctl-typing");
+        core.typing.store(true, Ordering::Relaxed);
+        core.on_control(Control::Press, Instant::now());
+        assert_eq!(
+            seen.notices(),
+            vec![("busy".to_string(), "Still typing your last dictation. Press Escape to stop it.".to_string())]
+        );
+        assert!(!core.machine.lock().is_active());
+        assert!(core.recording.lock().is_none());
+        done(dir);
+    }
 
     /// Review sol-F2 on #23: an error's notice went out while its status hid the overlay, and
     /// with the main window hidden nothing showed it.

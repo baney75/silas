@@ -49,7 +49,8 @@ silas.hold("SUPER + SHIFT + code:201") -- optional: the Copilot key
 The bindings run `silas-ctl press` and `silas-ctl release`. Hyprland swallows the keys, so
 apps never see them. Silas types through Wayland's virtual-keyboard protocol, floats its
 overlay as a layer surface that never takes the keyboard, and on Hyprland puts the text back
-in the window where you started. pacman updates the package, so Silas doesn't update itself.
+in the window where you started. The package is built on your machine and isn't in a repository,
+so `pacman -Syu` won't update it and Silas doesn't update itself: run the install line again to update.
 If you used voxtype, stop it so two apps don't share the keys:
 `systemctl --user disable --now voxtype`.
 
