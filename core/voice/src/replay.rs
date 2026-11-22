@@ -70,6 +70,7 @@ pub fn live(
     let pieces = Pieces::start(raw.clone(), rate, timed(model, &compute));
     std::thread::sleep((pressed + seconds).saturating_duration_since(Instant::now()));
     let released = Instant::now();
+    pieces.key_up();
     let quiet = pieces::ends_quiet(&raw.lock(), rate);
     std::thread::sleep(tail_for(Ending::Key, quiet));
     rec.stop();
@@ -122,6 +123,9 @@ pub fn simulated(
         now += POLL.as_secs_f64();
         if now >= stop_at {
             break;
+        }
+        if now >= key_up {
+            cutter.key_up();
         }
         let len = ((now * rate) as usize).min(buffer.len());
         let want = cutter.want(&buffer[..len]);
@@ -239,18 +243,17 @@ mod tests {
     }
 
     #[test]
-    fn a_short_clip_is_one_transcription_guessed_in_the_tail() {
+    fn a_short_clip_is_one_transcription_after_release() {
         let audio = speech(2.0);
         let d = simulated(&audio, &mut counting(), |t| t.to_uppercase()).unwrap();
-        // The clip ends mid-word, so release waits a tail, and the worker guesses once the tail has been quiet a
-        // moment: the whole clip and some of the tail, then a tail's worth of padding.
-        assert_eq!((d.pieces, d.guesses, d.guess_used), (0, 1, true));
+        // The clip ends mid-word: release waits a tail, and the quiet in the tail gets no guess.
+        assert_eq!((d.pieces, d.guesses), (0, 0));
+        // The rest includes the tail of quiet room.
         let tail = (TAIL.as_secs_f64() * RATE as f64) as usize;
-        let n: usize = d.raw.trim_end_matches(" samples.").parse().unwrap();
-        assert!(n > audio.len() + tail + tail / 2 && n <= audio.len() + 2 * tail, "{n}");
+        assert_eq!(d.raw, format!("{} samples.", audio.len() + tail));
         assert_eq!(d.text, d.raw.to_uppercase());
         assert!(
-            d.after_release >= Duration::from_millis(100) && d.after_release < TAIL + Duration::from_millis(100),
+            d.after_release >= TAIL && d.after_release < TAIL + Duration::from_millis(100),
             "{:?}",
             d.after_release
         );
@@ -270,10 +273,9 @@ mod tests {
             .filter_map(|n| n.trim().parse().ok())
             .collect();
         let tail = (TAIL.as_secs_f64() * RATE as f64) as usize;
-        // The piece is the guess made in that pause and the rest is the guess made in the tail, each padded with a
-        // tail's quiet. Together they cover every sample once, and part of the tail.
-        let sum = words.iter().sum::<usize>();
-        assert!(sum > audio.len() + 2 * tail + tail / 2 && sum <= audio.len() + 3 * tail, "{sum}");
+        // The piece is the guess made in that pause, which the model heard with a tail's quiet after it; the rest
+        // has the real tail. Together they cover every sample once.
+        assert_eq!(words.iter().sum::<usize>(), audio.len() + 2 * tail);
     }
 
     #[test]
@@ -324,11 +326,11 @@ mod tests {
     fn speech_after_the_guess_throws_it_away() {
         let audio = [speech(2.0), pause(0.6), speech(1.5)].concat();
         let d = simulated(&audio, &mut counting(), |t| t.to_string()).unwrap();
-        // The guess in the pause is thrown away; the one made in the tail covers the whole clip.
-        assert_eq!(d.guesses, 2);
-        assert!(d.guess_used);
-        let n: usize = d.raw.trim_end_matches(" samples.").parse().unwrap();
-        assert!(n > audio.len() + tail() && n <= audio.len() + 2 * tail(), "{n}");
+        assert_eq!(d.guesses, 1);
+        assert!(!d.guess_used);
+        // One transcription of everything, the last word's tail included: the guess is nowhere in it.
+        assert_eq!(d.raw, format!("{} samples.", audio.len() + tail()));
+        assert!(d.after_release >= TAIL);
     }
 
     #[test]

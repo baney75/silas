@@ -1309,6 +1309,9 @@ impl Core {
         let me = self;
         let Live { rec, started, pressed } = live;
         let released = Instant::now();
+        if let Some(p) = &pieces {
+            p.key_up();
+        }
         // A short tail first, so the last word isn't cut off; after that, what's said isn't
         // dictation. If the speaker had already stopped, there is no last word to wait for.
         let quiet = ending == Ending::Key && {

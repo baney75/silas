@@ -43,13 +43,13 @@ and how it was built are in `README.md`.
 
 `silas-bench run` replays each clip through the code a dictation runs (`core/voice/src/replay.rs`): the clip
 is fed into the same `Recording` buffer a microphone fills, 10 ms at a time in real time; the `Pieces` worker
-cuts and transcribes at pauses while the clip plays, and guesses the ending at each short pause; release
-waits the same tail as the app (200 ms, or none when the last 250 ms were already silent), takes the guess if
-only silence followed it or else transcribes the rest, and joins it (`pieces::transcript`, shared with
-`core.rs`), then the dictionary runs (fillers removed, as the app's default settings do; `--dict` loads a saved
-dictionary, `--keep-fillers` turns removal off). Typing is not included. The guesses run on the same worker
-thread and the same model as the pieces, so their CPU is in `cpu_seconds`, and a guess still running at key up
-is waited for inside `t_final_ms`.
+cuts and transcribes at pauses while the clip plays, and until key up it also guesses the ending at each short
+pause. Release waits the same tail as the app (200 ms, or none when the last 250 ms were already silent), takes
+the guess if only silence followed it or else transcribes the rest, and joins it (`pieces::transcript`, shared
+with `core.rs`), then the dictionary runs (fillers removed, as the app's default settings do; `--dict` loads a
+saved dictionary, `--keep-fillers` turns removal off). Typing is not included. The guesses run on the same
+worker thread and the same model as the pieces, so their CPU is in `cpu_seconds`, and a guess still running at
+key up is waited for inside `t_final_ms`.
 
 One row per clip in `results.jsonl`:
 
@@ -133,8 +133,10 @@ Intel one. GitHub's runners are not all one CPU, so `ratchet.json` keeps baselin
 
 One limit remains: under `--fast` the pieces worker still waits on the model's real speed, so on a much slower or
 faster machine a long clip can be cut at different pauses and its text can change by a word or two. Only the one
-longform clip in the ratchet subset is long enough to be cut. A guess made while the worker was busy with a
-piece hears more of the pause, so a guess after a piece can shift the same way.
+longform clip in the ratchet subset is long enough to be cut. A guess always ends 120 ms after the last speech,
+however late the worker gets to it, so its text does not depend on the machine's speed; two `--fast` runs at
+different loads matched on all 40 clips (2026-11-22). Whether a short pause gets a guess at all can, when the
+worker is still busy and speech comes back first, but such a guess would have been thrown away.
 
 ## Rivals
 

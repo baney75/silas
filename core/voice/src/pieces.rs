@@ -239,7 +239,8 @@ pub struct Cutter {
     heard: usize,
     /// Where the last frame louder than silence ended.
     spoke_until: usize,
-    /// False after a guess fails: release does the work the ordinary way.
+    /// False after a guess fails, or once the key is up: release does the work the ordinary way. A guess made in the
+    /// tail would hear a different end of quiet than release does, and could change the last words.
     guessing: bool,
     pub done: Done,
 }
@@ -296,7 +297,14 @@ impl Cutter {
         {
             return None;
         }
-        Some((from, self.spoke_until, self.heard))
+        // The guess ends a fixed pause after the speech, however late the worker got to it, so the model hears the
+        // same audio on a busy machine as on an idle one.
+        Some((from, self.spoke_until, self.spoke_until + pause))
+    }
+
+    /// The key is up: no more guesses. Pieces still get cut during the tail, as they always were.
+    pub fn key_up(&mut self) {
+        self.guessing = false;
     }
 
     /// What to copy out of the buffer now. Call it holding the buffer's lock; `job` does the work after.
@@ -435,6 +443,7 @@ pub fn transcript(
 
 pub struct Pieces {
     stop: Arc<AtomicBool>,
+    released: Arc<AtomicBool>,
     thread: Option<JoinHandle<Done>>,
 }
 
@@ -447,6 +456,8 @@ impl Pieces {
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
+        let released = Arc::new(AtomicBool::new(false));
+        let key_up = released.clone();
         let thread = std::thread::spawn(move || {
             let mut cutter = Cutter::new(rate);
             while !stopping.load(Ordering::Relaxed) {
@@ -454,6 +465,9 @@ impl Pieces {
                 std::thread::park_timeout(POLL);
                 if stopping.load(Ordering::Relaxed) {
                     break;
+                }
+                if key_up.load(Ordering::Relaxed) {
+                    cutter.key_up();
                 }
                 let want = cutter.want(&raw.lock());
                 let Some(job) = cutter.job(want) else {
@@ -468,8 +482,14 @@ impl Pieces {
         });
         Self {
             stop,
+            released,
             thread: Some(thread),
         }
+    }
+
+    /// The key came up: stop guessing, keep cutting pieces through the tail.
+    pub fn key_up(&self) {
+        self.released.store(true, Ordering::Relaxed);
     }
 
     /// Stops looking and returns what's done, waiting for a piece in progress.
@@ -807,7 +827,24 @@ mod tests {
         assert_eq!(*calls.lock(), 1, "the same pause is guessed once");
         assert_eq!((done.pieces, done.guesses, done.raw_samples), (0, 1, 0));
         let g = done.guess.expect("a guess");
-        assert!(g.upto >= 2 * RATE as usize + 4_800 && g.samples == g.upto, "{g:?}");
+        let pause = (GUESS_PAUSE_SECONDS * RATE as f32) as usize;
+        assert!(g.upto == 2 * RATE as usize + pause && g.samples == g.upto, "{g:?}");
+    }
+
+    #[test]
+    fn nothing_is_guessed_after_key_up() {
+        let audio = [speech(2.0), pause(0.5)].concat();
+        let mut cutter = Cutter::new(RATE);
+        cutter.key_up();
+        let want = cutter.want(&audio);
+        assert!(cutter.job(want).is_none());
+
+        let raw = Arc::new(Mutex::new(audio));
+        let pieces = Pieces::start(raw, RATE, |_| Ok("x".into()));
+        pieces.key_up();
+        std::thread::sleep(Duration::from_millis(300));
+        let done = pieces.finish();
+        assert_eq!((done.guesses, done.guess), (0, None));
     }
 
     #[test]
