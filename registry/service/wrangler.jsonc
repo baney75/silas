@@ -10,9 +10,8 @@
     {
       "binding": "DB",
       "database_name": "silas-registry",
-      // Placeholder. The maintainer replaces it with the id `wrangler d1 create silas-registry`
-      // prints (README, deploy step 2).
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      // The Personal account's database, made by `wrangler d1 create silas-registry` (README, deploy step 2).
+      "database_id": "2ad7b9d1-1a09-4cca-a593-5342695b08af",
       "migrations_dir": "migrations"
     }
   ]
