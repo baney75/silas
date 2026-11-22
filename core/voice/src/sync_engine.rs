@@ -41,6 +41,12 @@ pub const FOLDER_POLL: Duration = Duration::from_secs(60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const FOLDER_NAME: &str = "Silas Sync";
+/// Opens refuse a link at the last part of the path. libc is a Linux-only dependency here, so
+/// macOS spells out the value from <sys/fcntl.h>.
+#[cfg(target_os = "linux")]
+const O_NOFOLLOW: i32 = libc::O_NOFOLLOW;
+#[cfg(target_os = "macos")]
+const O_NOFOLLOW: i32 = 0x0100;
 const MAX_DEVICES: usize = 64;
 
 /// The live dictionary, however the host keeps it.
@@ -522,10 +528,12 @@ impl SyncEngine {
         let folder = match folder.map(str::trim).filter(|f| !f.is_empty()) {
             None => None,
             Some(f) => {
-                let path = expand_home(f);
+                // Through components, so a trailing slash can't make the link check below follow it.
+                let path: PathBuf = expand_home(f).components().collect();
                 if !path.is_dir() {
                     bail!("There's no folder at {}.", path.display());
                 }
+                real_dir(&path)?;
                 Some(path.to_string_lossy().into_owned())
             }
         };
@@ -770,8 +778,13 @@ impl SyncEngine {
             None
         };
         let watcher = folder.and_then(|f| {
-            let dir = Path::new(&f).join(FOLDER_NAME);
-            let _ = std::fs::create_dir_all(&dir);
+            let root: PathBuf = Path::new(&f).components().collect();
+            let dir = root.join(FOLDER_NAME);
+            if real_dir(&root).is_ok() {
+                let _ = std::fs::create_dir(&dir);
+            }
+            // A linked folder is refused on every round, and said so there; nothing to watch.
+            real_dir(&dir).ok()?;
             watch_folder(&dir, &device, tx.clone()).map_err(|e| log::info!("sync: folder watching is off ({e}); polling")).ok()
         });
 
@@ -875,8 +888,17 @@ impl SyncEngine {
 
     fn folder_with(&self, ep: &Epoch) -> Result<()> {
         let Some(folder) = self.st.lock().folder.clone() else { return Ok(()) };
-        let dir = Path::new(&folder).join(FOLDER_NAME);
-        std::fs::create_dir_all(&dir).with_context(|| format!("making {}", dir.display()))?;
+        // Anyone who can write to a shared folder could swap it, or `Silas Sync`, for a link to
+        // somewhere this device would then write. Refuse both.
+        let root: PathBuf = Path::new(&folder).components().collect();
+        real_dir(&root)?;
+        let dir = root.join(FOLDER_NAME);
+        match std::fs::create_dir(&dir) {
+            Err(e) if e.kind() != io::ErrorKind::AlreadyExists => {
+                return Err(e).with_context(|| format!("making {}", dir.display()))
+            }
+            _ => real_dir(&dir)?,
+        }
         let own = self.st.lock().device.clone();
         let fk = ep.key.frame_key();
         let own_file = dir.join(format!("{own}.silas"));
@@ -893,7 +915,7 @@ impl SyncEngine {
             if self.folder_seen.lock().get(&path) == Some(&stamp) {
                 continue;
             }
-            let Ok(bytes) = std::fs::read(&path) else { continue };
+            let Ok(bytes) = read_no_link(&path) else { continue };
             self.folder_seen.lock().insert(path.clone(), stamp);
             let Some(plain) = fk.open(&bytes) else {
                 self.stranger(&path.file_name().unwrap_or_default().to_string_lossy());
@@ -918,9 +940,7 @@ impl SyncEngine {
             (digest, StateMessage::new(&st.device, &self.name_of(&st), platform(), &st.entries).seal(&fk))
         };
         if *self.folder_written.lock() != Some(digest) || !own_file.exists() {
-            let tmp = dir.join(format!(".{own}.silas.tmp"));
-            std::fs::write(&tmp, &frame).with_context(|| format!("writing {}", tmp.display()))?;
-            std::fs::rename(&tmp, &own_file)?;
+            write_no_link(&dir, &own, &frame, &own_file)?;
             *self.folder_written.lock() = Some(digest);
         }
         Ok(())
@@ -1031,6 +1051,61 @@ fn watch_folder(dir: &Path, own: &str, tx: mpsc::Sender<Cmd>) -> notify::Result<
     })?;
     w.watch(dir, notify::RecursiveMode::NonRecursive)?;
     Ok(w)
+}
+
+/// `path` itself is a directory: not a link to one.
+fn real_dir(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.is_dir() => Ok(()),
+        Ok(m) if m.file_type().is_symlink() => {
+            bail!("{} is a link to another place, not a folder; sync won't use it.", path.display())
+        }
+        Ok(_) => bail!("{} isn't a folder.", path.display()),
+        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
+fn no_link(o: &mut std::fs::OpenOptions) -> &mut std::fs::OpenOptions {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.custom_flags(O_NOFOLLOW);
+    }
+    o
+}
+
+/// Another device's file, at most [`MAX_FRAME`] bytes, refusing a link swapped in after the
+/// directory listing.
+fn read_no_link(path: &Path) -> io::Result<Vec<u8>> {
+    let f = no_link(std::fs::OpenOptions::new().read(true)).open(path)?;
+    if !f.metadata()?.is_file() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a file"));
+    }
+    let mut bytes = Vec::new();
+    f.take(MAX_FRAME as u64 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_FRAME {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "too large"));
+    }
+    Ok(bytes)
+}
+
+/// Write `frame` to a fresh file with a random name in `dir`, then rename it over `dest`.
+/// create_new fails on anything already at that name, a link included, and O_NOFOLLOW says so
+/// twice, so nothing planted in a shared folder gets written through.
+fn write_no_link(dir: &Path, own: &str, frame: &[u8], dest: &Path) -> Result<()> {
+    let tmp = dir.join(format!(".{own}.{}.silas.tmp", crate::sync::new_device_id()));
+    let mut f = no_link(std::fs::OpenOptions::new().write(true).create_new(true))
+        .open(&tmp)
+        .with_context(|| format!("making {}", tmp.display()))?;
+    let done = f.write_all(frame).and_then(|_| {
+        drop(f);
+        std::fs::rename(&tmp, dest)
+    });
+    if let Err(e) = done {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e).with_context(|| format!("writing {}", dest.display()));
+    }
+    Ok(())
 }
 
 fn expand_home(path: &str) -> PathBuf {
@@ -1277,6 +1352,46 @@ mod tests {
         assert_eq!(s.read(&mut buf).unwrap_or(0), 0, "no answer once sync is off");
         assert!(!has_term(&dict, "Late"));
         assert!(e.status().devices.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_folder_never_writes_through_a_link() {
+        use std::os::unix::fs::symlink;
+        let (e, _d, dir) = engine("links", None);
+        let own = e.status().device_id;
+        let victim = dir.join("victim.txt");
+        std::fs::write(&victim, "precious").unwrap();
+
+        // Someone who can write to a shared folder plants a link where the temp file used to go.
+        let folder = dir.join("shared");
+        let sync_dir = folder.join(FOLDER_NAME);
+        std::fs::create_dir_all(&sync_dir).unwrap();
+        symlink(&victim, sync_dir.join(format!(".{own}.silas.tmp"))).unwrap();
+        e.set_folder(Some(folder.to_str().unwrap())).unwrap();
+        e.sync_folder().unwrap();
+        assert!(std::fs::read(&victim).unwrap() == b"precious", "the linked file was written through");
+        let mine = std::fs::symlink_metadata(sync_dir.join(format!("{own}.silas"))).unwrap();
+        assert!(mine.is_file(), "its own file is a real file, not a link");
+
+        // A `Silas Sync` that is a link to somewhere else is refused, and nothing lands there.
+        let folder2 = dir.join("shared2");
+        let elsewhere = dir.join("elsewhere");
+        std::fs::create_dir_all(&folder2).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        symlink(&elsewhere, folder2.join(FOLDER_NAME)).unwrap();
+        e.set_folder(Some(folder2.to_str().unwrap())).unwrap();
+        assert!(e.sync_folder().is_err());
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0, "nothing written through the link");
+
+        // So is a sync folder that is itself a link.
+        let real = dir.join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        symlink(&real, dir.join("linked")).unwrap();
+        assert!(e.set_folder(Some(dir.join("linked").to_str().unwrap())).is_err());
+        e.stop();
         let _ = std::fs::remove_dir_all(dir);
     }
 
