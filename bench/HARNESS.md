@@ -67,8 +67,12 @@ One row per clip in `results.jsonl`:
 The rival adapters write the same rows. whisper.cpp and Moonshine are batch engines: they see the whole clip
 after key up, so `t_first_ms = t_final_ms` = decode time. Vosk streams, so its adapter feeds 100 ms blocks on a
 simulated clock the way nerd-dictation does and reports when the text was ready.
-Hex (`hex_engine.py`, the OpenCode team's dictation app) runs its pinned release binary through `hex transcribe`
-against a warm `hex service`, so on a CPU it is batch too; `--one-shot` skips the service.
+Hex (`hex_engine.py`, the OpenCode team's dictation app) runs its pinned release binary as a warm `hex service`
+and replays each clip the way its app finishes a dictation on a CPU: nothing reaches the model while the key is
+held, and at key up it waits the same 200 ms tail, then transcribes the whole clip once through the service's local
+API (`POST /transcriptions`). So on a CPU it is batch too, timed from key up. `--fast` skips the real-time wait,
+`--cli` times `hex transcribe` instead (its answers come in ~600 ms steps; `rivals/opencode.md` says why) and
+`--one-shot` skips the service.
 
 `silas-bench type --results <rows> --out <file>` types each row's final text with the app's typer at the default
 "fast" pace (`--speed` picks another) and writes `type_ms` per clip. It needs a display: `xvfb-run -a -s "-screen 0 1280x1024x24 -noreset"` works. Keep `-noreset`: without it

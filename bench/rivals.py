@@ -12,7 +12,8 @@ a lead that shrinks, or a loss that grows. Losses stay in the file as losses.
 Gates: accuracy (WER, punctuation F1, formatted error; any CPU), typing (`silas-bench type` on a display, the
 recorded machine's CPU only), latency (a real-time run, the recorded machine's CPU only), setup (README.md's install
 steps, no run at all). Typing and latency are skipped on any other CPU. --record rewrites the numbers from the rows given (and --rival rows), and refuses when
-any margin got worse unless --allow-worse says the loss is known.
+any margin got worse unless --allow-worse says the loss is known. It refuses latency from real-time rows whose
+machine was busy (Silas's rows recorded a median load average over BUSY_LOAD).
 
 Punctuation F1: each typed token's trailing mark is one of three classes (`,` `;` `:` / `.` `!` / `?`). The
 reference's and the engine's words are aligned on normalized words (score.py); an aligned pair whose classes
@@ -124,6 +125,16 @@ def timed(rows):
 
 
 POLLED = ("time_to_first_word_ms", "wait_after_key_up_ms", "wait_after_key_up_p95_ms")
+# Silas idles while a clip plays, so the load average its real-time rows record is the machine's, not its own: 0.6
+# on a quiet chapel1. Above this, other work is slowing the run, and a rival that uses every thread (Hex) slows far
+# more than Silas, so times taken then would misstate both and set the check's bar where a quiet run never misses it.
+BUSY_LOAD = 2.0
+
+
+def machine_load(rows):
+    """Median 1-minute load average over Silas's real-time rows, or None when they record none."""
+    loads = [r["load1"] for r in rows if r.get("engine") == "silas" and r.get("paced") and r.get("load1") is not None]
+    return statistics.median(loads) if loads else None
 
 
 def polled(rows):
@@ -283,6 +294,11 @@ def main(argv=None):
         if gates & {"latency", "typing"} and cpu != results["machine"]["cpu"]:
             p.error(f"--record of latency or typing needs rows from {results['machine']['cpu']}, where the rival's"
                     f" times were measured; this is {cpu}. Record --gate accuracy,setup, or re-measure both sides")
+        if "latency" in gates:
+            for f in a.silas:
+                if (busy := machine_load(load(f))) is not None and busy > BUSY_LOAD:
+                    p.error(f"--record of latency: {f.name} ran on a busy machine (load average {busy:.1f}, over"
+                            f" {BUSY_LOAD}); time both sides again when it is quiet, or record --gate accuracy,setup")
         rival = best([measure(load(f), manifest) for f in a.rival_rows], results["metrics"])
         fails = [] if a.allow_worse else check(results, current, gates, cpu, new_rival=rival)
         if fails or problems:
