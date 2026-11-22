@@ -5,7 +5,11 @@
 
 pub mod audio;
 pub mod benchmark;
+#[cfg(unix)]
+pub mod control;
 pub mod core;
+#[cfg(unix)]
+pub mod ctl;
 pub mod dictionary;
 pub mod file;
 pub mod focus;
@@ -17,6 +21,8 @@ pub mod pieces;
 pub mod replay;
 pub mod store;
 pub mod typer;
+#[cfg(target_os = "linux")]
+pub mod wayland;
 
 use std::time::Duration;
 

@@ -1,0 +1,9 @@
+# Apply the input rule now, so Silas can read its key without a reboot.
+post_install() {
+  udevadm control --reload >/dev/null 2>&1 || true
+  udevadm trigger --subsystem-match=input --subsystem-match=misc >/dev/null 2>&1 || true
+}
+
+post_upgrade() {
+  post_install
+}

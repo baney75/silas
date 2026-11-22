@@ -1471,6 +1471,7 @@ button {
 /* ---------- This computer (benchmark) ---------- */
 
 .device-panel {
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -1511,20 +1512,32 @@ button {
   gap: 10px;
 }
 
+.bench-result {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .bench-list {
   list-style: none;
   margin: 0;
   padding: 0;
+  overflow: hidden;
   border-radius: var(--r);
   border: 1px solid var(--line);
 }
 
+/* Name and verdict on the first line, the measured numbers under them. Every track can
+   shrink to zero, so a narrow window wraps text instead of pushing it out of the card. */
 .bench-row {
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) minmax(220px, 2fr) minmax(130px, 1fr) minmax(190px, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "name marks"
+    "nums nums";
   align-items: center;
-  gap: 8px 16px;
-  padding: 12px 16px;
+  gap: 6px 16px;
+  padding: 14px 16px;
 }
 
 .bench-row + .bench-row {
@@ -1536,21 +1549,35 @@ button {
 }
 
 .bench-name {
+  grid-area: name;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 4px 8px;
+  min-width: 0;
   font-weight: 600;
 }
 
-.bench-num {
+.bench-model {
+  overflow-wrap: anywhere;
+}
+
+.bench-nums {
+  grid-area: nums;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 20px;
   font-size: 13px;
   color: var(--text-2);
+  font-variant-numeric: tabular-nums;
 }
 
 .bench-marks {
+  grid-area: marks;
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 12px;
+  justify-content: flex-end;
+  gap: 4px 14px;
 }
 
 .mark {
@@ -1574,9 +1601,17 @@ button {
   flex-wrap: wrap;
 }
 
-@media (max-width: 760px) {
+/* A tight card puts the verdict on its own line instead of squeezing the name. */
+@container (max-width: 520px) {
   .bench-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "name"
+      "marks"
+      "nums";
+  }
+  .bench-marks {
+    justify-content: flex-start;
   }
 }
 

@@ -185,6 +185,25 @@ interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string
 | `file-drag` | `{ active }` files are being dragged over the main window (`true`), or left or were dropped (`false`). Dropped files are transcribed one after another, as `transcribe_file` |
 | `model-progress` | `{ id, downloaded, total, stage: "downloading" \| "unpacking" \| "loading" \| "done" \| "error", message? }` |
 
+## Control socket (Linux, macOS)
+
+`silas-ctl <command>` (or `silas <command>`, which loads the GUI libraries first and takes
+about 30 ms instead of 2) writes one line to `$XDG_RUNTIME_DIR/silas.sock` and reads `ok`.
+Without `XDG_RUNTIME_DIR` the socket is in an owner-only `silas-<uid>` folder in the temp dir.
+Compositor keybindings use it, since on Wayland the compositor owns the keyboard. The engine
+(`core/voice/src/control.rs`) handles commands one at a time, in the order they arrived.
+`silas-ctl` ships in the Arch package; elsewhere use `silas <command>`.
+
+| Command | Same as |
+| --- | --- |
+| `press` | the hotkey going down (a short press-and-release starts hands-free) |
+| `release` | the hotkey coming up |
+| `toggle` | the record button in the window |
+| `cancel` | Esc while listening |
+
+Exit code 1 means Silas isn't running. This socket is to fold into the `silas.voice` engine
+socket (baney75/local-studio#6).
+
 ## Choosing a model for this computer
 
 At startup, in the background, the core fetches `registry/devices.json` from GitHub (5 s timeout,

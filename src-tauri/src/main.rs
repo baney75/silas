@@ -8,5 +8,10 @@ fn main() {
         silas_lib::attach_console();
         std::process::exit(silas_lib::file::cli(&args[1..]));
     }
+    // `silas press` and friends talk to the running app and exit without starting another.
+    #[cfg(unix)]
+    if let Some(code) = silas_lib::ctl::cli() {
+        std::process::exit(code);
+    }
     silas_lib::run()
 }
