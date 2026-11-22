@@ -263,6 +263,7 @@ export function mountSettings(root: HTMLElement): () => void {
         row("Microphone", null, micSelect(), "set-mic"),
         row("Language", "Parakeet detects the language on its own. Cohere uses this one.", langSelect(), "set-lang"),
         toggle("sounds", "Sounds", "A soft click when Silas starts and stops listening."),
+        toggle("pauseMedia", "Pause media while dictating", "Music and videos that were playing pause while you speak, then play again."),
         toggle("showOverlay", "Show the recording pill", "A small floating pill while Silas listens."),
       ),
       syncSection(),

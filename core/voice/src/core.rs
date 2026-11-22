@@ -152,6 +152,8 @@ pub struct Core {
     enabled: AtomicBool,
     /// Dictionary sync (docs/sync.md), once `start_sync` has run.
     pub sync: std::sync::OnceLock<Arc<crate::sync_engine::SyncEngine>>,
+    /// Pauses what's playing while a dictation records (nowplaying.rs).
+    media: crate::nowplaying::MediaPause,
     /// The id of the app the last dictation went to, for Settings (`shaping.rs`).
     app: Mutex<Option<String>>,
 }
@@ -491,6 +493,7 @@ impl Core {
             loading: Mutex::new(None),
             enabled: AtomicBool::new(true),
             sync: std::sync::OnceLock::new(),
+            media: crate::nowplaying::MediaPause::system(),
             app: Mutex::new(None),
             settings: Mutex::new(settings),
         })
@@ -574,6 +577,7 @@ impl Core {
         self.typing.store(false, Ordering::Relaxed);
         if key {
             self.machine.lock().reset();
+            self.media.resume(Duration::ZERO);
             self.recording.lock().take();
             self.pieces.lock().take();
             self.target.lock().take();
@@ -826,6 +830,19 @@ impl Core {
             self.status().0,
             Status::Recording | Status::Transcribing | Status::Typing | Status::Loading
         ) || self.recording.lock().is_some()
+    }
+
+    /// A dictation is recording, being written or being typed: a file being transcribed waits (file.rs).
+    pub(crate) fn dictating(&self) -> bool {
+        matches!(self.status().0, Status::Recording | Status::Transcribing | Status::Typing) || self.recording.lock().is_some()
+    }
+
+    /// Run 16 kHz audio through the loaded model, holding it for this audio only (file.rs).
+    pub(crate) fn transcribe_audio(&self, audio: &[f32], language: &str) -> anyhow::Result<String> {
+        match self.engine.lock().as_mut() {
+            Some((_, engine)) => engine.transcribe(audio, language),
+            None => anyhow::bail!("No model is loaded"),
+        }
     }
 
     /// Hold until no dictation is happening, so a recording is never delayed by more than
@@ -1299,6 +1316,10 @@ impl Core {
             let thread = std::thread::spawn(crate::focus::Target::capture);
             move || thread.join().ok().flatten()
         };
+        // Music playing out loud would end up in the dictation. Only sends a message; never waits.
+        if self.settings.lock().pause_media {
+            self.media.pause();
+        }
         // The overlay comes up now, before the microphone is open (that can take a moment with
         // a Bluetooth headset); its dot fills in when the first sound arrives.
         self.set_status(Status::Recording, None);
@@ -1364,6 +1385,7 @@ impl Core {
             }
             Err(e) => {
                 let _ = capture();
+                self.media.resume(Duration::ZERO);
                 self.machine.lock().reset();
                 self.fail(format!("Microphone: {e}"));
             }
@@ -1399,6 +1421,7 @@ impl Core {
         };
         self.target.lock().take();
         self.pieces.lock().take();
+        self.media.resume(Duration::ZERO);
         if let Some(live) = recording {
             drop(live);
             self.set_status(Status::Ready, None);
@@ -1418,6 +1441,8 @@ impl Core {
             return;
         };
         self.cue("stop");
+        // Once the tail is recorded, what was playing plays again.
+        self.media.resume(tail_for(ending));
         // Carried by value: a new dictation may start before this one finishes typing.
         let target = self.target.lock().take();
         let pieces = self.pieces.lock().take();
@@ -1571,6 +1596,7 @@ impl Core {
                 .max(secs),
             latency_ms: latency,
             corrected: None,
+            file: None,
         };
         {
             let mut h = me.history.lock();
@@ -1709,7 +1735,8 @@ impl Core {
         let today = Local::now().date_naive();
         let mut s = Stats::default();
         let mut speak_secs = 0f32;
-        for i in h.iter() {
+        // Text from a file wasn't dictated: it would swamp the speaking pace and time saved.
+        for i in h.iter().filter(|i| i.file.is_none()) {
             s.dictations += 1;
             s.words_total += i.words as u64;
             speak_secs += i.duration_s;

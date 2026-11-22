@@ -7,6 +7,7 @@ import {
   type AppState,
   type BenchmarkProgress,
   type Device,
+  type FileProgress,
   type Dictionary,
   type HistoryItem,
   type ModelEntry,
@@ -21,7 +22,7 @@ import {
 } from "./api";
 import { toast } from "./ui";
 
-export type Topic = "state" | "settings" | "models" | "history" | "dict" | "stats" | "progress" | "update" | "benchmark" | "microphones" | "sync";
+export type Topic = "state" | "settings" | "models" | "history" | "dict" | "stats" | "progress" | "update" | "benchmark" | "microphones" | "sync" | "file";
 
 export const store = {
   state: null as unknown as AppState,
@@ -43,6 +44,10 @@ export const store = {
   updateProgress: null as UpdateProgress | null,
   /** Dictionary sync; `null` until read at launch, or when this build has none. */
   sync: null as SyncStatus | null,
+  /** The file being transcribed, or the last one for a moment after it ends. */
+  file: null as FileProgress | null,
+  /** Files are being dragged over the window. */
+  dragging: false,
 };
 
 export interface BenchRun {
@@ -229,4 +234,21 @@ export async function installUpdate() {
     notify("update");
     toast(`The update didn't install. ${errorText(e)}`, "error", 6000);
   }
+}
+
+/** "Transcribe a file": the picker, then the core. Progress and the outcome arrive as `file-progress`
+ * events, which main.ts shows; this only reports what never became an event (the picker failing). */
+export async function transcribeFile(path?: string) {
+  try {
+    await api.transcribeFile(path);
+  } catch (e) {
+    const message = errorText(e);
+    if (store.file?.message !== message && lastRefusal !== message) toast(`Couldn't transcribe that file. ${message}`, "error", 6000);
+  }
+}
+
+/** The last refusal's text, so the rejected call doesn't show it twice. */
+export let lastRefusal = "";
+export function noteRefusal(message: string) {
+  lastRefusal = message;
 }

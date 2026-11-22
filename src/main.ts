@@ -8,6 +8,7 @@ import { mountOnboarding, needsAccess } from "./onboarding";
 import { mountSettings } from "./settings";
 import {
   HISTORY_LIMIT,
+  noteRefusal,
   notify,
   refreshDict,
   refreshMicrophones,
@@ -76,6 +77,36 @@ function wireEvents() {
     store.history = [item, ...store.history.filter((x) => x.id !== item.id)].slice(0, HISTORY_LIMIT);
     notify("history");
     void refreshStats();
+  });
+  void on("file-progress", (p) => {
+    if (p.stage === "refused") {
+      // It never started: say why, and leave any file in progress on screen.
+      const message = p.message ?? "Silas can't transcribe a file right now.";
+      noteRefusal(message);
+      toast(message, "error", 6000);
+      return;
+    }
+    store.file = p;
+    notify("file");
+    if (p.stage === "done" && p.item) {
+      const item = p.item;
+      store.history = [item, ...store.history.filter((x) => x.id !== item.id)].slice(0, HISTORY_LIMIT);
+      notify("history");
+      toast(`${p.name} is in History.`, "learned", 4200);
+    }
+    if (p.stage === "error") toast(`Couldn't transcribe ${p.name}. ${p.message ?? ""}`.trim(), "error", 6000);
+    if (p.stage === "done" || p.stage === "error" || p.stage === "cancelled") {
+      window.setTimeout(() => {
+        if (store.file === p) {
+          store.file = null;
+          notify("file");
+        }
+      }, p.stage === "done" ? 1200 : 4000);
+    }
+  });
+  void on("file-drag", ({ active }) => {
+    store.dragging = active;
+    notify("file");
   });
   void on("notice", ({ kind, message }) => toast(message, kind === "error" ? "error" : "info", 5000));
   // The app a dictation went to, for Settings → App styles.
@@ -170,7 +201,13 @@ function shell() {
     status,
   );
   const main = h("main", { class: "main" }, h("div", { class: "topbar", "data-tauri-drag-region": true }), view);
-  clear(app, h("div", { class: "app" }, sidebar, main));
+  // Shown while files are dragged over the window; the drop itself is handled by the core.
+  const dropZone = h(
+    "div",
+    { class: "drop-zone", "aria-hidden": "true" },
+    h("div", { class: "drop-card" }, icon("file", 28), h("p", { class: "drop-title" }, "Drop to transcribe"), h("p", { class: "hint" }, "Audio or video. The text goes to History; nothing is typed.")),
+  );
+  clear(app, h("div", { class: "app" }, sidebar, main, dropZone));
 
   function drawNav() {
     const pending = store.dict.pending.length;
@@ -214,6 +251,14 @@ function shell() {
 
   drawNav();
   drawStatus();
+  let shownFile: string | null = null;
+  subscribe(["file"], () => {
+    dropZone.classList.toggle("on", store.dragging);
+    // A file that just started (dropped from any page) is followed on the History page.
+    const started = store.file && store.file.stage === "decoding" ? store.file.name : null;
+    if (started && started !== shownFile && current !== "history") go("history");
+    shownFile = store.file ? store.file.name : null;
+  });
   subscribe(["dict", "state"], drawNav);
   subscribe(["state"], drawStatus);
 

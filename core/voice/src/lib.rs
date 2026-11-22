@@ -11,9 +11,11 @@ pub mod core;
 #[cfg(unix)]
 pub mod ctl;
 pub mod dictionary;
+pub mod file;
 pub mod focus;
 pub mod keys;
 pub mod models;
+pub mod nowplaying;
 pub mod permissions;
 pub mod pieces;
 pub mod replay;

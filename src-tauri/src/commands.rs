@@ -482,6 +482,41 @@ pub async fn sync_now(core: State<'_, Shared>) -> R<()> {
     Ok(())
 }
 
+/// Transcribes an audio or video file into History; nothing is typed. With no `path` it asks for
+/// one with the system picker and returns `None` if the person cancels it. Progress, the result and
+/// any refusal also arrive as `file-progress` events.
+#[tauri::command]
+pub async fn transcribe_file(core: State<'_, Shared>, app: AppHandle, path: Option<String>) -> R<Option<HistoryItem>> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = match path {
+            Some(p) => std::path::PathBuf::from(p),
+            None => {
+                use tauri_plugin_dialog::DialogExt;
+                let picked = app
+                    .dialog()
+                    .file()
+                    .set_title("Transcribe a file")
+                    .add_filter("Audio or video", crate::file::EXTENSIONS)
+                    .blocking_pick_file();
+                match picked {
+                    Some(p) => p.into_path().map_err(err)?,
+                    None => return Ok(None),
+                }
+            }
+        };
+        core.transcribe_file(&path).map(Some).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Stops the file being transcribed. Returns whether one was running.
+#[tauri::command]
+pub async fn cancel_file(core: State<'_, Shared>) -> R<bool> {
+    Ok(core.cancel_file())
+}
+
 #[cfg(test)]
 mod tests {
     /// Tauri runs a command that isn't `async` on the main thread, where the window draws and takes

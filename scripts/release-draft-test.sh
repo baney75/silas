@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Proves scripts/release-draft.sh addresses the stable draft only by id: with a fake `gh` it checks
-# no call names the tag, and that once the pinned draft is replaced, an upload fails without
-# writing anything (the replacement draft is never touched).
+# no call looks the draft up by its tag, that every edit restates tag_name (GitHub otherwise turns
+# the draft "untagged-...", v0.1.7), and that once the pinned draft is replaced, an upload fails
+# without writing anything (the replacement draft is never touched).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 t=$(mktemp -d)
@@ -22,7 +23,7 @@ case "$url" in
 esac
 EOF
 chmod +x "$t/bin/gh"
-export PATH="$t/bin:$PATH" FAKE_LOG="$t/log" REPO=baney75/silas draft=111
+export PATH="$t/bin:$PATH" FAKE_LOG="$t/log" REPO=baney75/silas draft=111 tag=v0.2.1
 # shellcheck source=scripts/release-draft.sh
 . "$here/release-draft.sh"
 status=0
@@ -36,7 +37,8 @@ draft_upload "$t/latest.json" || fail "upload failed"
 grep -q 'DELETE repos/baney75/silas/releases/assets/53' "$t/log" || fail "upload did not replace the old latest.json"
 grep -q 'uploads.github.com/repos/baney75/silas/releases/111/assets?name=latest.json' "$t/log" || fail "upload did not go to draft 111"
 draft_edit "Silas 0.2.1" "notes" || fail "edit failed"
-if grep -qE 'releases/tags|release (upload|download|edit|view)|v0\.2\.1' "$t/log"; then
+grep -q 'PATCH repos/baney75/silas/releases/111 -f tag_name=v0.2.1 ' "$t/log" || fail "edit did not restate tag_name"
+if sed 's/ -f tag_name=v0\.2\.1 / /' "$t/log" | grep -qE 'releases/tags|release (upload|download|edit|view)|v0\.2\.1'; then
   fail "a call named the tag:"; cat "$t/log"
 fi
 

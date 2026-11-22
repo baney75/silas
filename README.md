@@ -20,13 +20,13 @@ Paste one line into a terminal. It downloads Silas, installs it and opens it.
 curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | sh
 ```
 
-**Windows** (10 or 11, 64-bit; nightly builds), in PowerShell:
+**Windows** (10 or 11, 64-bit), in PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/baney75/silas/main/install.ps1 | iex
 ```
 
-**Linux** (x86_64, glibc 2.39 or newer, e.g. Ubuntu 24.04+ or Fedora 40+; nightly builds): the macOS line. It
+**Linux** (x86_64, glibc 2.39 or newer, e.g. Ubuntu 24.04+ or Fedora 40+): the macOS line. It
 installs the `.deb` on Debian and Ubuntu, the `.rpm` on Fedora and openSUSE Tumbleweed, and otherwise an
 AppImage with a launcher entry and a udev rule so Silas can read the hold-to-talk key.
 
@@ -54,9 +54,10 @@ so `pacman -Syu` won't update it and Silas doesn't update itself: run the instal
 If you used voxtype, stop it so two apps don't share the keys:
 `systemctl --user disable --now voxtype`.
 
-Run the same line again to update by hand. Silas also updates itself. macOS installs the stable
-channel (`SILAS_CHANNEL=nightly` for nightly); Windows and Linux install nightly until a stable
-release carries them. Pick any channel later in Settings › Updates.
+Run the same line again to update by hand. Silas also updates itself. Every installer gets the
+stable channel; set `SILAS_CHANNEL=nightly` first for nightly. On Linux, a Silas package
+installed from nightly keeps updating from nightly unless you set `SILAS_CHANNEL=stable`. Pick any
+channel later in Settings › Updates.
 
 <details>
 <summary>Rather download it yourself?</summary>
@@ -66,7 +67,7 @@ release carries them. Pick any channel later in Settings › Updates.
   macOS says it can't verify the app. Click **Done**, open **System Settings › Privacy &
   Security**, scroll down and click **Open Anyway**. The one-line installer skips this step.
 - **Windows and Linux:** the `.exe`, `.deb`, `.rpm` and `.AppImage` are on the
-  [nightly release](https://github.com/baney75/silas/releases/tag/nightly). Windows SmartScreen
+  [latest release](https://github.com/baney75/silas/releases/latest). Windows SmartScreen
   may warn about a new app: click **More info › Run anyway**.
 
 </details>
@@ -125,6 +126,28 @@ address" on its own and Silas types your address. Inside a sentence, say "insert
 "send it to insert my address". The phrase's words in ordinary speech ("I changed my address")
 are left alone.
 
+Music or a video playing when you press the key pauses while you speak and plays again after.
+Silas only restarts what it paused, so something you stopped yourself stays stopped. Turn it off
+in Settings → Audio.
+
+## Transcribe a file
+
+Click *Transcribe a file* in History, or drop an audio or video file on the window. Silas writes
+what was said into History; nothing is typed. It reads WAV, MP3, M4A, FLAC, OGG, Opus, AIFF and the
+sound of MP4, MOV and WebM videos, and works through long recordings a piece at a time. It waits
+while you dictate, so the key keeps working.
+
+From a terminal:
+
+```sh
+silas transcribe meeting.m4a           # prints the text
+silas transcribe meeting.m4a --json    # text, the model's raw words, and timings
+silas transcribe meeting.m4a --raw     # without your dictionary
+```
+
+It uses the model and dictionary the app uses. On macOS the command is
+`/Applications/Silas.app/Contents/MacOS/silas`.
+
 ## It learns
 
 - **Fix it where it typed.** Right after Silas types, backspace over a wrong word and type
@@ -172,12 +195,13 @@ from a terminal.
 
 | Channel | For | Source |
 | --- | --- | --- |
-| Stable | Everyone. The default. | `vX.Y.Z` releases, promoted from a nightly at least 72 hours old. macOS today; Windows and Linux from the next stable release |
+| Stable | Everyone. The default. | `vX.Y.Z` releases, promoted from a nightly at least 72 hours old, for macOS, Windows and Linux since 0.1.7 |
 | Nightly | People who want new work first | the rolling `nightly` pre-release, rebuilt by CI each night when `main` changed |
 | Dev | Testing a change | the rolling `dev` pre-release, rebuilt by CI on every merge to `main` |
 
 Choose the channel in Settings › Updates. Switching replaces the install, and it may go to a lower
-version. Until a stable release carries Windows and Linux, those systems on stable get nightly.
+version. A Windows or Linux copy on stable reads nightly only if the latest stable release lacks
+its platform.
 Silas checks at launch and every four hours. With auto-update on, it installs once it has been
 idle for two minutes. Stable has its own signing key, which never leaves the release Mac; nightly
 and dev share a second one, and Silas refuses an update that isn't signed by its channel's key. Mac
