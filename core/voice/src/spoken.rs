@@ -5,6 +5,12 @@
 //! editor styles (`style.rs`), and every rule looks at the words on either side, so ordinary
 //! prose said in a code app keeps its words: "a dash of salt", "to underscore the point",
 //! "the new line of laptops" and "he wrote it in all caps." stay as they were.
+//!
+//! The one-word symbols that are also English words (underscore, equals, pipe, dot, tilde) and
+//! "all caps" need a code signal as well: another symbol or rule next to them, a line that
+//! starts with a command, or a neighbour that already looks like code. "Results underscore the
+//! need" and "a red dot appears" stay prose. A line break never comes from spoken code in a
+//! terminal, where it is Return and would run a half-dictated command.
 
 /// Where the code goes. A shell wants `NAME=value`; an editor wants `name = value`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -26,10 +32,51 @@ const STOP: &[&str] = &[
 ];
 
 /// Commands that take a path or `.` right after them: "cd slash etc" is `cd /etc`, not `cd/etc`.
+/// The ones in `LOOSE_COMMANDS` are English words too, and count only at the start of a line
+/// or after another command ("git add dot", not "I need more dot points").
 const PATH_COMMANDS: &[&str] = &[
     "cd", "ls", "cat", "cp", "mv", "rm", "mkdir", "rmdir", "touch", "vim", "nvim", "vi", "nano",
     "less", "more", "head", "tail", "source", "open", "code", "cursor", "zed", "chmod", "chown",
     "bat", "add", "stat", "du", "tree", "pushd",
+];
+
+const LOOSE_COMMANDS: &[&str] = &[
+    "open", "code", "cursor", "zed", "add", "less", "more", "head", "tail", "touch", "source", "stat",
+    "tree",
+];
+
+/// Commands that mark a line as a command line when they start it.
+const LINE_COMMANDS: &[&str] = &[
+    "cd", "ls", "git", "npm", "npx", "pnpm", "yarn", "bun", "bunx", "cargo", "rustup", "rustc",
+    "python3", "pip", "pip3", "uv", "deno", "docker", "kubectl", "helm", "ssh", "scp", "rsync",
+    "curl", "wget", "grep", "rg", "sed", "awk", "jq", "ps", "sudo", "brew", "apt", "chmod", "chown",
+    "mkdir", "rmdir", "rm", "mv", "cp", "vim", "nvim", "export", "tar", "gh", "cat",
+];
+
+/// Commands that read from a pipe: "pipe grep" is `| grep`.
+const PIPE_TARGETS: &[&str] = &[
+    "grep", "rg", "wc", "sort", "uniq", "xargs", "jq", "head", "tail", "less", "awk", "sed", "tee",
+    "cut", "tr", "fzf", "cat", "bat", "column",
+];
+
+/// What follows a dot in a file or host name: "build dot sh", "example dot com".
+const EXTENSIONS: &[&str] = &[
+    "sh", "rs", "md", "py", "js", "ts", "tsx", "jsx", "mjs", "cjs", "json", "toml", "yaml", "yml",
+    "txt", "html", "css", "com", "org", "net", "io", "dev", "lock", "csv", "sql", "swift",
+    "kt", "rb", "cpp", "hpp", "java", "xml", "ini", "cfg", "conf", "config", "zsh", "bash", "vue",
+    "svelte", "lua", "wasm", "png", "svg", "pdf", "zip", "gz", "gitignore",
+];
+
+/// Files whose name starts with a dot: "use dot env files" is `use .env files`.
+const DOTFILES: &[&str] = &[
+    "env", "gitignore", "bashrc", "zshrc", "npmrc", "nvmrc", "vscode", "github", "dockerignore",
+    "editorconfig", "prettierrc", "eslintrc",
+];
+
+/// Names that read as code next to a symbol: "console dot log", "self dot name".
+const CODE_WORDS: &[&str] = &[
+    "self", "os", "sys", "std", "console", "req", "res", "ctx", "args", "kwargs", "src", "lib", "env",
+    "json", "foo", "obj", "err", "utils",
 ];
 
 /// The words that name a symbol on their own. Used to look ahead ("slash etc slash hosts").
@@ -43,6 +90,47 @@ fn stop(key: &str) -> bool {
 
 fn is_symbol_word(key: &str) -> bool {
     SYMBOL_WORDS.contains(&key)
+}
+
+/// A spoken-code rule starts at `w[j]`: a symbol word, or a two-word one like "open paren".
+fn starts_code(w: &[Word], j: usize) -> bool {
+    let key = |j: usize| w.get(j).map_or("", |x| x.key.as_str());
+    is_symbol_word(key(j))
+        || matches!(
+            (key(j), key(j + 1)),
+            ("all", "caps" | "cap")
+                | ("double", "dash" | "equals")
+                | ("open" | "close" | "left" | "right", "paren" | "parenthesis" | "parens" | "bracket" | "brace" | "curly")
+                | ("at" | "dollar", "sign")
+                | ("forward" | "back", "slash")
+                | ("camel" | "snake" | "pascal" | "kebab" | "constant", "case")
+        )
+}
+
+/// A word that already looks like code: a digit or code symbol in it, a dotted name, one
+/// lower-case letter other than "a" and "i" (`x`, `n`), or a name like `self` or `console`.
+fn looks_code(core: &str) -> bool {
+    let mut chars = core.chars();
+    if let (Some(c), None) = (chars.next(), chars.next()) {
+        return c.is_ascii_digit() || c.is_ascii_lowercase() && c != 'a' && c != 'i';
+    }
+    let b = core.as_bytes();
+    CODE_WORDS.contains(&core.to_lowercase().as_str())
+        || core.chars().any(|c| c.is_ascii_digit() || "_/\\=|~@$(){}[]<>".contains(c))
+        || (1..b.len().saturating_sub(1)).any(|k| b[k] == b'.' && b[k - 1].is_ascii_alphanumeric() && b[k + 1].is_ascii_alphanumeric())
+}
+
+/// The line `w[i]` is on starts with a command and is still a command when it reaches `w[i]`:
+/// no small words and no message flag (`-m`) on the way, so "git commit dash m fix the main
+/// pipe leak" is a message, not a pipeline.
+fn command_line(w: &[Word], i: usize) -> bool {
+    let start = (0..i).rev().find(|&j| !w[j].post.is_empty()).map_or(0, |j| j + 1);
+    if start >= i || !LINE_COMMANDS.contains(&w[start].key.as_str()) {
+        return false;
+    }
+    let run = &w[start..i];
+    !run.iter().any(|x| stop(&x.key) || x.key == "message")
+        && !run.windows(2).any(|p| p[0].key == "dash" && p[1].key == "m")
 }
 
 #[derive(Debug, Clone)]
@@ -83,23 +171,30 @@ struct Piece {
     space: bool,
 }
 
-#[derive(Default)]
 struct Out {
     pieces: Vec<Piece>,
     /// The last symbol attaches to whatever comes next.
     glue: bool,
+    /// Plain words typed since the last code (a symbol, a word glued to one, a rule). 0: the
+    /// last piece is code. `usize::MAX` after a pause or a line break.
+    since_code: usize,
     /// "all caps": the next word, and the words joined to it by `_`, go upper case.
     upper_next: bool,
     upper: Vec<usize>,
 }
 
 impl Out {
+    fn new() -> Self {
+        Out { pieces: Vec::new(), glue: false, since_code: usize::MAX, upper_next: false, upper: Vec::new() }
+    }
+
     fn word(&mut self, text: String) {
         if self.upper_next {
             self.upper.push(self.pieces.len());
             self.upper_next = false;
         }
         self.pieces.push(Piece { text, space: !self.glue });
+        self.since_code = if self.glue { 0 } else { self.since_code.saturating_add(1) };
         self.glue = false;
     }
 
@@ -107,6 +202,12 @@ impl Out {
     fn sym(&mut self, text: &str, left: bool, right: bool) {
         self.pieces.push(Piece { text: text.into(), space: !(left || self.glue) });
         self.glue = right;
+        self.since_code = 0;
+    }
+
+    /// Code is right before this point: a symbol, or at most one plain word after one.
+    fn near_code(&self) -> bool {
+        self.glue || self.since_code <= 1
     }
 
     fn finish(mut self) -> String {
@@ -141,15 +242,20 @@ pub fn format(text: &str, flavor: Flavor) -> String {
     if !w.iter().any(|w| TRIGGERS.contains(&w.key.as_str())) {
         return text.to_string();
     }
-    let mut out = Out::default();
+    let mut out = Out::new();
     let mut i = 0;
     while i < w.len() {
-        match rule(&w, i, flavor, &mut out) {
+        let used = match rule(&w, i, flavor, &mut out) {
             0 => {
                 out.word(w[i].whole());
-                i += 1;
+                1
             }
-            used => i += used,
+            used => used,
+        };
+        i += used;
+        // A pause ends the code: what follows needs its own signal.
+        if !w[i - 1].post.is_empty() {
+            out.since_code = usize::MAX;
         }
     }
     out.finish()
@@ -176,16 +282,30 @@ fn rule(w: &[Word], i: usize, flavor: Flavor, out: &mut Out) -> usize {
         w[i + n - 1].post.is_empty() && w.get(i + n).is_some_and(|x| !stop(&x.key) && x.pre.is_empty())
     };
     let prev_key = prev.map_or("", |p| p.key.as_str());
-    let after_command = prev.is_some_and(|p| p.post.is_empty() && PATH_COMMANDS.contains(&p.key.as_str()));
     let determiner = matches!(prev_key, "a" | "an" | "the" | "your" | "my" | "our" | "their" | "his" | "her" | "this" | "that");
+    // A loose command ("add", "more") counts at the start of a line or on a command line.
+    let after_command = prev.is_some_and(|p| p.post.is_empty() && PATH_COMMANDS.contains(&p.key.as_str()))
+        && (!LOOSE_COMMANDS.contains(&prev_key) || i == 1 || !w[i - 2].post.is_empty() || command_line(w, i));
+    // `n` words make the symbol: code on its left, a rule starting within the next two words
+    // (no pause between), or a command line.
+    let code_signal = |n: usize, out: &Out| {
+        let ahead = w[i + n - 1].post.is_empty()
+            && (starts_code(w, i + n) || w.get(i + n).is_some_and(|x| x.post.is_empty()) && starts_code(w, i + n + 1));
+        out.near_code() || ahead || command_line(w, i)
+    };
+    let prev_code = prev.is_some_and(|p| p.post.is_empty() && looks_code(&p.core));
+    let next_code = w[i].post.is_empty() && w.get(i + 1).is_some_and(|x| looks_code(&x.core));
 
     // ---- case commands
-    if k0 == "all" && matches!(k1, "caps" | "cap") && free_right(2) && w[i].post.is_empty() {
+    if k0 == "all" && matches!(k1, "caps" | "cap") && free_right(2) && w[i].post.is_empty() && code_signal(2, out) {
         out.upper_next = true;
+        out.since_code = 0;
         return 2;
     }
     if k1 == "case" && matches!(k0, "camel" | "snake" | "pascal" | "kebab" | "constant") && w[i].post.is_empty() && !determiner {
-        return case_run(w, i, k0, out);
+        // "We use camel case naming": an ordinary word right before, not code.
+        let after_word = prev.is_some_and(|p| p.post.is_empty()) && !out.near_code();
+        return case_run(w, i, k0, after_word, out);
     }
 
     // ---- line breaks
@@ -196,12 +316,21 @@ fn rule(w: &[Word], i: usize, flavor: Flavor, out: &mut Out) -> usize {
         _ => None,
     };
     if let Some((brk, n)) = line {
-        let prose_before = determiner
-            || matches!(prev_key, "whole" | "entire" | "every" | "each" | "one" | "another" | "its" | "brand");
+        // In a terminal a break is Return, which runs whatever is typed so far.
+        if flavor == Flavor::Shell {
+            return 0;
+        }
+        // Only as its own command: said between pauses ("Thanks. New paragraph. See you"), or
+        // right after code (`{` then "new line"). Never after an ordinary word.
+        let after_pause = prev.is_none_or(|p| !p.post.is_empty());
+        let before_pause = !w[i + n - 1].post.is_empty() || last(i + n - 1);
+        let whole = w[i].pre.is_empty() && (n == 1 || w[i].post.is_empty());
         let prose_after = matches!(key(i + n), "of" | "for" | "to" | "is" | "was" | "and" | "that" | "in" | "on");
-        if !prose_before && !prose_after && w[i].post.is_empty() || (!prose_before && last(i + n - 1)) {
+        let after_code = out.glue || out.since_code == 0;
+        if whole && !prose_after && ((after_pause && before_pause) || after_code) {
             out.pieces.push(Piece { text: brk.into(), space: false });
-            out.glue = true;
+            out.glue = false;
+            out.since_code = usize::MAX;
             return n;
         }
         return 0;
@@ -264,7 +393,7 @@ fn rule(w: &[Word], i: usize, flavor: Flavor, out: &mut Out) -> usize {
     }
     if matches!((k0, k1), ("forward", "slash") | ("back", "slash")) {
         let sym = if k0 == "back" { "\\" } else { "/" };
-        return joiner(w, i, 2, sym, out, after_command);
+        return joiner(w, i, 2, sym, out, after_command, true);
     }
 
     // ---- one-word symbols
@@ -274,29 +403,40 @@ fn rule(w: &[Word], i: usize, flavor: Flavor, out: &mut Out) -> usize {
             if matches!(prev_key, "polka" | "connect") {
                 return 0;
             }
-            joiner(w, i, 1, ".", out, after_command)
+            if DOTFILES.contains(&k1) && w[i].post.is_empty() && !out.glue && !after_command && !prev_code
+                && w.get(i + 1).is_some_and(|x| x.pre.is_empty())
+            {
+                out.sym(".", false, true);
+                return 1;
+            }
+            // "build dot sh", "console dot log", "version 2 dot 0"; not "a red dot appears".
+            let names = prev_code || next_code || w[i].post.is_empty() && EXTENSIONS.contains(&k1);
+            joiner(w, i, 1, ".", out, after_command, names || code_signal(1, out))
         }
-        "slash" => joiner(w, i, 1, "/", out, after_command),
-        "backslash" => joiner(w, i, 1, "\\", out, after_command),
+        "slash" => joiner(w, i, 1, "/", out, after_command, true),
+        "backslash" => joiner(w, i, 1, "\\", out, after_command, true),
         "underscore" => {
-            let left = out.glue || free_left;
-            let right = free_right(1);
-            if left || right {
-                out.sym("_", left, right);
+            // Both sides: a name on the left (or a symbol), a name on the right. A run of them
+            // (`__init__`) supplies its own missing side.
+            let attach = out.glue || free_left;
+            let left = attach || w[i].post.is_empty() && k1 == "underscore";
+            let right = free_right(1) || out.pieces.last().is_some_and(|p| p.text == "_");
+            if left && right && (code_signal(1, out) || prev_code || next_code) {
+                out.sym("_", attach, free_right(1));
                 1
             } else {
                 0
             }
         }
         "tilde" => {
-            if determiner || !w[i].post.is_empty() && !last(i) {
+            if determiner || !w[i].post.is_empty() && !last(i) || !code_signal(1, out) {
                 return 0;
             }
             out.sym("~", out.glue, false);
             1
         }
         "equals" => {
-            if (free_left || out.glue) && free_right(1) {
+            if (free_left || out.glue) && free_right(1) && (code_signal(1, out) || prev_code) {
                 spaced(out, "=", flavor);
                 1
             } else {
@@ -306,7 +446,8 @@ fn rule(w: &[Word], i: usize, flavor: Flavor, out: &mut Out) -> usize {
         "pipe" => {
             let prose_prev = matches!(prev_key, "water" | "gas" | "drain" | "smoke" | "exhaust" | "copper");
             let prose_next = matches!(key(i + 1), "down" | "up" | "dream" | "dreams" | "organ" | "wrench" | "line" | "burst" | "bomb");
-            if free_left && free_right(1) && !prose_prev && !prose_next {
+            let code = code_signal(1, out) || prev_code || PIPE_TARGETS.contains(&k1);
+            if free_left && free_right(1) && !prose_prev && !prose_next && code {
                 out.sym("|", false, false);
                 1
             } else {
@@ -384,7 +525,8 @@ fn dash(w: &[Word], i: usize, out: &mut Out) -> usize {
 
 /// `.` `/` `\`: between two words (`build.sh`, `src/main`), after a path command with a space
 /// (`cd /etc`, `git add .`), or starting a path that goes on ("slash etc slash hosts").
-fn joiner(w: &[Word], i: usize, n: usize, sym: &str, out: &mut Out, after_command: bool) -> usize {
+/// `signal`: the code signal two plain words need before they are joined.
+fn joiner(w: &[Word], i: usize, n: usize, sym: &str, out: &mut Out, after_command: bool, signal: bool) -> usize {
     let key = |j: usize| w.get(j).map_or("", |x| x.key.as_str());
     let prev = i.checked_sub(1).map(|j| &w[j]);
     let at_end = i + n == w.len();
@@ -403,7 +545,7 @@ fn joiner(w: &[Word], i: usize, n: usize, sym: &str, out: &mut Out, after_comman
         out.sym(sym, false, right);
         return n;
     }
-    if free_left && right {
+    if free_left && right && signal {
         out.sym(sym, true, true);
         return n;
     }
@@ -416,23 +558,30 @@ fn joiner(w: &[Word], i: usize, n: usize, sym: &str, out: &mut Out, after_comman
     0
 }
 
-/// "camel case user name" → `userName`; snake, pascal, kebab and constant likewise. Takes up to
-/// six words, stopping at a pause, a small word or a symbol word.
-fn case_run(w: &[Word], i: usize, style: &str, out: &mut Out) -> usize {
+/// "camel case user name" → `userName`; snake, pascal, kebab and constant likewise. Takes two
+/// to six words, stopping at a pause, a small word or a symbol. It joins only when the run ends
+/// where a name would: at code ("user name equals"), or at a pause or the end when no ordinary
+/// word came right before (`after_word`). "Use snake case variable names in Python" and "We use
+/// camel case naming here" stay prose.
+fn case_run(w: &[Word], i: usize, style: &str, after_word: bool, out: &mut Out) -> usize {
     let mut parts: Vec<&Word> = Vec::new();
     let mut j = i + 2;
+    let mut paused = false;
     while j < w.len() && parts.len() < 6 {
         let x = &w[j];
-        if stop(&x.key) || is_symbol_word(&x.key) || !x.pre.is_empty() || !x.core.chars().all(|c| c.is_alphanumeric()) {
+        if stop(&x.key) || starts_code(w, j) || !x.pre.is_empty() || !x.core.chars().all(|c| c.is_alphanumeric()) {
             break;
         }
         parts.push(x);
         j += 1;
         if !x.post.is_empty() {
+            paused = true;
             break;
         }
     }
-    if parts.is_empty() {
+    let at_code = !paused && starts_code(w, j);
+    let at_end = paused || j == w.len();
+    if parts.len() < 2 || !(at_code || at_end && !after_word) {
         return 0;
     }
     let lower: Vec<String> = parts.iter().map(|p| p.core.to_lowercase()).collect();
@@ -449,6 +598,7 @@ fn case_run(w: &[Word], i: usize, style: &str, out: &mut Out) -> usize {
     };
     let post = parts.last().map_or(String::new(), |p| p.post.clone());
     out.word(joined + &post);
+    out.since_code = 0;
     2 + parts.len()
 }
 
@@ -514,7 +664,13 @@ mod tests {
 
     #[test]
     fn equals_pipe_brackets_and_prefixes() {
-        assert_eq!(code("count equals five"), "count = five");
+        assert_eq!(code("x equals five"), "x = five");
+        assert_eq!(code("max underscore retries equals 3"), "max_retries = 3");
+        assert_eq!(code("console dot log"), "console.log");
+        assert_eq!(code("Use dot env files for secrets."), "Use .env files for secrets.");
+        assert_eq!(code("Add the dot gitignore entry"), "Add the .gitignore entry");
+        assert_eq!(code("version 2 dot 0"), "version 2.0");
+        assert_eq!(shell("npm test pipe tee build dot txt"), "npm test | tee build.txt");
         assert_eq!(code("if x double equals y"), "if x == y");
         assert_eq!(shell("ps aux pipe grep silas"), "ps aux | grep silas");
         assert_eq!(code("print open paren name close paren"), "print(name)");
@@ -538,9 +694,70 @@ mod tests {
     }
 
     #[test]
-    fn new_line_and_new_paragraph_break_the_text() {
-        assert_eq!(code("first item new line second item"), "first item\nsecond item");
+    fn new_line_said_as_its_own_command_breaks_the_text_in_code() {
+        assert_eq!(code("first item. New line. Second item"), "first item.\nSecond item");
         assert_eq!(code("Thanks. New paragraph. See you"), "Thanks.\n\nSee you");
+        assert_eq!(code("new line"), "\n");
+        assert_eq!(code("fn main open paren close paren open brace new line"), "fn main() {\n");
+        // After an ordinary word it is two words, not a break.
+        assert_eq!(code("first item new line second item"), "first item new line second item");
+    }
+
+    #[test]
+    fn terminal_never_breaks_a_line_from_spoken_code() {
+        // A break in a terminal is Return: it would run a half-dictated command.
+        for s in ["new line", "first item. New line. Second item", "Thanks. New paragraph. See you", "ls newline"] {
+            assert!(!shell(s).contains('\n'), "shell broke the line: {s}");
+        }
+        assert_eq!(shell("git commit dash m fix new line handling"), "git commit -m fix new line handling");
+        assert_eq!(code("git commit dash m fix new line handling"), "git commit -m fix new line handling");
+    }
+
+    /// Prose people dictate into Cursor, VS Code and terminal coding agents: comments, commit
+    /// messages and prompts that name symbols and cases without meaning them as code.
+    #[test]
+    fn prose_dictated_to_coding_tools_is_left_alone() {
+        for s in [
+            "Fix the dash in the header so it lines up.",
+            "Add a comment that explains why we use a dot here.",
+            "Refactor this function to use snake case naming throughout.",
+            "Rename the variables to camel case before the review.",
+            "The tests fail when the path has a slash at the end.",
+            "Make sure the config file ends with a new line.",
+            "Write the constant names in all caps.",
+            "Don't change the equals check in the parser.",
+            "Use a pipe to send the output to the logger.",
+            "Explain what the colon does in this type signature.",
+            "The tilde in the version range allows patch updates.",
+            "Remove the underscore prefix from private fields.",
+            "Why does the dot product return a negative number?",
+            "Split the string on each new line and trim the parts.",
+            "Our team writes Python in snake case and JavaScript in camel case.",
+            "Add a dash between the date and the time.",
+            "Results underscore how slow the old parser was.",
+            "Two plus two equals four in this test.",
+            "Check that the main pipe closes when the reader exits.",
+            "Commit with a message that says fix the slash command.",
+            "Print a new line after each test result.",
+            "Put the API key in all caps in the env file.",
+            "Draw a dot at every point where the lines cross.",
+            "Explain the difference between camel case and snake case.",
+            "Strip the leading tilde from home paths.",
+            "Format the dates with a dash, not a slash.",
+            "This pipe dream of a rewrite can wait.",
+            "Should the header use all caps or title case?",
+            "Hard work equals results, so ship it.",
+            "Snake case variable names are preferred here.",
+            "Use snake case variable names in Python.",
+            "New line handling broke on Windows.",
+            "Fix newline handling in the parser.",
+            "I need more dot points in the summary.",
+            "Each red dot marks a failing test.",
+            "Use camel case names for the props.",
+        ] {
+            assert_eq!(shell(s), s, "shell changed prose: {s}");
+            assert_eq!(code(s), s, "code changed prose: {s}");
+        }
     }
 
     #[test]
@@ -572,6 +789,16 @@ mod tests {
             "Look at the tilde key.",
             "That was a close call.",
             "She wrote one new line.",
+            "Results underscore the need.",
+            "Hard work equals success.",
+            "The main pipe leaks.",
+            "A red dot appears.",
+            "Use tilde key.",
+            "Type all caps please.",
+            "Fix the missing new line.",
+            "Python prefers snake case variables.",
+            "We use camel case naming here",
+            "count equals five",
         ] {
             assert_eq!(shell(s), s, "shell changed prose: {s}");
             assert_eq!(code(s), s, "code changed prose: {s}");
