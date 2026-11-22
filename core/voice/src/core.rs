@@ -127,9 +127,30 @@ pub struct Core {
     /// False while the interface has paused dictation: keys are ignored, nothing records.
     /// The model stays loaded.
     enabled: AtomicBool,
+    /// Dictionary sync (docs/sync.md), once `start_sync` has run.
+    pub sync: std::sync::OnceLock<Arc<crate::sync_engine::SyncEngine>>,
 }
 
 pub type Shared = Arc<Core>;
+
+/// The live dictionary as sync sees it: merges happen under the core's lock and are saved and
+/// announced like any other change, except that they don't count as the person's edits.
+struct CoreDict(std::sync::Weak<Core>);
+
+impl crate::sync_engine::DictStore for CoreDict {
+    fn update(&self, f: &mut dyn FnMut(&mut Dictionary) -> bool) {
+        let Some(core) = self.0.upgrade() else { return };
+        let snapshot = {
+            let mut d = core.dict.lock();
+            if !f(&mut d) {
+                return;
+            }
+            store::save("dictionary.json", &*d);
+            d.clone()
+        };
+        core.host.emit("dictionary", json!(snapshot));
+    }
+}
 
 /// Which models a benchmark run measures.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -436,6 +457,7 @@ impl Core {
             dictations: AtomicU64::new(0),
             loading: Mutex::new(None),
             enabled: AtomicBool::new(true),
+            sync: std::sync::OnceLock::new(),
             settings: Mutex::new(settings),
         })
     }
@@ -1432,7 +1454,7 @@ impl Core {
             h.truncate(store::HISTORY_KEEP);
             store::save("history.json", &*h);
         }
-        store::save("dictionary.json", &*me.dict.lock());
+        me.save_dictionary();
         *me.last_activity.lock() = Instant::now();
         // `typed` is true only when the text really went out as keystrokes: the app moves Silas to the Trash
         // after the first one, never after a dictation that only reached History.
@@ -1497,6 +1519,40 @@ impl Core {
         let _ = which;
     }
 
+    // ------------------------------------------------------------ dictionary and sync
+
+    /// Save the dictionary and let sync know it changed. Every edit goes through here (or calls
+    /// [`Core::dictionary_changed`] after saving under its own lock).
+    pub fn save_dictionary(&self) {
+        store::save("dictionary.json", &*self.dict.lock());
+        self.dictionary_changed();
+    }
+
+    /// The person changed the dictionary. Call with the dictionary lock released.
+    pub fn dictionary_changed(&self) {
+        if let Some(s) = self.sync.get() {
+            s.local_changed();
+        }
+    }
+
+    /// Start dictionary sync for this data folder, with the key in the OS keychain. A merge that
+    /// changes the dictionary replaces it in place, so the next dictation uses it, and the
+    /// interface gets a `dictionary` event.
+    pub fn start_sync(self: &Shared) -> Arc<crate::sync_engine::SyncEngine> {
+        use crate::sync_engine::{Options, SyncEngine};
+        let engine = self.sync.get_or_init(|| {
+            let dir = store::data_dir();
+            let keys = Arc::new(crate::sync_key::OsKeyStore::new(&dir));
+            let dict = Arc::new(CoreDict(Arc::downgrade(self)));
+            let mut o = Options::new(dir, keys, dict);
+            let host = self.host.clone();
+            o.emit = Arc::new(move |event, payload| host.emit(event, payload));
+            SyncEngine::new(o)
+        });
+        engine.start();
+        engine.clone()
+    }
+
     // ------------------------------------------------------------ learning
 
     pub fn learn_from_edit(
@@ -1507,7 +1563,7 @@ impl Core {
         history_id: Option<&str>,
     ) -> LearnResult {
         let result = self.dict.lock().learn(typed, fixed, explicit);
-        store::save("dictionary.json", &*self.dict.lock());
+        self.save_dictionary();
         if let Some(id) = history_id {
             let mut h = self.history.lock();
             if let Some(item) = h.iter_mut().find(|i| i.id == id) {
@@ -1863,6 +1919,32 @@ mod tests {
         assert!(busy_cue_due(None, t));
         assert!(!busy_cue_due(Some(t), t + Duration::from_millis(400)));
         assert!(busy_cue_due(Some(t), t + BUSY_EVERY));
+    }
+
+    #[test]
+    fn a_sync_merge_replaces_the_live_dictionary_and_says_so() {
+        use crate::sync_engine::DictStore;
+        let _store = STORE_LOCK.lock();
+        let (core, seen, dir) = seen_core("sync-merge");
+        // Sync was never set up here, so starting it reads no keychain and opens no port.
+        let engine = core.start_sync();
+        assert!(!engine.status().enabled && engine.status().port.is_none());
+        CoreDict(Arc::downgrade(&core)).update(&mut |d| {
+            d.add_term("Parish1", "user");
+            true
+        });
+        // The next dictation uses it, the file has it, and the window hears about it.
+        assert_eq!(core.dict.lock().apply("parish1 is up", false), "Parish1 is up");
+        assert!(store::read_raw("dictionary.json").contains("Parish1"));
+        let events = seen.0.lock();
+        let (_, payload) = events.iter().find(|(e, _)| e == "dictionary").expect("a dictionary event");
+        assert_eq!(payload["terms"][0]["text"], "Parish1");
+        drop(events);
+        // A merge that changes nothing writes nothing and says nothing.
+        let before = seen.0.lock().len();
+        CoreDict(Arc::downgrade(&core)).update(&mut |_| false);
+        assert_eq!(seen.0.lock().len(), before);
+        done(dir);
     }
 
     #[test]

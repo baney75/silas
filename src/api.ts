@@ -181,6 +181,48 @@ export interface LearnResult {
   terms: string[];
 }
 
+/** A device this one has synced with. */
+export interface SyncDevice {
+  id: string;
+  name: string;
+  platform: string;
+  /** Unix ms. */
+  lastSynced: number;
+  via: "network" | "folder";
+}
+
+/** The last sync, for "Synced with Donovan's iPhone just now (3 new words)". */
+export interface LastSync {
+  with: string;
+  at: number;
+  added: number;
+  changed: number;
+  removed: number;
+}
+
+export interface SyncStatus {
+  enabled: boolean;
+  /** A sync key is on this device. */
+  paired: boolean;
+  deviceId: string;
+  /** This device's name as the others see it. */
+  name: string;
+  platform: Platform;
+  /** The listener's port while sync runs. */
+  port: number | null;
+  /** host:port peers for networks where multicast doesn't reach. */
+  peers: string[];
+  folder: string | null;
+  devices: SyncDevice[];
+  last: LastSync | null;
+}
+
+/** Shown only when the person asks to pair a device. */
+export interface PairingCode {
+  code: string;
+  url: string;
+}
+
 export type ProgressStage = "downloading" | "unpacking" | "loading" | "done" | "error";
 
 export interface ModelProgress {
@@ -214,6 +256,8 @@ export interface EventMap {
   "benchmark-error": { message: string };
   "update-available": UpdateInfo;
   "update-progress": UpdateProgress;
+  sync: SyncStatus;
+  dictionary: Dictionary;
 }
 
 export type PermissionKind = "microphone" | "accessibility" | "input";
@@ -276,6 +320,18 @@ export const api = {
   getDevice: () => call<Device>("get_device"),
   checkUpdate: () => call<UpdateInfo | null>("check_update"),
   installUpdate: () => call<null>("install_update"),
+
+  getSync: () => call<SyncStatus>("get_sync"),
+  setSyncEnabled: (on: boolean) => call<SyncStatus>("set_sync_enabled", { on }),
+  syncPairingCode: () => call<PairingCode>("sync_pairing_code"),
+  joinSync: (code: string) => call<SyncStatus>("join_sync", { code }),
+  newSyncKey: () => call<SyncStatus>("new_sync_key"),
+  leaveSync: () => call<SyncStatus>("leave_sync"),
+  setSyncName: (name: string) => call<SyncStatus>("set_sync_name", { name }),
+  addSyncPeer: (addr: string) => call<SyncStatus>("add_sync_peer", { addr }),
+  removeSyncPeer: (addr: string) => call<SyncStatus>("remove_sync_peer", { addr }),
+  setSyncFolder: (folder: string | null) => call<SyncStatus>("set_sync_folder", { folder }),
+  syncNow: () => call<null>("sync_now"),
 };
 
 /** Error text from a rejected invoke (Tauri rejects with a string). */

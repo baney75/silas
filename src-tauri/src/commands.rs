@@ -146,10 +146,14 @@ pub fn clear_history(core: State<Shared>) {
 }
 
 fn with_dict(core: &State<Shared>, f: impl FnOnce(&mut Dictionary)) -> Dictionary {
-    let mut d = core.dict.lock();
-    f(&mut d);
-    store::save("dictionary.json", &*d);
-    d.clone()
+    let out = {
+        let mut d = core.dict.lock();
+        f(&mut d);
+        store::save("dictionary.json", &*d);
+        d.clone()
+    };
+    core.dictionary_changed();
+    out
 }
 
 #[tauri::command]
@@ -193,11 +197,15 @@ pub fn dismiss_pending(core: State<Shared>, from: String) -> Dictionary {
 
 #[tauri::command]
 pub fn import_dictionary(core: State<Shared>, json: String) -> R<Dictionary> {
-    let mut d = core.dict.lock();
-    d.import(&json)
-        .map_err(|e| format!("That file isn't a dictionary Silas can read: {e}"))?;
-    store::save("dictionary.json", &*d);
-    Ok(d.clone())
+    let out = {
+        let mut d = core.dict.lock();
+        d.import(&json)
+            .map_err(|e| format!("That file isn't a dictionary Silas can read: {e}"))?;
+        store::save("dictionary.json", &*d);
+        d.clone()
+    };
+    core.dictionary_changed();
+    Ok(out)
 }
 
 #[tauri::command]
@@ -367,6 +375,82 @@ pub async fn check_update(app: AppHandle) -> R<Option<updates::UpdateInfo>> {
 #[tauri::command]
 pub async fn install_update(app: AppHandle) -> R<()> {
     updates::install(&app).await.map_err(err)
+}
+
+// ---------------------------------------------------------------- sync (docs/sync.md)
+
+use polycarp_voice::sync_engine::{PairingCode, SyncEngine, SyncStatus};
+
+fn sync_engine(core: &Shared) -> R<std::sync::Arc<SyncEngine>> {
+    core.sync.get().cloned().ok_or_else(|| "Sync isn't running.".to_string())
+}
+
+/// Runs off the main thread: these may read the keychain or restart the listener.
+async fn on_sync<T: Send + 'static>(
+    core: State<'_, Shared>,
+    f: impl FnOnce(&SyncEngine) -> anyhow::Result<T> + Send + 'static,
+) -> R<T> {
+    let engine = sync_engine(core.inner())?;
+    tauri::async_runtime::spawn_blocking(move || f(&engine).map_err(|e| format!("{e:#}")))
+        .await
+        .map_err(err)?
+}
+
+#[tauri::command]
+pub async fn get_sync(core: State<'_, Shared>) -> R<SyncStatus> {
+    Ok(sync_engine(core.inner())?.status())
+}
+
+#[tauri::command]
+pub async fn set_sync_enabled(core: State<'_, Shared>, on: bool) -> R<SyncStatus> {
+    on_sync(core, move |e| e.set_enabled(on)).await
+}
+
+/// The pairing code and URL, only when the person asks to pair a device.
+#[tauri::command]
+pub async fn sync_pairing_code(core: State<'_, Shared>) -> R<PairingCode> {
+    on_sync(core, |e| e.pairing_code()).await
+}
+
+#[tauri::command]
+pub async fn join_sync(core: State<'_, Shared>, code: String) -> R<SyncStatus> {
+    on_sync(core, move |e| e.join(&code)).await
+}
+
+#[tauri::command]
+pub async fn new_sync_key(core: State<'_, Shared>) -> R<SyncStatus> {
+    on_sync(core, |e| e.new_key()).await
+}
+
+#[tauri::command]
+pub async fn leave_sync(core: State<'_, Shared>) -> R<SyncStatus> {
+    on_sync(core, |e| e.leave()).await
+}
+
+#[tauri::command]
+pub async fn set_sync_name(core: State<'_, Shared>, name: String) -> R<SyncStatus> {
+    on_sync(core, move |e| e.set_name(&name)).await
+}
+
+#[tauri::command]
+pub async fn add_sync_peer(core: State<'_, Shared>, addr: String) -> R<SyncStatus> {
+    on_sync(core, move |e| e.add_peer(&addr)).await
+}
+
+#[tauri::command]
+pub async fn remove_sync_peer(core: State<'_, Shared>, addr: String) -> R<SyncStatus> {
+    on_sync(core, move |e| e.remove_peer(&addr)).await
+}
+
+#[tauri::command]
+pub async fn set_sync_folder(core: State<'_, Shared>, folder: Option<String>) -> R<SyncStatus> {
+    on_sync(core, move |e| e.set_folder(folder.as_deref())).await
+}
+
+#[tauri::command]
+pub async fn sync_now(core: State<'_, Shared>) -> R<()> {
+    sync_engine(core.inner())?.sync_now();
+    Ok(())
 }
 
 #[cfg(test)]

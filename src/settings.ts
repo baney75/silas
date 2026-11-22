@@ -1,6 +1,7 @@
 import { api, errorText, type Settings, type TypingSpeed } from "./api";
 import { checkForUpdate, hotkeyLabel, installUpdate, store, subscribe, updateSettings } from "./store";
 import type { UpdateChannel } from "./api";
+import { forgetPairingCode, syncGroup } from "./sync";
 import { clear, h, keycap, logo, segmented, switchEl, toast } from "./ui";
 
 export const languages: Array<[string, string]> = [
@@ -147,6 +148,7 @@ export function mountSettings(root: HTMLElement): () => void {
         toggle("sounds", "Sounds", "A soft click when Silas starts and stops listening."),
         toggle("showOverlay", "Show the recording pill", "A small floating pill while Silas listens."),
       ),
+      syncSection(),
       group("System", toggle("launchAtLogin", isMac ? "Open at login" : "Start with your computer", isMac ? "Silas waits quietly in the menu bar." : "Silas waits quietly in the system tray.")),
       group(
         "Updates",
@@ -176,7 +178,16 @@ export function mountSettings(root: HTMLElement): () => void {
     );
   }
 
+  function syncSection(): HTMLElement {
+    return syncGroup(() => body.querySelector(".sync-group")?.replaceWith(syncSection()));
+  }
+
   draw();
+  // A sync event redraws only the Sync group, and not while someone is typing in it.
+  const unsubSync = subscribe(["sync"], () => {
+    const old = body.querySelector(".sync-group");
+    if (old && !old.contains(document.activeElement)) old.replaceWith(syncSection());
+  });
   // The list is read at launch and on focus (`refreshMicrophones`); a newer one replaces only this control.
   const unsubMics = subscribe(["microphones"], () => {
     const old = body.querySelector("#set-mic");
@@ -200,6 +211,8 @@ export function mountSettings(root: HTMLElement): () => void {
     unsub();
     unsubUpdate();
     unsubMics();
+    unsubSync();
+    forgetPairingCode();
   };
 }
 
