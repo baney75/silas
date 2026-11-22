@@ -212,14 +212,9 @@ final class SyncController {
         guard isOn, !busy else { return }
         busy = true
         defer { busy = false }
-        for address in addresses {
-            guard let hp = parseHostPort(address) else { continue }
-            do {
-                try await network.sync(host: hp.host, port: hp.port)
-            } catch {
-                NSLog("SILAS sync %@ failed: %@", address, String(describing: error))
-            }
-        }
+        // Peers by address and every peer the browser has kept, so a change reaches a peer found
+        // earlier on the local network whichever side has the smaller device id.
+        await network.syncAll(addresses: addresses)
         await syncFolder()
         await saveLedger()
     }

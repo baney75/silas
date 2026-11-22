@@ -1,4 +1,5 @@
 import CryptoKit
+import Network
 import XCTest
 @testable import SilasCore
 
@@ -332,6 +333,54 @@ final class SyncTransportTests: XCTestCase {
         XCTAssertEqual(tb, ["Parish1", "Rectory1"])
         let peers = await a.ledger.peers.map(\.name)
         XCTAssertEqual(peers, ["Mac"])
+    }
+
+    /// A peer found once on the local network gets later edits without being found again, even
+    /// from the side with the larger device id, which does not dial when the peer first appears.
+    func testDiscoveredPeerGetsLaterEdits() async throws {
+        let key = SyncKey.generate()
+        let group = SyncKey.groupID(key)
+        let aID = String(repeating: "f", count: 32), bID = String(repeating: "0", count: 32)
+        let a = SyncPeer(ledger: SyncLedger(deviceID: aID), keys: MemoryKeyStore(key), name: "iPhone", platform: "ios")
+        let b = SyncPeer(ledger: SyncLedger(deviceID: bID), keys: MemoryKeyStore(key), name: "Mac", platform: "macos")
+        let box = Box()
+        await box.set(a: { var d = PersonalDictionary(); d.addTerm("Parish1", source: "user"); return d }(),
+                      b: { var d = PersonalDictionary(); d.addTerm("Rectory1", source: "user"); return d }())
+
+        let server = SyncNetwork()
+        server.ownFrame = { try? await b.frame(for: await box.b) }
+        server.receivedFrame = { frame, _ in
+            if let o = try? await b.receive(frame, into: await box.b), let d = o.dictionary { await box.setB(d) }
+        }
+        try await server.start(identity: .init(name: "Mac", groupID: group, deviceID: bID), port: 0, advertise: false)
+        defer { server.stop() }
+        let port = try XCTUnwrap(server.port.flatMap { NWEndpoint.Port(rawValue: $0) })
+
+        let client = SyncNetwork()
+        client.ownFrame = { try? await a.frame(for: await box.a) }
+        client.receivedFrame = { frame, _ in
+            if let o = try? await a.receive(frame, into: await box.a), let d = o.dictionary { await box.setA(d) }
+        }
+        let me = SyncNetwork.Identity(name: "iPhone", groupID: group, deviceID: aID)
+        let mac = NWEndpoint.hostPort(host: "127.0.0.1", port: port)
+        client.browsed(mac, group: group, device: bID, me: me)
+        client.browsed(.hostPort(host: "127.0.0.1", port: 1), group: "another group", device: "11", me: me)
+        client.browsed(.hostPort(host: "127.0.0.1", port: 2), group: group, device: aID, me: me)
+        XCTAssertEqual(client.discovered, [mac])
+
+        // A local edit after discovery: the next sync, with no peers by address, reaches the Mac.
+        var edited = await box.a
+        edited.addTerm("Chapel1", source: "user")
+        await box.setA(edited)
+        await client.syncAll(addresses: [])
+        for _ in 0..<50 where !(await box.b.terms.contains { $0.text == "Chapel1" }) {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let got = Set(await box.b.terms.map(\.text))
+        XCTAssertEqual(got, ["Parish1", "Rectory1", "Chapel1"])
+
+        client.browsed(mac, group: nil, device: nil, me: me)
+        XCTAssertTrue(client.discovered.isEmpty, "a peer the browser lost is not dialed")
     }
 
     func testHostPort() {

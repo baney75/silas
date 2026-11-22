@@ -200,22 +200,75 @@ public final class SyncNetwork {
         browser?.cancel()
         browser = nil
         port = nil
+        seenLock.withLock { seen.removeAll() }
     }
 
     private func browse(_ me: Identity) {
         let b = NWBrowser(for: .bonjourWithTXTRecord(type: Self.serviceType, domain: nil), using: .tcp)
-        b.browseResultsChangedHandler = { [weak self] results, changes in
+        b.browseResultsChangedHandler = { [weak self] _, changes in
+            guard let self else { return }
+            func txt(_ r: NWBrowser.Result) -> (g: String?, d: String?) {
+                guard case .bonjour(let t) = r.metadata else { return (nil, nil) }
+                return (t["g"], t["d"])
+            }
             for change in changes {
-                guard case .added(let r) = change, case .bonjour(let txt) = r.metadata else { continue }
-                // Ignore other groups and ourselves; the smaller device id connects.
-                guard txt["g"] == me.groupID, let d = txt["d"], d != me.deviceID else { continue }
-                if Array(me.deviceID.utf8).lexicographicallyPrecedes(Array(d.utf8)) {
-                    self?.peerAppeared?(r.endpoint)
+                switch change {
+                case .added(let r):
+                    self.browsed(r.endpoint, group: txt(r).g, device: txt(r).d, me: me)
+                case .changed(let old, let r, _):
+                    if old.endpoint != r.endpoint { self.browsed(old.endpoint, group: nil, device: nil, me: me) }
+                    self.browsed(r.endpoint, group: txt(r).g, device: txt(r).d, me: me)
+                case .removed(let r):
+                    self.browsed(r.endpoint, group: nil, device: nil, me: me)
+                default:
+                    break
                 }
             }
         }
         browser = b
         b.start(queue: queue)
+    }
+
+    /// Peers of this group the browser has seen and not lost, with their device ids.
+    private let seenLock = NSLock()
+    private var seen: [NWEndpoint: String] = [:]
+
+    /// The local network peers `syncAll` dials.
+    public var discovered: [NWEndpoint] { seenLock.withLock { Array(seen.keys) } }
+
+    /// One browse result: `group` and `device` from its TXT record, both nil when it went away.
+    /// Other groups and this device are ignored. A peer seen for the first time is synced at once
+    /// by the side with the smaller device id; after that either side dials it on its own change.
+    func browsed(_ endpoint: NWEndpoint, group: String?, device: String?, me: Identity) {
+        let first: String? = seenLock.withLock {
+            guard group == me.groupID, let device, device != me.deviceID else {
+                seen[endpoint] = nil
+                return nil
+            }
+            defer { seen[endpoint] = device }
+            return seen[endpoint] == nil ? device : nil
+        }
+        if let d = first, Array(me.deviceID.utf8).lexicographicallyPrecedes(Array(d.utf8)) {
+            peerAppeared?(endpoint)
+        }
+    }
+
+    /// One sync with every peer by address and every peer the browser has kept. Failures are
+    /// reported through `onState` and do not stop the rest.
+    public func syncAll(addresses: [String]) async {
+        var targets: [(String, NWEndpoint)] = []
+        for a in addresses {
+            guard let hp = parseHostPort(a) else { continue }
+            targets.append((a, .hostPort(host: NWEndpoint.Host(hp.host), port: NWEndpoint.Port(rawValue: hp.port) ?? .any)))
+        }
+        targets += discovered.map { ("\($0)", $0) }
+        for (label, endpoint) in targets {
+            do {
+                try await sync(with: endpoint)
+            } catch {
+                onState?("sync with \(label) failed: \(error)")
+            }
+        }
     }
 
     /// Sync with a peer: as the connecting side, send first, then read.
