@@ -204,7 +204,9 @@ socket (baney75/local-studio#6).
 
 ## Choosing a model for this computer
 
-At startup, in the background, the core fetches `registry/devices.json` from GitHub (5 s timeout,
+At startup, in the background, the core first reads this computer's own `benchmark.json`; when
+its pick passes both bars, that settles it and nothing is looked up. Otherwise the core fetches
+`registry/devices.json` from GitHub (5 s timeout,
 cached as `registry.json`) and looks up the device key. On a miss it asks the report service
 (`GET /v1/devices?key=`, 3 s timeout, cached as `community.json`). Trust order:
 

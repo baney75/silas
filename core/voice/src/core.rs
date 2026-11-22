@@ -171,6 +171,42 @@ fn remote_pick_applies(model_source: &str, source: &str, model_installed: bool, 
     model_source == "default" && (model_installed || (source == "registry" && !any_installed))
 }
 
+/// What startup does about this computer's model.
+#[derive(Debug, PartialEq)]
+enum DevicePlan {
+    /// Nothing: this computer's own benchmark settles it, or a saved report says one already ran.
+    Keep,
+    /// Move to this model, if `remote_pick_applies`, from "registry" or "community".
+    Remote(String, &'static str),
+    /// Measure the active model once one loads.
+    Measure,
+}
+
+/// Decide from this computer's current report and the lookups, each called at most once. This
+/// computer's own passing pick comes first, as in `best_for_device_from`, and then no lookup runs:
+/// neither the registry nor the community overrides a measurement made here. Then the registry,
+/// then the community; with no answer, measure unless a report is already saved.
+fn plan_device_pick(
+    report: Option<&Report>,
+    registry: impl FnOnce() -> Option<String>,
+    community: impl FnOnce() -> Option<String>,
+) -> DevicePlan {
+    if report.is_some_and(|r| benchmark::best_for_device_from(Some(r)).is_some()) {
+        return DevicePlan::Keep;
+    }
+    if let Some(model) = registry() {
+        return DevicePlan::Remote(model, "registry");
+    }
+    if let Some(model) = community() {
+        return DevicePlan::Remote(model, "community");
+    }
+    if report.is_some() {
+        DevicePlan::Keep
+    } else {
+        DevicePlan::Measure
+    }
+}
+
 /// May a model change go ahead? A user's choice is never overridden by an automatic one,
 /// unless the model they chose is no longer installed and so there is no choice left to keep.
 pub fn allows_model_change(source: &str, auto: bool, chosen_installed: bool) -> bool {
@@ -733,9 +769,10 @@ impl Core {
 
     // ------------------------------------------------------------ device pick
 
-    /// At startup, in the background: look this computer up in the registry, then in the
-    /// community results (only a pick at least `benchmark::MIN_AGREE` reports agree on), and with no
-    /// answer from either, measure the active model once.
+    /// At startup, in the background: keep this computer's own benchmark pick if it has a passing
+    /// one; else look this computer up in the registry, then in the community results (only a pick
+    /// at least `benchmark::MIN_AGREE` senders agree on), and with no answer from either, measure
+    /// the active model once.
     pub fn start_device_pick(self: &Shared) {
         let me = self.clone();
         std::thread::spawn(move || me.device_pick());
@@ -744,13 +781,14 @@ impl Core {
     fn device_pick(self: &Shared) {
         let key = benchmark::device().key.clone();
         let lookup = benchmark::LookupDone;
-        // The maintainer-approved registry first; the community only when the registry has no entry.
-        let found = match benchmark::fetch_registry().lookup(&key) {
-            Some(entry) => Some((entry.model.clone(), "registry")),
-            None => benchmark::fetch_community(&key).lookup(&key).map(|m| (m, "community")),
-        };
+        let report = benchmark::load_report();
+        let plan = plan_device_pick(
+            report.as_ref(),
+            || benchmark::fetch_registry().lookup(&key).map(|e| e.model.clone()),
+            || benchmark::fetch_community(&key).lookup(&key),
+        );
         drop(lookup);
-        if let Some((model, source)) = found {
+        if let DevicePlan::Remote(model, source) = plan {
             // A device the registry or community knows needs no benchmark.
             let any_installed = models::MODELS.iter().any(|m| models::installed(m.id));
             // (applies, the model changed)
@@ -773,7 +811,7 @@ impl Core {
             }
             return;
         }
-        if benchmark::load_report().is_some() {
+        if plan == DevicePlan::Keep {
             return;
         }
         while self.active_model().is_none() {
@@ -2159,6 +2197,37 @@ mod tests {
         assert!(should_start_load(None, "parakeet-v3"));
         assert!(should_start_load(Some("cohere-int4"), "parakeet-v3"));
         assert!(!should_start_load(Some("parakeet-v3"), "parakeet-v3"));
+    }
+
+    /// Review first-F2 and sol-F2 on #64: the registry and community lookups ran before the
+    /// local report, so a community pick overrode this computer's own benchmark.
+    #[test]
+    fn this_computers_own_benchmark_wins_over_any_lookup() {
+        let r = |m: &str, speed: f32, wer: f32| ModelResult { model: m.into(), speed, wer, ..Default::default() };
+        let device = benchmark::build_device("macos", "Apple M5", "macOS 27", 10, 32, None);
+        let local = Report::new(device.clone(), vec![r("parakeet-v3", 20.0, 0.05), r("cohere-int4", 12.0, 0.03)]);
+        assert_eq!(local.pick.as_deref(), Some("cohere-int4"));
+        let asked = std::cell::Cell::new(0);
+        let lookup = |m: &str| {
+            asked.set(asked.get() + 1);
+            Some(m.to_string())
+        };
+        // A passing local pick: no lookup is consulted, and nothing changes.
+        let plan = plan_device_pick(Some(&local), || lookup("parakeet-v3"), || lookup("parakeet-v3"));
+        assert_eq!((plan, asked.get()), (DevicePlan::Keep, 0));
+        // A local report with no passing pick still lets the registry, then the community, answer.
+        let failing = Report::new(device, vec![r("parakeet-v3", 4.0, 0.05)]);
+        assert_eq!(
+            plan_device_pick(Some(&failing), || None, || Some("parakeet-v3".into())),
+            DevicePlan::Remote("parakeet-v3".into(), "community")
+        );
+        assert_eq!(
+            plan_device_pick(Some(&failing), || Some("cohere-int4".into()), || panic!("the registry answered")),
+            DevicePlan::Remote("cohere-int4".into(), "registry")
+        );
+        assert_eq!(plan_device_pick(Some(&failing), || None, || None), DevicePlan::Keep);
+        // No report and no answer: measure.
+        assert_eq!(plan_device_pick(None, || None, || None), DevicePlan::Measure);
     }
 
     /// Review first-F1 on #64: a community pick, which anyone can post, chose the model first-run
