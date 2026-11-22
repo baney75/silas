@@ -22,7 +22,6 @@ import type {
   Settings,
   Stats,
   Status,
-  Theme,
 } from "./api";
 
 type Listener = (payload: unknown) => void;
@@ -107,12 +106,25 @@ const models: ModelEntry[] = [
     id: "parakeet-v3",
     name: "Parakeet v3",
     tier: "fast",
-    tagline: "Fast and accurate. The right choice for most people.",
-    sizeMb: 478,
+    tagline: "Fast and accurate, and the best of these with accents. The right choice for most people.",
+    sizeMb: 463,
     languages: "25 European languages",
     installed: !onboarding,
     active: !onboarding,
     recommended: true,
+    deviceResult: null,
+    bestForDevice: false,
+  },
+  {
+    id: "parakeet-v3-onnx",
+    name: "Parakeet v3 (ONNX)",
+    tier: "balanced",
+    tagline: "The same model on the older engine, for computers that can't run Parakeet v3.",
+    sizeMb: 478,
+    languages: "25 European languages",
+    installed: false,
+    active: false,
+    recommended: false,
     deviceResult: null,
     bestForDevice: false,
   },
@@ -146,6 +158,7 @@ const device: Device = {
 /** What each mock model scores, so every state of the page can be previewed. */
 const mockScores: Record<string, ModelResult> = {
   "parakeet-v3": { model: "parakeet-v3", speed: 23.4, wer: 0.019, audio_seconds: 62.2, compute_seconds: 2.66, clips: 9 },
+  "parakeet-v3-onnx": { model: "parakeet-v3-onnx", speed: 19.8, wer: 0.022, audio_seconds: 62.2, compute_seconds: 3.14, clips: 9 },
   "cohere-int4": { model: "cohere-int4", speed: 4.1, wer: 0.012, audio_seconds: 62.2, compute_seconds: 15.2, clips: 9 },
 };
 
@@ -399,8 +412,6 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
   await delay(60);
   const out = (v: unknown) => clone(v) as T;
   switch (cmd) {
-    case "get_theme":
-      return (await previewTheme()) as T;
     case "get_state":
       return out(state);
     case "get_settings":
@@ -584,47 +595,4 @@ export function startOverlayDemo() {
     void loop();
   };
   void loop();
-}
-
-// Preview only: `?themeFile=/__theme/still-water-dark.json` loads a theme file that vite serves from
-// the folder named by SILAS_THEME_DIR (see vite.config.ts). `import.meta.env.DEV` is false in a
-// production build, so this whole block is removed from it.
-async function previewTheme(): Promise<Theme | null> {
-  if (!import.meta.env.DEV) return null;
-  const file = params.get("themeFile");
-  if (!file) return null;
-  try {
-    const res = await fetch(file, { cache: "no-store" });
-    if (!res.ok) return null;
-    const text = await res.text();
-    watchThemeFile(file, text);
-    return fromFile(text);
-  } catch {
-    return null;
-  }
-}
-
-/** What the core would send: the voice surface of the file plus its name and mode (no checks here). */
-function fromFile(text: string): Theme {
-  const f = JSON.parse(text);
-  const v = f.surfaces.voice;
-  return { name: f.name, mode: f.mode, light: v.light, dark: v.dark, shape: v.shape, type: v.type, motion: v.motion };
-}
-
-let watching = false;
-function watchThemeFile(file: string, first: string) {
-  if (watching) return;
-  watching = true;
-  let last = first;
-  window.setInterval(async () => {
-    try {
-      const res = await fetch(file, { cache: "no-store" });
-      const text = res.ok ? await res.text() : "";
-      if (text === last) return;
-      last = text;
-      emit("theme_changed", text ? fromFile(text) : null);
-    } catch {
-      /* keep the last theme */
-    }
-  }, 1000);
 }

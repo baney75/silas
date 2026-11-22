@@ -1,7 +1,9 @@
-//! Updates from GitHub Releases on two channels.
+//! Updates from GitHub Releases on three channels (docs/channels.md).
 //!
-//! stable  (macOS only): the latest full release, built and signed on Donovan's Mac.
-//! nightly (all):        the rolling `nightly` pre-release that CI rebuilds every night.
+//! stable:  the latest full release. Promoted from a nightly; the Mac app and every updater
+//!          signature are made on Donovan's Mac.
+//! nightly: the rolling `nightly` pre-release that CI rebuilds every night `main` changed.
+//! dev:     the rolling `dev` pre-release that CI rebuilds on every merge to `main`.
 
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
@@ -18,8 +20,10 @@ use crate::core::{Shared, Status};
 
 const REPO: &str = "https://github.com/baney75/silas/releases";
 
-/// Each channel has its own signing key. The stable key never leaves the release Mac,
-/// so nothing CI signs can ever install on a stable user's machine.
+/// Each channel has its own signing key. The stable key never leaves the release Mac, so
+/// nothing CI signs installs from the stable feed. Until a stable release carries Windows and
+/// Linux, stable installs there read the nightly feed instead (`falls_back_to_nightly`) and
+/// trust the nightly key.
 const STABLE_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI0OUZBOTBFNEEyQUQzNTgKUldSWTB5cEtEcW1mdE5FYXBNV1AyT3NGaXdzVXFvUHRPeGZlZHFiWE9mNXhZTUtEZTJWZGhicWMK";
 const NIGHTLY_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ1QTkyOTlGNzM0MEJGMTIKUldRU3YwQnpueW1wMVUvOEtteWFXL0xyUys3L1JOSmhZbkFqNEtUVTh5RjdwWGZMdWV1VzA4cGcK";
 
@@ -30,8 +34,29 @@ pub const PACKAGED: Option<&str> = option_env!("SILAS_PACKAGED");
 pub fn endpoint(channel: &str) -> String {
     match channel {
         "stable" => format!("{REPO}/latest/download/latest.json"),
+        "dev" => format!("{REPO}/download/dev/latest.json"),
         _ => format!("{REPO}/download/nightly/latest.json"),
     }
+}
+
+/// Nightly and dev are both signed by CI with the nightly key.
+pub fn pubkey(channel: &str) -> &'static str {
+    if channel == "stable" {
+        STABLE_PUBKEY
+    } else {
+        NIGHTLY_PUBKEY
+    }
+}
+
+/// Stable on Windows and Linux: until the first stable release that carries them, the stable feed
+/// has no entry for this platform. Follow nightly then, so those installs still get updates; once
+/// a stable release carries the platform, the same setting gets stable. macOS never falls back:
+/// its stable builds always exist, and a nightly there would change how macOS identifies Silas.
+fn falls_back_to_nightly(channel: &str, macos: bool, e: &tauri_plugin_updater::Error) -> bool {
+    use tauri_plugin_updater::Error;
+    channel == "stable"
+        && !macos
+        && matches!(e, Error::TargetNotFound(_) | Error::TargetsNotFound(_))
 }
 
 #[derive(Serialize, Clone)]
@@ -44,6 +69,21 @@ pub struct UpdateInfo {
     pub channel: String,
 }
 
+async fn find_on(
+    app: &AppHandle,
+    channel: &str,
+) -> anyhow::Result<Option<tauri_plugin_updater::Update>> {
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![endpoint(channel).parse()?])?
+        .pubkey(pubkey(channel))
+        // Moving from nightly or dev back to stable can mean a lower version number; allow it.
+        .version_comparator(|current, remote| remote.version != current)
+        .timeout(Duration::from_secs(30))
+        .build()?;
+    Ok(updater.check().await?)
+}
+
 async fn find(app: &AppHandle) -> anyhow::Result<Option<(tauri_plugin_updater::Update, String)>> {
     if let Some(manager) = PACKAGED {
         anyhow::bail!("This copy of Silas came from {manager}; update it there.");
@@ -54,20 +94,19 @@ async fn find(app: &AppHandle) -> anyhow::Result<Option<(tauri_plugin_updater::U
         .lock()
         .effective_channel()
         .to_string();
-    let url = endpoint(&channel).parse()?;
-    let updater = app
-        .updater_builder()
-        .endpoints(vec![url])?
-        .pubkey(if channel == "stable" {
-            STABLE_PUBKEY
-        } else {
-            NIGHTLY_PUBKEY
-        })
-        // Moving from nightly back to stable can mean a lower version number; allow it.
-        .version_comparator(|current, remote| remote.version != current)
-        .timeout(Duration::from_secs(30))
-        .build()?;
-    Ok(updater.check().await?.map(|u| (u, channel)))
+    let macos = cfg!(target_os = "macos");
+    match find_on(app, &channel).await {
+        Err(e)
+            if e.downcast_ref()
+                .is_some_and(|e| falls_back_to_nightly(&channel, macos, e)) =>
+        {
+            log::info!("no stable build for this platform yet ({e}); checking nightly");
+            Ok(find_on(app, "nightly")
+                .await?
+                .map(|u| (u, "nightly".to_string())))
+        }
+        found => Ok(found?.map(|u| (u, channel))),
+    }
 }
 
 pub async fn check(app: &AppHandle, announce: bool) -> anyhow::Result<Option<UpdateInfo>> {
@@ -542,6 +581,50 @@ mod tests {
             bundle_of(Path::new("/home/me/silas/target/debug/silas")),
             None
         );
+    }
+
+    #[test]
+    fn each_channel_has_its_feed() {
+        let base = "https://github.com/baney75/silas/releases";
+        assert_eq!(
+            endpoint("stable"),
+            format!("{base}/latest/download/latest.json")
+        );
+        assert_eq!(
+            endpoint("nightly"),
+            format!("{base}/download/nightly/latest.json")
+        );
+        assert_eq!(endpoint("dev"), format!("{base}/download/dev/latest.json"));
+        for c in crate::store::CHANNELS {
+            assert!(endpoint(c).parse::<tauri::Url>().is_ok(), "{c}");
+        }
+    }
+
+    #[test]
+    fn only_stable_trusts_the_stable_key() {
+        assert_eq!(pubkey("stable"), STABLE_PUBKEY);
+        assert_eq!(pubkey("nightly"), NIGHTLY_PUBKEY);
+        assert_eq!(pubkey("dev"), NIGHTLY_PUBKEY);
+        assert_ne!(STABLE_PUBKEY, NIGHTLY_PUBKEY);
+    }
+
+    #[test]
+    fn stable_without_this_platform_follows_nightly_off_macos() {
+        use tauri_plugin_updater::Error;
+        let missing = Error::TargetNotFound("linux-x86_64".into());
+        let none = Error::TargetsNotFound(vec!["windows-x86_64-nsis".into()]);
+        assert!(falls_back_to_nightly("stable", false, &missing));
+        assert!(falls_back_to_nightly("stable", false, &none));
+        // macOS stable always has a build; a missing one is an error, not a reason to switch key.
+        assert!(!falls_back_to_nightly("stable", true, &missing));
+        // Only a missing platform falls back, never a network or signature failure.
+        assert!(!falls_back_to_nightly(
+            "stable",
+            false,
+            &Error::ReleaseNotFound
+        ));
+        assert!(!falls_back_to_nightly("dev", false, &missing));
+        assert!(!falls_back_to_nightly("nightly", false, &missing));
     }
 
     #[test]

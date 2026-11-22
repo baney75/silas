@@ -23,7 +23,8 @@ That line must stay the same from release to release, or every user is asked aga
 
 ## Stable channel
 
-`scripts/release-stable.sh` signs on Donovan's Mac. It picks, in order:
+`scripts/release-stable.sh` signs on Donovan's Mac, from the commit `promote.yml` built its draft for
+(docs/channels.md). It picks, in order:
 
 1. `APPLE_SIGNING_IDENTITY` if set (an explicit override),
 2. the first `Developer ID Application:` identity in the keychain,
@@ -63,8 +64,8 @@ certificate, a new requirement, and one more round of permission prompts.
 **First release with Local Signing.** The pin still holds the v0.1.6 Apple Development
 requirement, so the first release signed with Local Signing (or with Developer ID) stops at the
 requirement check. Run it once as `ALLOW_NEW_REQUIREMENT=1 scripts/release-stable.sh ...`. That
-rewrites `scripts/release-requirement.txt` to what `codesign` prints, commits it with the
-release, and every later Local Signing build must match it. Users grant Accessibility once more
+rewrites `scripts/release-requirement.txt` to what `codesign` prints; land that change on `main`
+in a pull request after the release, and every later Local Signing build must match it. Users grant Accessibility once more
 after that release, then never again for Mac-built releases.
 
 The script prints the new build's requirement, refuses an ad-hoc one, and stops if it differs
@@ -74,15 +75,15 @@ from the installed `/Applications/Silas.app` (or `~/Applications/Silas.app`). Se
 `scripts/release-requirement.txt` pins the requirement of the last stable release (v0.1.6,
 Apple Development). `scripts/check-requirement.sh` compares every build to it: the release
 script stops on a mismatch, a signed nightly fails before upload, and CI checks the pin itself.
-Only a stable release with `ALLOW_NEW_REQUIREMENT=1` rewrites the pin, and the release commit
-carries the new line. An ad-hoc installed copy holds no grants worth keeping, so the release
+Only a stable release with `ALLOW_NEW_REQUIREMENT=1` rewrites the pin, and a pull request to
+`main` carries the new line. An ad-hoc installed copy holds no grants worth keeping, so the release
 script skips it and goes by the pin. Once the Developer ID secrets exist, signed nightlies fail
 until the first Developer ID stable release moves the pin.
 
-## Nightly channel
+## Nightly and dev channels
 
-`.github/workflows/nightly.yml` publishes a Mac nightly only when it is signed with a real
-certificate from these three secrets. Without them it still builds the Mac app, to prove it
+`.github/workflows/channel-build.yml` (called by `nightly.yml` and `dev.yml`) publishes a Mac
+build only when it is signed with a real certificate from these three secrets. Without them it still builds the Mac app, to prove it
 compiles, but uploads nothing for macOS: the nightly ships for Linux and Windows, `latest.json`
 has no `darwin-aarch64` entry, and the release notes say so. Publish fails if a darwin asset
 shows up without the secrets.
@@ -130,7 +131,7 @@ so a user never has to touch Accessibility after an update.
 | `install.sh` on macOS | After the download and before Silas is quit or replaced, reads the requirement of the download and of every installed copy (`SILAS_INSTALL_DIR`, or `/Applications` and `~/Applications`). A signed install with a different requirement stops the install and leaves the old copy alone. A matching requirement counts only when `codesign --verify --deep --strict -R=<installed requirement>` passes on the download, as in the updater. An ad-hoc or unsigned download over a signed install is always refused. `SILAS_ALLOW_NEW_SIGNATURE=1` allows a planned certificate change, such as the move to Developer ID, and only when the download verifies against its own requirement. An installed copy whose signature exists but can't be read stops the install before Silas is quit. A missing, unsigned or ad-hoc install holds no grant that survives an update, so it is replaced. `scripts/install-requirement-test.sh` covers each case with a stand-in `codesign`. |
 | `scripts/release-stable.sh` | Stops unless the build matches `scripts/release-requirement.txt` (`check-requirement.sh --update`) and any signed installed copy. Only `ALLOW_NEW_REQUIREMENT=1` moves the pin. The `.app.tar.gz` and the `.dmg` are both made from that checked `Silas.app`. |
 | DMG drag install | Finder copies whatever is in the image and can't be guarded at install time. The image is built from the app `release-stable.sh` just checked, so its requirement matches the pin. |
-| `.github/workflows/nightly.yml` | Uploads no Mac asset unless the three signing secrets exist, and a signed nightly must pass `check-requirement.sh` against the pin before upload. Publish fails if a darwin asset shows up without the secrets. |
+| `.github/workflows/channel-build.yml` (nightly and dev) | Uploads no Mac asset unless the three signing secrets exist, and a signed nightly must pass `check-requirement.sh` against the pin before upload. Publish fails if a darwin asset shows up without the secrets. |
 | Silas Local Signing (`scripts/signing-identity.sh`) | Keeps one self-signed identity, restored from `kept/` if the keychain is lost, so every Mac-built release has the same requirement. Moving to it, or away from it, is a one-time pin move with `ALLOW_NEW_REQUIREMENT=1`. |
 
 No Makefile or `package.json` script places a `.app`; `bun run tauri build` only writes into
@@ -207,7 +208,7 @@ membership.
 5. **Export a `.p12`.** In Keychain Access, select the certificate together with its private key
    and export them as `DeveloperID.p12`, with a password Donovan chooses. Never commit the
    `.p12` or print its password.
-6. **GitHub secrets** on `baney75/silas`. The names must match `.github/workflows/nightly.yml`:
+6. **GitHub secrets** on `baney75/silas`. The names must match `.github/workflows/channel-build.yml`:
 
    | Secret | Value |
    | --- | --- |
@@ -247,9 +248,11 @@ membership.
 Switching from Apple Development or Silas Local Signing to Developer ID changes the designated
 requirement one time. Every guard above refuses that change by design, so plan it:
 
-1. Release with `ALLOW_NEW_REQUIREMENT=1 scripts/release-stable.sh ...`. The release commit
-   carries the new line in `scripts/release-requirement.txt`, captured from the real build by
-   `codesign`. Never write that line by hand.
+1. Release with `ALLOW_NEW_REQUIREMENT=1 scripts/release-stable.sh ...`. It leaves the new line
+   in `scripts/release-requirement.txt` in the working tree, captured from the real build by
+   `codesign`; land that change on `main` in a pull request before the next promotion, or signed
+   nightlies keep failing the requirement check, and carry it into any hotfix for this release
+   (docs/channels.md). Never write that line by hand.
 2. The in-app updater on existing installs refuses this release ("signed differently from your
    install"). Existing users move with
    `curl -fsSL https://raw.githubusercontent.com/baney75/silas/main/install.sh | SILAS_ALLOW_NEW_SIGNATURE=1 sh`

@@ -19,8 +19,7 @@ const root = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 // The written allowlist. Path (from voice/) -> why colours are allowed there.
 export const ALLOW = {
   "src/ui.ts": "The app logo is a drawing with its own fixed colours, not UI chrome.",
-  "src/theme-vars.ts": "Builds the theme's variables. Shadow inks are black or white by design.",
-  "src/mock.ts": "Browser preview only: loads a theme file and fakes data. Never reaches the app.",
+  "src/mock.ts": "Browser preview only: fakes data. Never reaches the app.",
 };
 
 const COLOR = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|hwb|oklch|oklab|lab|lch)\(/;

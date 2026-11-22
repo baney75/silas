@@ -1,23 +1,24 @@
 /* Recording pill. The window is 260×64, transparent and borderless. */
 :root {
-  --gold: #d4af6a;
-  --gold-hi: #e6c88e;
-  --rec: #e0644c;
-  --glass: rgba(22, 24, 29, 0.9);
-  --line: rgba(255, 255, 255, 0.09);
-  --text: #ede6d8;
-  --muted: #a39c8e;
+  /* Diamond black and gold, the same as the main window. Near solid, so it reads on any wallpaper. */
+  --gold: #d6ae45;
+  --gold-hi: #f2d58a;
+  --rec: #ec6a52;
+  --glass: rgba(8, 8, 9, 0.94);
+  --line: rgba(214, 174, 69, 0.34);
+  --text: #f3eee4;
+  --muted: #9a9385;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
   --learned-arrow: var(--gold);
   --blur: 18px;
-  --rec-glow-0: rgba(224, 100, 76, 0.55);
-  --rec-glow-1: rgba(224, 100, 76, 0.5);
-  --rec-glow-clear: rgba(224, 100, 76, 0);
-  --ink-track: rgba(212, 175, 106, 0.16);
-  --pill-hi: rgba(255, 255, 255, 0.06);
-  --pill-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
-  --preview-a: #e9e2d3;
-  --preview-b: #f5f0e6;
+  --rec-glow-0: rgba(236, 106, 82, 0.55);
+  --rec-glow-1: rgba(236, 106, 82, 0.5);
+  --rec-glow-clear: rgba(236, 106, 82, 0);
+  --ink-track: rgba(214, 174, 69, 0.18);
+  --pill-hi: rgba(242, 213, 138, 0.14);
+  --pill-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  --preview-a: #141416;
+  --preview-b: #0a0a0b;
   --r-1: 1px;
   --r-2: 2px;
   --r-22: 22px;
@@ -284,17 +285,3 @@ body {
   }
 }
 
-/* Polycarp theme asks for no motion (set by theme.ts). */
-html[data-reduced-motion] .pill,
-html[data-reduced-motion] .face {
-  transition: opacity var(--motion-fast) linear;
-  transform: none !important;
-}
-html[data-reduced-motion] .rec-dot {
-  animation: none;
-}
-html[data-reduced-motion] .ink span {
-  animation: none;
-  width: 100%;
-  opacity: 0.7;
-}

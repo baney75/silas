@@ -2,7 +2,6 @@
 import "./overlay.css";
 import { inTauri, on, type Status } from "./api";
 import { startOverlayDemo } from "./mock";
-import { initTheme, themeReducedMotion } from "./theme";
 
 type Face = "idle" | "recording" | "writing" | "typing" | "learned" | "notice";
 
@@ -16,7 +15,7 @@ const NOTICE_MS = 4000;
 
 const BARS = 16;
 const systemReduced = window.matchMedia("(prefers-reduced-motion: reduce)");
-const reduced = () => systemReduced.matches || themeReducedMotion();
+const reduced = () => systemReduced.matches;
 const bars: HTMLElement[] = [];
 for (let i = 0; i < BARS; i++) {
   const b = document.createElement("span");
@@ -91,7 +90,6 @@ function onStatus(status: Status) {
   else if (face !== "learned") setFace("idle");
 }
 
-void initTheme();
 void on("status", ({ status }) => {
   lastStatus = status;
   onStatus(status);

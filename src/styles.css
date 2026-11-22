@@ -1,48 +1,57 @@
-/* Silas: ink, parchment and one warm gold. 8-pt grid. */
+/* Silas: diamond black and one deep gold. Dark only. 8-pt grid. */
 
 :root {
   --serif: ui-serif, "New York", "Iowan Old Style", Charter, Georgia, serif;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, sans-serif;
 
-  --bg: #f5f0e6;
-  --bg-side: #ede6d8;
-  --surface: #fcfaf5;
-  --surface-2: #f0eadf;
-  --line: #e3dacb;
-  --line-strong: #d1c5b0;
-  --text: #14161a;
-  --text-2: #4b4840;
-  --text-3: #6f695e;
-  --gold: #c8a15a;
-  --gold-ink: #85662b;
-  --gold-soft: rgba(200, 161, 90, 0.15);
-  --gold-line: rgba(200, 161, 90, 0.45);
-  --blue: #2f4e73;
-  --blue-soft: rgba(47, 78, 115, 0.1);
-  --green: #3c6a48;
-  --green-soft: rgba(60, 106, 72, 0.12);
-  --red: #a8402c;
-  --red-soft: rgba(168, 64, 44, 0.1);
-  --primary-bg: #14161a;
-  --primary-fg: #f5f0e6;
-  --primary-hover: #2a2d33;
-  --focus: #2f4e73;
-  --shadow: 0 1px 0 rgba(20, 22, 26, 0.03), 0 1px 3px rgba(20, 22, 26, 0.06);
-  --shadow-lg: 0 12px 32px rgba(20, 22, 26, 0.12), 0 2px 6px rgba(20, 22, 26, 0.06);
-  --key-face: #fffdf8;
-  --key-edge: #cfc3ad;
-  --key-hi: rgba(255, 255, 255, 0.5);
-  --key-hi-lg: rgba(255, 255, 255, 0.5);
-  --thumb: #fff;
-  --thumb-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
-  --seg-shadow: 0 1px 2px rgba(20, 22, 26, 0.12);
-  --toast-bg: #1b1e23;
-  --toast-fg: #ede6d8;
-  --toast-border: #3a3f47;
-  --toast-border-w: 0px;
-  --toast-ok: #86b892;
-  --toast-learned: #d4af6a;
-  --toast-error: #e58a73;
+  /* Diamond black: near-black with a cool cut, never pure #000 under text. */
+  --bg: #0a0a0b;
+  --bg-side: #050506;
+  --surface: #101012;
+  --surface-2: #18181b;
+  --line: #1f1f23;
+  --line-strong: #34333a;
+  --text: #f3eee4;
+  --text-2: #bdb6a8;
+  --text-3: #8e877a;
+
+  /* Gold: one accent. Base for fills, ink for text, high for focus and the keycap edge. */
+  --gold: #d6ae45;
+  --gold-ink: #e8c66c;
+  --gold-hi: #f2d58a;
+  --gold-soft: rgba(214, 174, 69, 0.12);
+  --gold-line: rgba(214, 174, 69, 0.42);
+  --gold-hair: rgba(214, 174, 69, 0.3);
+  --gold-side: rgba(214, 174, 69, 0.16);
+
+  /* Ready, saved and allowed are gold too: Silas is black and gold through and through. Red is for errors only. */
+  --ok: #e8c66c;
+  --ok-soft: rgba(214, 174, 69, 0.12);
+  --red: #ec7d65;
+  --red-soft: rgba(236, 125, 101, 0.12);
+  --primary-bg: #d6ae45;
+  --primary-fg: #0a0a0b;
+  --primary-hover: #e4c05e;
+  --focus: var(--gold-hi);
+
+  /* A facet: the one-pixel light along a cut stone's top edge. */
+  --facet: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 0 rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4);
+  --key-face: #141416;
+  --key-edge: #2a2930;
+  --key-hi: rgba(242, 213, 138, 0.32);
+  --key-hi-lg: rgba(242, 213, 138, 0.45);
+  --thumb: #f3eee4;
+  --thumb-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --seg-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 2px rgba(0, 0, 0, 0.5);
+  --toast-bg: #141416;
+  --toast-fg: #f3eee4;
+  --toast-border: #2a2930;
+  --toast-border-w: 1px;
+  --toast-ok: #e8c66c;
+  --toast-learned: #e8c66c;
+  --toast-error: #ec7d65;
 
   --r-sm: 6px;
   --r: 10px;
@@ -63,43 +72,7 @@
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   --top: 0px;
 
-  color-scheme: light;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #14161a;
-    --bg-side: #101215;
-    --surface: #1b1e23;
-    --surface-2: #23272d;
-    --line: #2b2f36;
-    --line-strong: #3a3f47;
-    --text: #ede6d8;
-    --text-2: #bcb4a5;
-    --text-3: #918a7d;
-    --gold: #d4af6a;
-    --gold-ink: #dcbb7c;
-    --gold-soft: rgba(212, 175, 106, 0.13);
-    --gold-line: rgba(212, 175, 106, 0.42);
-    --blue: #93b3d8;
-    --blue-soft: rgba(147, 179, 216, 0.12);
-    --green: #86b892;
-    --green-soft: rgba(134, 184, 146, 0.12);
-    --red: #e58a73;
-    --red-soft: rgba(229, 138, 115, 0.12);
-    --primary-bg: #d4af6a;
-    --primary-fg: #14161a;
-    --primary-hover: #e0bf80;
-    --focus: #d4af6a;
-    --shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
-    --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.3);
-    --key-face: #262a31;
-    --key-edge: #121418;
-    --key-hi: rgba(255, 255, 255, 0.06);
-    --toast-bg: #2a2e35;
-    --toast-border-w: 1px;
-    color-scheme: dark;
-  }
+  color-scheme: dark;
 }
 
 /* macOS overlays the traffic lights on the content: keep 28 px clear at the top. */
@@ -214,6 +187,18 @@ button {
   background: transparent;
 }
 
+/* Every card carries one facet: a 1 px light line along its top edge. A card's own shadow below wins. */
+.stat,
+.recent-list,
+.entry,
+.rows,
+.model-card,
+.device-panel,
+.set-card,
+.about {
+  box-shadow: var(--facet);
+}
+
 /* ---------- Shell ---------- */
 
 .app {
@@ -226,7 +211,7 @@ button {
   display: flex;
   flex-direction: column;
   background: var(--bg-side);
-  border-right: 1px solid var(--line);
+  border-right: 1px solid var(--gold-side);
   padding: 0 12px 16px;
   min-height: 0;
 }
@@ -395,7 +380,7 @@ button {
 }
 
 .live-ready .dot {
-  background: var(--green);
+  background: var(--ok);
 }
 .live-recording .dot {
   background: var(--red);
@@ -544,7 +529,9 @@ button {
   padding: 0 7px;
   border-radius: var(--r-5);
   font-size: 12px;
-  box-shadow: 0 1px 0 var(--key-edge);
+  box-shadow:
+    0 1px 0 var(--key-edge),
+    inset 0 1px 0 var(--key-hi);
   margin: 0 2px;
 }
 
@@ -578,7 +565,7 @@ button {
   padding: 40px 40px 32px;
   border-radius: var(--r-lg);
   background: var(--surface);
-  border: 1px solid var(--line);
+  border: 1px solid var(--gold-hair);
   box-shadow: var(--shadow);
   overflow: hidden;
 }
@@ -996,8 +983,8 @@ button {
   color: var(--gold-ink);
 }
 .badge-user {
-  background: var(--blue-soft);
-  color: var(--blue);
+  background: var(--surface-2);
+  color: var(--text-2);
 }
 .badge-import {
   background: var(--surface-2);
@@ -1260,12 +1247,12 @@ button {
   letter-spacing: 0.02em;
 }
 .tier-fast {
-  background: var(--blue-soft);
-  color: var(--blue);
+  background: var(--surface-2);
+  color: var(--text-2);
 }
 .tier-balanced {
-  background: var(--green-soft);
-  color: var(--green);
+  background: var(--surface-2);
+  color: var(--text-2);
 }
 .tier-best {
   background: var(--gold-soft);
@@ -1314,11 +1301,11 @@ button {
   background: var(--surface-2);
 }
 .state-pill.active {
-  background: var(--green-soft);
-  color: var(--green);
+  background: var(--ok-soft);
+  color: var(--ok);
 }
 .state-pill.active .dot {
-  background: var(--green);
+  background: var(--ok);
 }
 
 .dl {
@@ -1479,7 +1466,7 @@ button {
 }
 
 .mark-ok {
-  color: var(--green);
+  color: var(--ok);
 }
 
 .mark-miss {
@@ -1815,7 +1802,7 @@ button {
   gap: 8px;
 }
 .onb-bg.ok svg {
-  color: var(--green);
+  color: var(--ok);
 }
 
 .perm-list {
@@ -1841,7 +1828,7 @@ button {
 }
 .perm.ok {
   border-color: transparent;
-  background: var(--green-soft);
+  background: var(--ok-soft);
 }
 .perm-icon {
   display: grid;
@@ -2028,12 +2015,3 @@ button {
   }
 }
 
-/* Polycarp theme asks for no motion (set by theme.ts). */
-html[data-reduced-motion] *,
-html[data-reduced-motion] *::before,
-html[data-reduced-motion] *::after {
-  animation-duration: 1ms !important;
-  animation-iteration-count: 1 !important;
-  transition-duration: 1ms !important;
-  scroll-behavior: auto !important;
-}

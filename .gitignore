@@ -2,6 +2,7 @@ node_modules/
 dist/
 src-tauri/target/
 core/voice/target/
+/target/
 src-tauri/gen/
 .models/
 migration/
@@ -12,3 +13,7 @@ packaging/arch/src/
 packaging/arch/pkg/
 packaging/arch/silas/
 packaging/arch/*.pkg.tar.*
+# Core dumps (qemu writes qemu_*.core) hold the crashed process environment, secrets included
+*.core
+core.[0-9]*
+vgcore.*

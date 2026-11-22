@@ -53,7 +53,9 @@ in the window where you started. pacman updates the package, so Silas doesn't up
 If you used voxtype, stop it so two apps don't share the keys:
 `systemctl --user disable --now voxtype`.
 
-Run the same line again to update by hand. Silas also updates itself.
+Run the same line again to update by hand. Silas also updates itself. macOS installs the stable
+channel (`SILAS_CHANNEL=nightly` for nightly); Windows and Linux install nightly until a stable
+release carries them. Pick any channel later in Settings › Updates.
 
 <details>
 <summary>Rather download it yourself?</summary>
@@ -70,7 +72,7 @@ Run the same line again to update by hand. Silas also updates itself.
 
 ### First run
 
-1. Silas opens a short setup. The speech model (478 MB) starts downloading right away.
+1. Silas opens a short setup. The speech model (485 MB) starts downloading right away.
 2. On macOS, click **Allow** for **Microphone**, then turn on Silas under **Accessibility**.
    Silas moves on by itself once both are on. Windows asks for nothing. On Linux the installer
    already granted keyboard access; if setup says it can't see your key, log out and back in once.
@@ -105,12 +107,14 @@ is never rewritten into jargon, which is the failure that made us leave TypeWhis
 
 ## Models
 
-| Model | Size | Speed (M-series CPU) | Notes |
+| Model | Size | Word errors: all, accented speech | Notes |
 | --- | --- | --- | --- |
-| **Parakeet v3** (default) | 478 MB | ~12x real time; a short dictation in 0.2–0.8 s | 25 European languages |
-| Cohere Transcribe (int4) | 2 GB | ~2x real time | Cleaner punctuation; dropped text on a 72 s clip in testing |
+| **Parakeet v3** (default) | 485 MB | 4.4%, 12.0% | 25 European languages. Runs on transcribe.cpp; about 1 s from key up to text |
+| Parakeet v3 (ONNX) | 478 MB | 5.8%, 19.8% | The same model on the older engine, for x86 processors without AVX2 |
+| Cohere Transcribe (int4) | 2 GB | 4.6%, 20.2% | Best on code; waits about 4.5 s after key up on a laptop CPU |
 
-Measured on eight real dictations (175 s of speech) with `silas-bench`.
+Measured through Silas's dictation path on all 250 clips of the [bench set](bench/README.md), on a 4-core
+laptop CPU ([the study](bench/models/accent-2026-11.md)).
 
 ### The right model for your computer
 
@@ -134,16 +138,19 @@ from a terminal.
 
 ## Updates
 
-| Channel | Platforms | Source |
+| Channel | For | Source |
 | --- | --- | --- |
-| Stable | macOS | `vX.Y.Z` releases, built and signed on the maintainer's Mac (`scripts/release-stable.sh`) |
-| Nightly | macOS, Windows, Linux | the rolling `nightly` pre-release, rebuilt by CI each night when `main` changed |
+| Stable | Everyone. The default. | `vX.Y.Z` releases, promoted from a nightly at least 72 hours old. macOS today; Windows and Linux from the next stable release |
+| Nightly | People who want new work first | the rolling `nightly` pre-release, rebuilt by CI each night when `main` changed |
+| Dev | Testing a change | the rolling `dev` pre-release, rebuilt by CI on every merge to `main` |
 
-Silas checks at launch and every four hours. With auto-update on, it installs once it has
-been idle for two minutes. Each channel has its own signing key, and Silas refuses an update
-that isn't signed by its channel's key. The stable key never leaves the release Mac. Mac nightly
-builds are ad-hoc signed until the repo has a Developer ID certificate in its secrets, so macOS
-asks for Accessibility again after each nightly update. See [docs/signing.md](docs/signing.md).
+Choose the channel in Settings › Updates. Switching replaces the install, and it may go to a lower
+version. Until a stable release carries Windows and Linux, those systems on stable get nightly.
+Silas checks at launch and every four hours. With auto-update on, it installs once it has been
+idle for two minutes. Stable has its own signing key, which never leaves the release Mac; nightly
+and dev share a second one, and Silas refuses an update that isn't signed by its channel's key. Mac
+nightly and dev builds are published only when the repo has a Developer ID certificate in its
+secrets. See [docs/channels.md](docs/channels.md) and [docs/signing.md](docs/signing.md).
 
 ## If something's off
 
@@ -185,7 +192,10 @@ bunx tauri build                    # package
 The voice engine lives in `core/voice` (the `polycarp-voice` crate); the Tauri app in `src-tauri`
 uses it by path, so this repo builds on its own.
 
-Linux needs `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev libudev-dev libxdo-dev`,
+The default speech engine, transcribe.cpp, builds from source, so every platform needs CMake and a C++
+compiler (Xcode's command line tools on macOS, Visual Studio's C++ tools on Windows).
+
+Linux needs `cmake g++ libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev libudev-dev libxdo-dev`,
 plus `libgtk-layer-shell0` at run time for the overlay on Wayland.
 
 ## Privacy
@@ -195,8 +205,9 @@ is on), and keeps history and the dictionary as JSON in its app-data folder.
 
 ## Credits
 
-Speech engines through [transcribe-rs](https://github.com/cjpais/transcribe-rs) (MIT), keys
-through [handy-keys](https://github.com/handy-computer/handy-keys) (MIT); both come from the
+Speech engines through [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) (MIT) and
+[transcribe-rs](https://github.com/cjpais/transcribe-rs) (MIT, vendored with a decoder fix), keys
+through [handy-keys](https://github.com/handy-computer/handy-keys) (MIT); all three come from the
 [Handy](https://github.com/cjpais/Handy) project. Parakeet is NVIDIA's (CC-BY-4.0). The benchmark
 clips come from [LibriSpeech](https://www.openslr.org/12) (CC BY 4.0; Panayotov et al., ICASSP 2015). The
 common-word list comes from [FrequencyWords](https://github.com/hermitdave/FrequencyWords)

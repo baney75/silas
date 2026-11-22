@@ -369,13 +369,6 @@ pub async fn install_update(app: AppHandle) -> R<()> {
     updates::install(&app).await.map_err(err)
 }
 
-/// The Polycarp theme for Silas, or null when there is none or it is not valid. The read runs on a
-/// blocking thread: a plain command runs on the main thread, and a stalled disk would freeze the window.
-#[tauri::command]
-pub async fn get_theme() -> Option<crate::theme::Theme> {
-    tauri::async_runtime::spawn_blocking(crate::theme::current).await.ok().flatten()
-}
-
 #[cfg(test)]
 mod tests {
     /// Tauri runs a command that isn't `async` on the main thread, where the window draws and takes

@@ -2,6 +2,7 @@
 //! tray and the overlay window.
 
 use polycarp_voice::core::{overlay_shown, Host, Shared, Status, NOTICE_FOR};
+use polycarp_voice::store;
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -72,8 +73,8 @@ impl Host for TauriHost {
         }
     }
 
-    fn is_nightly(&self) -> bool {
-        self.app.package_info().version.pre.as_str().starts_with("nightly")
+    fn build_channel(&self) -> &'static str {
+        store::build_channel(self.app.package_info().version.pre.as_str())
     }
 }
 

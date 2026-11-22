@@ -17,10 +17,11 @@ arch=(x86_64)
 url="https://github.com/baney75/silas"
 license=(MIT)
 depends=(webkit2gtk-4.1 gtk3 gtk-layer-shell libayatana-appindicator alsa-lib systemd-libs hicolor-icon-theme)
-makedepends=(git cargo bun)
+makedepends=(git cargo bun cmake)
 provides=(silas)
 conflicts=(silas)
-# The Rust profile has its own LTO; makepkg's would also reach the C code ONNX Runtime brings.
+# The Rust profile has its own LTO; makepkg's would also reach the C and C++ code ONNX Runtime
+# and transcribe.cpp bring. cmake builds transcribe.cpp, the default engine.
 options=(!lto !debug)
 install=silas.install
 source=("$_name::git+${SILAS_REPO:-https://github.com/baney75/silas.git}#branch=${SILAS_BRANCH:-main}")

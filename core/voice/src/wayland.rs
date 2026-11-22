@@ -231,7 +231,14 @@ impl VirtualKeyboard {
         self.set_shift(shift);
         self.tap(RETURN);
         self.set_shift(false);
-        self.conn.flush()?;
+        // A Return may move focus on purpose; the next focus check sees where it went.
+        self.queue.roundtrip(&mut State)?;
+        Ok(())
+    }
+
+    /// Waits until the compositor has taken every key, so a run counts as typed only once it has.
+    pub fn finish(&mut self) -> anyhow::Result<()> {
+        self.queue.roundtrip(&mut State)?;
         Ok(())
     }
 }

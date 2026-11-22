@@ -1,13 +1,18 @@
 [package]
 name = "polycarp-voice"
 version = "0.1.6"
-description = "Polycarp voice engine: hold a key, speak, and it types what you said. No UI toolkit."
+description = "Silas voice engine: hold a key, speak, and it types what you said. No UI toolkit."
 authors = ["Donovan Baney"]
 license = "MIT"
 edition = "2021"
 
 [lib]
 name = "polycarp_voice"
+
+[[bin]]
+name = "silas-bench"
+path = "src/bin/silas-bench.rs"
+required-features = ["bench"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -27,14 +32,19 @@ flate2 = "1"
 hound = "3.5"
 chrono = { version = "0.4", features = ["serde"] }
 sysinfo = { version = "0.38", default-features = false, features = ["system"] }
+# Parakeet v3 (the default model) runs in process on transcribe.cpp. CPU build on every platform, no
+# Metal: the engine the model study scored (bench/models/accent-2026-11.md). Builds transcribe.cpp and
+# ggml from vendored source, so it needs CMake and a C++ compiler; see .cargo/config.toml for the CPU floor.
+transcribe-cpp = { version = "=0.4.2", default-features = false }
 
-[target.'cfg(not(target_os = "macos"))'.dependencies]
+[target.'cfg(not(any(target_os = "macos", target_os = "linux")))'.dependencies]
 enigo = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 wayland-client = "0.31"
 wayland-protocols-misc = { version = "0.3", features = ["client"] }
+x11rb = { version = "0.13", features = ["xkb", "xtest"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Registry"] }
@@ -47,3 +57,9 @@ objc2-foundation = "0.3"
 
 [features]
 bench = []
+# Kept so older commands still build: GGUF models need no extra feature now.
+gguf = ["bench"]
+
+# The TDT decoder fix for the ONNX fallback (vendor/transcribe-rs/VENDORED.md).
+[patch.crates-io]
+transcribe-rs = { path = "../../vendor/transcribe-rs" }

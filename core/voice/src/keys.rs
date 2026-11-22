@@ -100,7 +100,7 @@ pub fn pick(ev: &KeyEvent) -> Option<Picked> {
 }
 
 /// The combinations to swallow so the system does not act on the same press. Only the microphone
-/// key: pressed for Polycarp, it must not also start Apple's dictation. Every other trigger keeps
+/// key: pressed for Silas, it must not also start Apple's dictation. Every other trigger keeps
 /// reaching apps, so Right ⌘ + C still copies. Hardware presses carry fn in their flags; a Globe
 /// key or a remapped keyboard may not. The listener matches modifiers exactly, and a press with
 /// Shift or ⌘ held still starts Silas, so every combination is listed.

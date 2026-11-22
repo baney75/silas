@@ -59,6 +59,11 @@ objc2 = "0.6"
 gtk = "0.18"
 libloading = "0.7"
 
+# The TDT decoder fix for the ONNX fallback (vendor/transcribe-rs/VENDORED.md). A [patch] in
+# core/voice does not reach this workspace, so it is repeated here.
+[patch.crates-io]
+transcribe-rs = { path = "../vendor/transcribe-rs" }
+
 [profile.release]
 opt-level = 3
 lto = "thin"

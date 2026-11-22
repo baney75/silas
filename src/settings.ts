@@ -150,26 +150,25 @@ export function mountSettings(root: HTMLElement): () => void {
       group("System", toggle("launchAtLogin", isMac ? "Open at login" : "Start with your computer", isMac ? "Silas waits quietly in the menu bar." : "Silas waits quietly in the system tray.")),
       group(
         "Updates",
-        isMac
-          ? row(
-              "Channel",
-              s.updateChannel === "stable" ? "Tested releases. Recommended." : "The newest build every night. Expect rough edges.",
-              segmented<UpdateChannel>(
-                [
-                  { value: "stable", label: "Stable" },
-                  { value: "nightly", label: "Nightly" },
-                ],
-                s.updateChannel,
-                "Update channel",
-                (v) => {
-                  change({ updateChannel: v });
-                  store.update = null;
-                  store.updateCheck = "idle";
-                  draw();
-                },
-              ),
-            )
-          : row("Channel", "Silas for Windows and Linux ships as nightly builds for now.", h("span", { class: "badge" }, "Nightly builds")),
+        row(
+          "Channel",
+          channelNote(s.updateChannel, isMac),
+          segmented<UpdateChannel>(
+            [
+              { value: "stable", label: "Stable" },
+              { value: "nightly", label: "Nightly" },
+              { value: "dev", label: "Dev" },
+            ],
+            s.updateChannel,
+            "Update channel",
+            (v) => {
+              change({ updateChannel: v });
+              store.update = null;
+              store.updateCheck = "idle";
+              draw();
+            },
+          ),
+        ),
         toggle("autoUpdate", "Update automatically", "Silas downloads updates quietly and installs them when you restart it."),
         updateRow(),
       ),
@@ -202,6 +201,13 @@ export function mountSettings(root: HTMLElement): () => void {
     unsubUpdate();
     unsubMics();
   };
+}
+
+function channelNote(channel: UpdateChannel, isMac: boolean): string {
+  if (channel === "dev") return "A build of every change as it lands, for testing. Expect breakage.";
+  if (channel === "nightly") return "The newest build every night. Expect rough edges.";
+  // updates.rs follows nightly here until a stable release carries Windows and Linux.
+  return isMac ? "Tested releases. Recommended." : "Tested releases. Recommended. Until the first one for your system ships, you get nightly builds.";
 }
 
 function updateRow(): HTMLElement {

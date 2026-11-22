@@ -1,0 +1,69 @@
+name: Bench ratchet
+# Fails a PR that makes Silas transcribe worse on the ratchet subset (bench/ratchet.json).
+# Shared runners make timing noise, so CI gates WER and formatted error only (--gate accuracy);
+# the latency and memory limits are checked locally with `python3 -I bench/ratchet.py`.
+on:
+  pull_request:
+    paths:
+      - core/voice/**
+      - bench/**
+      - .cargo/config.toml # the engine's build flags
+      - vendor/** # the patched transcribe-rs
+      - .github/workflows/bench-ratchet.yml
+      - README.md # the setup gate reads it
+permissions:
+  contents: read
+concurrency:
+  group: bench-ratchet-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  ratchet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - name: Ratchet, scorer and rival unit tests
+        run: python3 -I bench/test_ratchet.py && python3 -I bench/test_rivals.py
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: core/voice
+          key: bench-release
+      - name: Linux packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libxdo-dev
+      # The model silas-bench downloads (hash-checked by models.rs) and the test-set audio.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/silas-bench/silas-data/models
+          key: silas-bench-models-${{ hashFiles('core/voice/src/models.rs', 'bench/ratchet.json') }}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/silas-bench/bench-set-v1
+          key: silas-bench-set-${{ hashFiles('bench/release.json', 'bench/manifest.jsonl') }}
+      # Downloads the release asset once, checks its sha256 and every clip, then the cache keeps it.
+      - name: Bench set audio
+        run: python3 -I bench/tools/fetch.py && python3 -I bench/tools/check.py
+      - name: Build silas-bench
+        working-directory: core/voice
+        run: cargo build --release --features bench --bin silas-bench
+      - name: Ratchet
+        run: python3 -I bench/ratchet.py --baseline ci --gate accuracy --bin core/voice/target/release/silas-bench
+      # Both Parakeet v3 engines on a bundled clip (models.rs, engine_on_a_bundled_clip). The GGUF model
+      # is the one the ratchet just used; the ONNX fallback downloads into the same cached folder.
+      - name: Engine tests with the models
+        working-directory: core/voice
+        run: SILAS_TEST_MODELS="$HOME/.cache/silas-bench/silas-data" cargo test --release --features bench transcribes_a_clip -- --test-threads 1 --nocapture
+      # Fails when Silas falls further behind OpenCode's scored dictation engine (bench/rivals/opencode.json)
+      # on accuracy, or its documented setup grows. Latency and typing are recorded on chapel1 only.
+      - name: Rival, OpenCode
+        run: python3 -I bench/rivals.py opencode --silas bench/out/ratchet-silas.jsonl --gate accuracy,setup
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bench-ratchet
+          path: bench/out/ratchet-silas.jsonl
+          if-no-files-found: ignore

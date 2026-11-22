@@ -24,7 +24,9 @@
         "visible": false,
         "center": true,
         "titleBarStyle": "Overlay",
-        "hiddenTitle": true
+        "hiddenTitle": true,
+        "theme": "Dark",
+        "backgroundColor": "#0a0a0b"
       },
       {
         "label": "overlay",

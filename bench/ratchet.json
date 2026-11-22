@@ -1,0 +1,59 @@
+{
+  "model": "parakeet-v3",
+  "manifest": "bench/manifest.jsonl",
+  "subset": "bench/subsets/ratchet.txt",
+  "set": "~/.cache/silas-bench/bench-set-v1",
+  "baselines": {
+    "local": {
+      "Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz": {
+        "wer": {
+          "accent": 0.106557,
+          "clean": 0.022222,
+          "code": 0.298246,
+          "dictation": 0.064516,
+          "longform": 0.007772,
+          "noise": 0.047945
+        },
+        "formatted_error": 0.174528,
+        "t_final_ms_median": 893.7,
+        "peak_rss_mb": 976.2,
+        "timing": "fast",
+        "updated": "2026-11-18",
+        "accepted": "transcribe.cpp Parakeet v3 Q4_K_M (#46): accent WER 29.5 to 10.7 on this subset; code WER 21.1 to 29.8 is the reviewed cost"
+      }
+    },
+    "ci": {
+      "AMD EPYC 9V74 80-Core Processor": {
+        "wer": {
+          "accent": 0.106557,
+          "clean": 0.022222,
+          "code": 0.298246,
+          "dictation": 0.064516,
+          "longform": 0.002591,
+          "noise": 0.047945
+        },
+        "formatted_error": 0.170991,
+        "t_final_ms_median": 815.2,
+        "peak_rss_mb": 975.8,
+        "timing": "fast",
+        "updated": "2026-11-18",
+        "accepted": "transcribe.cpp Parakeet v3 Q4_K_M (#46, #47): accent WER far lower; code WER 21.1 to 29.8 on this subset is the reviewed cost (trailing periods on shell commands; spoken-code formatting follow-up)"
+      },
+      "AMD EPYC 9V45 96-Core Processor": {
+        "wer": {
+          "accent": 0.106557,
+          "clean": 0.022222,
+          "code": 0.298246,
+          "dictation": 0.064516,
+          "longform": 0.007772,
+          "noise": 0.047945
+        },
+        "formatted_error": 0.173349,
+        "t_final_ms_median": 612.1,
+        "peak_rss_mb": 976.3,
+        "timing": "fast",
+        "updated": "2026-11-18"
+      }
+    }
+  }
+}

@@ -4,7 +4,6 @@ pub mod host;
 pub mod layer;
 #[cfg(test)]
 mod settings_bench;
-pub mod theme;
 pub mod tray;
 pub mod updates;
 
@@ -31,7 +30,7 @@ pub fn show_main(app: &AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info,ort=warn,transcribe_rs=warn"),
+        env_logger::Env::default().default_filter_or("info,ort=warn,transcribe_rs=warn,transcribe_cpp=warn"),
     )
     .init();
 
@@ -55,7 +54,7 @@ pub fn run() {
             app.manage(core.clone());
 
             // First run: honor the launch-at-login default.
-            if !store::exists("settings.json") {
+            if core.first_run {
                 use tauri_plugin_autostart::ManagerExt;
                 if core.settings.lock().launch_at_login {
                     let _ = handle.autolaunch().enable();
@@ -74,7 +73,6 @@ pub fn run() {
             #[cfg(unix)]
             polycarp_voice::control::serve(core.clone());
             updates::schedule(handle.clone());
-            theme::watch(handle.clone());
 
             let background = std::env::args().any(|a| a == "--background");
             let onboarded = core.settings.lock().onboarded;
@@ -137,7 +135,6 @@ pub fn run() {
             commands::run_benchmark,
             commands::share_benchmark,
             commands::get_device,
-            commands::get_theme,
             commands::wait_device_pick,
             commands::check_update,
             commands::install_update,
@@ -152,3 +149,17 @@ pub fn run() {
             let _ = (app, event);
         });
 }
+
+#[cfg(test)]
+mod engine_patch {
+    /// The app links the vendored transcribe-rs with the TDT decoder fix, not the crates.io release
+    /// (which has no TdtCursor): a [patch] in core/voice does not reach this workspace on its own.
+    #[test]
+    fn the_onnx_fallback_has_the_tdt_decoder_fix() {
+        let mut cursor = transcribe_rs::onnx::parakeet::TdtCursor::default();
+        // A word that spans 3 frames: token 0 scored best, duration 3 scored best (blank is 1).
+        assert_eq!(cursor.step(&[1.0, 0.0, 0.0, 0.0, 0.0, 1.0], 2, 1), Some(0));
+        assert_eq!(cursor.t, 3);
+    }
+}
+
