@@ -11,6 +11,7 @@ import {
   noteRefusal,
   notify,
   refreshDict,
+  refreshCommunity,
   refreshMicrophones,
   refreshModels,
   refreshState,
@@ -57,6 +58,7 @@ async function boot() {
   if (!inTauri) document.documentElement.dataset.preview = "true";
   wireEvents();
   void refreshMicrophones();
+  void refreshCommunity();
   if (!store.settings.onboarded) onboarding();
   else if (needsAccess()) onboarding("permissions");
   else shell();
@@ -135,6 +137,8 @@ function wireEvents() {
   });
   void on("benchmark-done", (report) => {
     store.benchmark = report;
+    // A share sheet left open shows the old numbers; the user reopens it to see the new ones.
+    store.share = null;
     store.bench = { running: false, progress: null, error: null };
     notify("benchmark");
     // The pick may have changed the recommended model or the one in use.

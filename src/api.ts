@@ -55,7 +55,7 @@ export interface Settings {
   hotkey: string;
   tapToToggle: boolean;
   model: string;
-  /** Who chose the model: the app's default, the device registry, a benchmark, or the user. */
+  /** Who chose the model: the app's default, the device registry, shared community results, a benchmark, or the user. */
   modelSource: ModelSource;
   language: string;
   removeFillers: boolean;
@@ -78,7 +78,7 @@ export interface Settings {
   autoUpdate: boolean;
 }
 
-export type ModelSource = "default" | "registry" | "benchmark" | "user";
+export type ModelSource = "default" | "registry" | "community" | "benchmark" | "user";
 
 export type UpdateChannel = "stable" | "nightly" | "dev";
 
@@ -134,6 +134,34 @@ export interface ModelResult {
   audio_seconds: number;
   compute_seconds: number;
   clips: number;
+  /** Median compute seconds for a 5 to 10 s clip: the wait after you stop talking. */
+  wait_seconds: number;
+  /** Compute seconds per clip, kept on this computer and left out of a shared report. */
+  clip_seconds?: number[];
+}
+
+/** Medians over the shared reports for one model on one device key. */
+export interface CommunityModel {
+  reports: number;
+  speed: number;
+  wer: number;
+  wait: number;
+}
+
+/** What people with the same device key shared. Only `agree >= 3` can choose a model. */
+export interface CommunityDevice {
+  reports: number;
+  pick: string | null;
+  agree: number;
+  models: Record<string, CommunityModel>;
+}
+
+/** The report service's answer to a shared report. */
+export interface ShareReply {
+  key: string;
+  reports: number;
+  pick: string | null;
+  agree: number;
 }
 
 export interface Report {
@@ -325,8 +353,14 @@ export const api = {
   getBenchmark: () => call<Report | null>("get_benchmark"),
   /** Resolves when the run ends; progress and the result also arrive as events. */
   runBenchmark: (all: boolean) => call<null>("run_benchmark", { all }),
+  /** The exact JSON a share sends, or null before any benchmark. */
+  sharePreview: () => call<string | null>("share_preview"),
+  /** Sends `payload` (from sharePreview) to the report service. No account, no audio, no text. */
+  shareBenchmark: (payload: string) => call<ShareReply>("share_benchmark", { payload }),
   /** Opens a prefilled GitHub issue in the browser; the user reviews and submits it. */
-  shareBenchmark: () => call<null>("share_benchmark"),
+  shareBenchmarkGithub: () => call<null>("share_benchmark_github"),
+  /** Shared results for this device, fetched with a short timeout or from the last good copy. */
+  getCommunity: () => call<CommunityDevice | null>("get_community"),
   getDevice: () => call<Device>("get_device"),
   checkUpdate: () => call<UpdateInfo | null>("check_update"),
   installUpdate: () => call<null>("install_update"),

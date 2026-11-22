@@ -7,10 +7,14 @@
 //   ?unmeasured        this computer has not been benchmarked yet
 //   ?benchmarking      a benchmark is running when the page opens
 //   ?mixed             the last benchmark holds a pick and a model that misses both bars
+//   ?fewShared         fewer than three shared reports agree for this device
+//   ?offline           the report service is out of reach and nothing is cached
+//   ?shareFail         sending a shared report fails
 
 import { findSnippet, triggerKey } from "./appstyles";
 import type {
   AppState,
+  CommunityDevice,
   Correction,
   Dictionary,
   HistoryItem,
@@ -164,12 +168,12 @@ const device: Device = {
 
 /** What each mock model scores, so every state of the page can be previewed. */
 const mockScores: Record<string, ModelResult> = {
-  "parakeet-v3": { model: "parakeet-v3", speed: 23.4, wer: 0.019, audio_seconds: 62.2, compute_seconds: 2.66, clips: 9 },
-  "parakeet-v3-onnx": { model: "parakeet-v3-onnx", speed: 19.8, wer: 0.022, audio_seconds: 62.2, compute_seconds: 3.14, clips: 9 },
-  "cohere-int4": { model: "cohere-int4", speed: 4.1, wer: 0.012, audio_seconds: 62.2, compute_seconds: 15.2, clips: 9 },
+  "parakeet-v3": { model: "parakeet-v3", speed: 23.4, wer: 0.052, audio_seconds: 84.1, compute_seconds: 3.59, clips: 14, wait_seconds: 0.31 },
+  "parakeet-v3-onnx": { model: "parakeet-v3-onnx", speed: 19.8, wer: 0.058, audio_seconds: 84.1, compute_seconds: 4.25, clips: 14, wait_seconds: 0.37 },
+  "cohere-int4": { model: "cohere-int4", speed: 4.1, wer: 0.091, audio_seconds: 84.1, compute_seconds: 20.5, clips: 14, wait_seconds: 1.8 },
 };
 
-const SUITE = "librispeech-test-clean-9clips-v1";
+const SUITE = "silas-bench-mixed-14clips-v2";
 const BAR_SPEED = 10;
 const BAR_WER = 0.08;
 
@@ -188,6 +192,24 @@ function pickModel(results: ModelResult[]): string | null {
 
 let report: Report | null = null;
 let benchmarking = false;
+
+/** Like Report::shared in the core: per-clip timings stay on this computer. */
+function sharedReport(r: Report): Report {
+  return { ...r, results: r.results.map(({ clip_seconds: _, ...rest }) => rest) };
+}
+
+/** What others with this device shared. `?fewShared` shows a result too thin to act on. */
+let community: CommunityDevice = params.has("fewShared")
+  ? { reports: 2, pick: "parakeet-v3", agree: 2, models: { "parakeet-v3": { reports: 2, speed: 22.8, wer: 0.054, wait: 0.33 } } }
+  : {
+      reports: 7,
+      pick: "parakeet-v3",
+      agree: 6,
+      models: {
+        "parakeet-v3": { reports: 7, speed: 22.1, wer: 0.053, wait: 0.32 },
+        "parakeet-v3-onnx": { reports: 3, speed: 18.9, wer: 0.059, wait: 0.38 },
+      },
+    };
 
 function applyReport(next: Report) {
   report = next;
@@ -208,8 +230,8 @@ async function benchmark(all: boolean) {
     const ids = [state.model ?? "parakeet-v3", ...(all ? models.filter((m) => m.installed && m.id !== state.model).map((m) => m.id) : [])];
     const fresh: ModelResult[] = [];
     for (const id of ids) {
-      for (let clip = 0; clip <= 9; clip++) {
-        emit("benchmark-progress", { model: id, clip, clips: 9 });
+      for (let clip = 0; clip <= 14; clip++) {
+        emit("benchmark-progress", { model: id, clip, clips: 14 });
         await delay(id === "cohere-int4" ? 420 : 180);
       }
       fresh.push({ ...mockScores[id], speed: mockScores[id].speed * (0.95 + Math.random() * 0.1) });
@@ -497,10 +519,23 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
     case "run_benchmark":
       await benchmark(Boolean(args.all));
       return null as T;
-    case "share_benchmark":
+    case "share_preview":
+      return out(report ? JSON.stringify(sharedReport(report), null, 2) : null);
+    case "share_benchmark": {
+      if (!report) throw "Run the benchmark first";
+      if (args.payload !== JSON.stringify(sharedReport(report), null, 2)) throw "The results changed. Look them over again before sharing.";
+      await delay(600);
+      if (params.has("shareFail")) throw "The report service isn't available right now. Try again later, or share on GitHub instead.";
+      community = { ...community, reports: community.reports + 1 };
+      return out({ key: device.key, reports: community.reports, pick: community.pick, agree: community.agree });
+    }
+    case "share_benchmark_github":
       if (!report) throw "Run the benchmark first";
       window.open("https://github.com/baney75/silas/issues/new?template=device-report.yml", "_blank", "noopener");
       return null as T;
+    case "get_community":
+      await delay(200);
+      return out(params.has("offline") ? null : community);
     case "select_model": {
       // Like the core: setup's automatic choice never overrides the user's.
       if (args.auto && settings.modelSource === "user") return null as T;

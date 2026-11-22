@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "silas-registry",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "workers_dev": true,
+  // Daily, just after UTC midnight: forget client HMACs older than yesterday even with no POST.
+  "triggers": { "crons": ["5 0 * * *"] },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "silas-registry",
+      // Placeholder. The maintainer replaces it with the id `wrangler d1 create silas-registry`
+      // prints (README, deploy step 2).
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ]
+  // RATE_KEY is a secret: `wrangler secret put RATE_KEY`. Never put it here.
+}

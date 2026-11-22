@@ -3,6 +3,7 @@
 :root {
   --serif: ui-serif, "New York", "Iowan Old Style", Charter, Georgia, serif;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
 
   /* Diamond black: near-black with a cool cut, never pure #000 under text. */
   --bg: #0a0a0b;
@@ -1645,6 +1646,80 @@ button {
 
 .bench-actions {
   flex-wrap: wrap;
+}
+
+/* The share sheet replaces the buttons under the results; it shows what Send posts. */
+.share-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+  border-radius: var(--r);
+  border: 1px solid var(--gold-line);
+  background: var(--surface-2);
+}
+
+.share-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.share-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 16px;
+  margin: 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.share-facts dt {
+  color: var(--text-3);
+}
+
+.share-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-2);
+}
+
+.share-facts code,
+.share-raw pre {
+  font-family: var(--mono);
+}
+
+.share-raw summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.share-raw pre {
+  max-height: 220px;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: var(--bg);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.share-done {
+  color: var(--ok);
+}
+
+.community-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* A tight card puts the verdict on its own line instead of squeezing the name. */
