@@ -51,6 +51,9 @@ final class DictationModel {
     private(set) var history: [Dictation] = []
     /// False while history.json exists but could not be read (device locked). Nothing saves until it loads.
     private var historyLoaded = false
+    /// The same for dictionary.json; while false, sync doesn't run either.
+    private var dictionaryLoaded = false
+    @ObservationIgnored private var protectedDataObserver: NSObjectProtocol?
     private var unsavedChanges = false
     private(set) var selectedID: UUID?
     /// A short note under the status line ("Didn't catch that", "Copied").
@@ -162,7 +165,16 @@ final class DictationModel {
     private static let minSeconds = 0.35
 
     private init() {
-        dictionary = DictionaryStore.load()
+        dictionary = PersonalDictionary()
+        loadDictionary()
+        protectedDataObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.dictionaryLoaded else { return }
+                self.loadDictionary()
+            }
+        }
         loadHistory()
         recorder.onLevel = { [weak self] lvl in
             Task { @MainActor in self?.level = lvl }
@@ -170,13 +182,43 @@ final class DictationModel {
         recorder.onInterrupted = { [weak self] in
             Task { @MainActor in self?.interrupted() }
         }
-        sync.currentDictionary = { [weak self] in self?.dictionary ?? PersonalDictionary() }
+        // Nil while dictionary.json can't be read: a sync then neither sends nor merges anything.
+        sync.currentDictionary = { [weak self] in
+            guard let self, self.dictionaryLoaded else { return nil }
+            return self.dictionary
+        }
         sync.applyMerged = { [weak self] merged in
             guard let self else { return }
             self.dictionary = merged
-            DictionaryStore.save(merged)
+            self.saveDictionary()
         }
         if let last = history.first { handoff?.setLast(last.text, date: last.date) }
+    }
+
+    // MARK: Dictionary file
+
+    /// Read dictionary.json. A file that exists but can't be read (protected data before the first
+    /// unlock) leaves the dictionary unloaded: nothing saves over it and sync doesn't run from it
+    /// until a later load (protected data available, the app active) succeeds.
+    private func loadDictionary() {
+        switch DictionaryStore.load() {
+        case .missing:
+            dictionaryLoaded = true
+        case .ok(let d):
+            dictionary = d
+            dictionaryLoaded = true
+        case .corrupt:
+            dictionary = PersonalDictionary()
+            dictionaryLoaded = true
+            show("Your dictionary couldn't be read. The old file was kept aside.")
+        case .unreadable:
+            dictionaryLoaded = false
+        }
+    }
+
+    private func saveDictionary() {
+        guard dictionaryLoaded else { return }
+        DictionaryStore.save(dictionary)
     }
 
     // MARK: History file
@@ -221,6 +263,7 @@ final class DictationModel {
 
     func becameActive() {
         if !historyLoaded { loadHistory() }
+        if !dictionaryLoaded { loadDictionary() }
         if unsavedChanges { persist() }
         Task { await recoverPending() }
         Task { await sync.activate() }
@@ -646,7 +689,7 @@ final class DictationModel {
         saveTask?.cancel()
         persist()
         dictionarySaveTask?.cancel()
-        DictionaryStore.save(dictionary)
+        saveDictionary()
     }
 
     // MARK: Learning
@@ -674,7 +717,7 @@ final class DictationModel {
     /// The person changed the dictionary: save it and tell the other devices.
     func dictionaryChanged() {
         dictionarySaveTask?.cancel()
-        DictionaryStore.save(dictionary)
+        saveDictionary()
         sync.localChange()
     }
 
@@ -684,7 +727,7 @@ final class DictationModel {
         dictionarySaveTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled, let self else { return }
-            DictionaryStore.save(self.dictionary)
+            self.saveDictionary()
         }
     }
 
@@ -722,7 +765,7 @@ final class DictationModel {
 
     func dismissPending(_ from: String) {
         dictionary.dismissPending(from)
-        DictionaryStore.save(dictionary)
+        saveDictionary()
     }
 
     func addFiller(_ word: String) {

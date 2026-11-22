@@ -29,28 +29,16 @@ enum HistoryStore {
 }
 
 /// The personal dictionary, in the same JSON shape as the desktop's `dictionary.json`.
+/// The file logic lives in SilasCore (`DictionaryFile`); the caller saves only after a load that
+/// was not `.unreadable`.
 enum DictionaryStore {
     static var fileURL: URL { HistoryStore.directory.appendingPathComponent("dictionary.json") }
 
-    static func load() -> PersonalDictionary {
-        guard let data = try? Data(contentsOf: fileURL) else { return PersonalDictionary() }
-        do {
-            return try JSONDecoder().decode(PersonalDictionary.self, from: data)
-        } catch {
-            // Keep the unreadable file aside rather than overwrite it on the next save.
-            let aside = fileURL.deletingPathExtension().appendingPathExtension("unreadable.json")
-            try? FileManager.default.removeItem(at: aside)
-            try? FileManager.default.moveItem(at: fileURL, to: aside)
-            NSLog("SILAS dictionary unreadable, kept aside: %@", String(describing: error))
-            return PersonalDictionary()
-        }
-    }
+    static func load() -> DictionaryFile.Loaded { DictionaryFile.load(from: fileURL) }
 
     static func save(_ dict: PersonalDictionary) {
         do {
-            let e = JSONEncoder()
-            e.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try e.encode(dict).write(to: fileURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            try DictionaryFile.save(dict, to: fileURL)
         } catch {
             NSLog("SILAS dictionary save failed: %@", String(describing: error))
         }

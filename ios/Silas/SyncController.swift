@@ -38,7 +38,9 @@ final class SyncController {
     @ObservationIgnored let peer: SyncPeer
     @ObservationIgnored private let keys = KeychainKeyStore()
     @ObservationIgnored private let network = SyncNetwork()
-    @ObservationIgnored var currentDictionary: () -> PersonalDictionary = { PersonalDictionary() }
+    /// The dictionary to sync, or nil while it isn't loaded (its file can't be read yet): then no
+    /// frame goes out and nothing merges, so a file that can't be read never syncs as deletions.
+    @ObservationIgnored var currentDictionary: () -> PersonalDictionary? = { nil }
     @ObservationIgnored var applyMerged: (PersonalDictionary) -> Void = { _ in }
     @ObservationIgnored private var active = false
     @ObservationIgnored private var debounce: Task<Void, Never>?
@@ -232,10 +234,10 @@ final class SyncController {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         do {
-            let snapshot = currentDictionary()
+            guard let snapshot = currentDictionary() else { return }
             let outcomes = try await peer.syncFolder(SyncFolder(root: url), dict: snapshot)
             if let merged = outcomes.last(where: { $0.dictionary != nil })?.dictionary {
-                applyMerged(SyncProjection.rebase(merged, from: snapshot, onto: currentDictionary()))
+                applyMerged(SyncProjection.rebase(merged, from: snapshot, onto: currentDictionary() ?? snapshot))
             }
             for o in outcomes { report(o) }
             await saveLedger()
@@ -255,15 +257,16 @@ final class SyncController {
     }
 
     private func ownFrame() async -> Data? {
-        try? await peer.frame(for: currentDictionary())
+        guard let dict = currentDictionary() else { return nil }
+        return try? await peer.frame(for: dict)
     }
 
     private func received(_ frame: Data) async {
         do {
-            let snapshot = currentDictionary()
+            guard let snapshot = currentDictionary() else { return }
             let o = try await peer.receive(frame, into: snapshot)
             if let d = o.dictionary {
-                applyMerged(SyncProjection.rebase(d, from: snapshot, onto: currentDictionary()))
+                applyMerged(SyncProjection.rebase(d, from: snapshot, onto: currentDictionary() ?? snapshot))
             }
             report(o)
             await saveLedger()
