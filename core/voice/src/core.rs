@@ -344,10 +344,12 @@ pub enum Ending {
     Limit,
 }
 
-pub fn tail_for(ending: Ending) -> Duration {
+/// The tail a release records. None when the last moment before key up was already silence
+/// (`pieces::ends_quiet`): nobody is mid-word, and the quiet a tail would add is padded on instead.
+pub fn tail_for(ending: Ending, quiet: bool) -> Duration {
     match ending {
-        Ending::Key => TAIL,
-        Ending::Limit => Duration::ZERO,
+        Ending::Key if !quiet => TAIL,
+        Ending::Key | Ending::Limit => Duration::ZERO,
     }
 }
 
@@ -1308,8 +1310,13 @@ impl Core {
         let Live { rec, started, pressed } = live;
         let released = Instant::now();
         // A short tail first, so the last word isn't cut off; after that, what's said isn't
-        // dictation.
-        let tail = tail_for(ending);
+        // dictation. If the speaker had already stopped, there is no last word to wait for.
+        let quiet = ending == Ending::Key && {
+            let (raw, rate) = rec.tap();
+            let buffer = raw.lock();
+            crate::pieces::ends_quiet(&buffer, rate)
+        };
+        let tail = tail_for(ending, quiet);
         std::thread::sleep(tail);
         let mut rec = rec;
         rec.stop();
@@ -1327,7 +1334,10 @@ impl Core {
         }
         me.set_status(Status::Transcribing, None);
         let done = pieces.map(|p| p.finish()).unwrap_or_default();
-        let rest = rec.finish_from(done.raw_samples);
+        let mut rest = rec.finish_from(done.raw_samples);
+        if quiet {
+            crate::pieces::pad_quiet(&mut rest);
+        }
         let language = me.settings.lock().language.clone();
         let raw = match crate::pieces::transcript(done, &rest, |audio| {
             let mut engine = me.engine.lock();
@@ -1966,9 +1976,15 @@ mod tests {
 
     #[test]
     fn the_last_word_gets_a_tail_and_the_time_limit_does_not() {
-        assert_eq!(tail_for(Ending::Key), TAIL);
+        assert_eq!(tail_for(Ending::Key, false), TAIL);
         assert!(TAIL >= Duration::from_millis(150) && TAIL <= Duration::from_millis(300), "{TAIL:?}");
-        assert_eq!(tail_for(Ending::Limit), Duration::ZERO);
+        assert_eq!(tail_for(Ending::Limit, false), Duration::ZERO);
+        assert_eq!(tail_for(Ending::Limit, true), Duration::ZERO);
+    }
+
+    #[test]
+    fn a_release_after_the_speaker_stopped_waits_no_tail() {
+        assert_eq!(tail_for(Ending::Key, true), Duration::ZERO);
     }
 
     #[test]

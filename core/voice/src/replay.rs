@@ -1,6 +1,6 @@
 //! Replays recorded speech through the path a dictation takes: the microphone's buffer, pieces cut at pauses while
-//! you are still talking, the rest at release, then the dictionary. A benchmark built on this measures the wait users
-//! feel, not only the model. The key goes down when the clip starts and comes up when it ends.
+//! you are still talking, guesses made in pauses, the rest at release, then the dictionary. A benchmark built on this
+//! measures the wait users feel, not only the model. The key goes down when the clip starts and comes up when it ends.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 
 use crate::audio::{Recording, RATE};
-use crate::core::TAIL;
+use crate::core::{tail_for, Ending};
 use crate::pieces::{self, Cutter, Pieces, POLL};
 
 /// A speech model as the replay sees it: 16 kHz audio in, text out.
@@ -28,6 +28,10 @@ pub struct Dictation {
     pub compute: Duration,
     /// Pieces cut before release.
     pub pieces: usize,
+    /// Guesses transcribed in pauses before release.
+    pub guesses: usize,
+    /// Whether release took the last guess as the text, with nothing left to transcribe.
+    pub guess_used: bool,
 }
 
 fn timed(
@@ -47,7 +51,7 @@ fn timed(
 }
 
 /// Replay in real time on the app's own threads: the clip is fed as a microphone would feed it, the pieces worker
-/// polls it, and release waits the same tail. Takes as long as the clip.
+/// polls it, and release waits the same tail the app would. Takes as long as the clip.
 pub fn live(
     audio: Vec<f32>,
     model: &Arc<Mutex<Model>>,
@@ -63,15 +67,19 @@ pub fn live(
         std::thread::yield_now();
     };
     let (raw, rate) = rec.tap();
-    let pieces = Pieces::start(raw, rate, timed(model, &compute));
+    let pieces = Pieces::start(raw.clone(), rate, timed(model, &compute));
     std::thread::sleep((pressed + seconds).saturating_duration_since(Instant::now()));
     let released = Instant::now();
-    std::thread::sleep(TAIL);
+    let quiet = pieces::ends_quiet(&raw.lock(), rate);
+    std::thread::sleep(tail_for(Ending::Key, quiet));
     rec.stop();
     let done = pieces.finish();
-    let first = done.first;
-    let made = compute.lock().1;
-    let rest = rec.finish_from(done.raw_samples);
+    let (first, made, guesses) = (done.first, done.pieces, done.guesses);
+    let mut rest = rec.finish_from(done.raw_samples);
+    if quiet {
+        pieces::pad_quiet(&mut rest);
+    }
+    let guess_used = pieces::guess_ends_it(&done, &rest);
     let raw = pieces::transcript(done, &rest, timed(model, &compute))?;
     let text = finish(&raw);
     let end = Instant::now();
@@ -83,12 +91,14 @@ pub fn live(
         after_release: end.saturating_duration_since(released),
         compute,
         pieces: made,
+        guesses,
+        guess_used,
     })
 }
 
 /// The same decisions on a simulated clock, for quick runs: the model's time is real, the waiting for speech is not.
-/// The worker looks every `POLL` of clip time and a piece holds it for as long as the model took, so pieces are cut
-/// where the live worker would cut them on an idle machine.
+/// The worker looks every `POLL` of clip time and a piece or a guess holds it for as long as the model took, so they
+/// are made where the live worker would make them on an idle machine.
 pub fn simulated(
     audio: &[f32],
     model: &mut Model,
@@ -96,57 +106,58 @@ pub fn simulated(
 ) -> anyhow::Result<Dictation> {
     let rate = RATE as f64;
     let key_up = audio.len() as f64 / rate;
-    let stop_at = key_up + TAIL.as_secs_f64();
+    let quiet = pieces::ends_quiet(audio, RATE);
+    let tail = tail_for(Ending::Key, quiet);
+    let stop_at = key_up + tail.as_secs_f64();
     // What the microphone holds when it stops: the clip, then the quiet room during the tail.
     let mut buffer = audio.to_vec();
     buffer.resize(
-        audio.len() + (TAIL.as_secs_f64() * rate).round() as usize,
+        audio.len() + (tail.as_secs_f64() * rate).round() as usize,
         0.0,
     );
     let mut cutter = Cutter::new(RATE);
     let (mut now, mut busy_until) = (0.0f64, 0.0f64);
-    let (mut compute, mut made, mut first) = (Duration::ZERO, 0, None);
+    let (mut compute, mut first) = (Duration::ZERO, None);
     loop {
         now += POLL.as_secs_f64();
         if now >= stop_at {
             break;
         }
         let len = ((now * rate) as usize).min(buffer.len());
-        let Some(from) = cutter.look_from(len) else {
-            continue;
-        };
-        let Some((piece, covers)) = cutter.piece(&buffer[from..len]) else {
-            continue;
-        };
-        let t = Instant::now();
-        let text = model(&piece);
-        let took = t.elapsed();
-        compute += took;
-        made += 1;
-        match text {
-            Ok(text) => {
+        let want = cutter.want(&buffer[..len]);
+        let job = cutter.job(want);
+        let going = match job {
+            Some(job) => {
+                let t = Instant::now();
+                let text = model(job.audio());
+                let took = t.elapsed();
+                compute += took;
                 now += took.as_secs_f64();
                 busy_until = now;
-                if !text.trim().is_empty() {
-                    first.get_or_insert(now);
-                }
-                cutter.add(&text, covers);
+                cutter.finished(job, text)
             }
-            Err(e) => {
-                log::warn!("transcribing a piece failed: {e}");
-                now += took.as_secs_f64();
-                busy_until = now;
-                break;
-            }
+            None => true,
+        };
+        // The pieces' first words, whether a piece was transcribed or a guess became one.
+        if !cutter.done.text.trim().is_empty() {
+            first.get_or_insert(now);
+        }
+        if !going {
+            break;
         }
     }
-    // Release stops the worker at once, unless it is partway through a piece.
+    // Release stops the worker at once, unless it is partway through a piece or a guess.
     let worker_done = busy_until.max(stop_at);
     let done = std::mem::take(&mut cutter.done);
+    let (made, guesses) = (done.pieces, done.guesses);
     let t = Instant::now();
-    let rest = &buffer[done.raw_samples.min(buffer.len())..];
+    let mut rest = buffer[done.raw_samples.min(buffer.len())..].to_vec();
+    if quiet {
+        pieces::pad_quiet(&mut rest);
+    }
+    let guess_used = pieces::guess_ends_it(&done, &rest);
     let mut rest_compute = Duration::ZERO;
-    let raw = pieces::transcript(done, rest, |a| {
+    let raw = pieces::transcript(done, &rest, |a| {
         let t = Instant::now();
         let text = model(a);
         rest_compute = t.elapsed();
@@ -162,6 +173,8 @@ pub fn simulated(
         after_release,
         compute: compute + rest_compute,
         pieces: made,
+        guesses,
+        guess_used,
     })
 }
 
@@ -207,6 +220,7 @@ pub fn load1() -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::TAIL;
 
     fn speech(seconds: f32) -> Vec<f32> {
         (0..(seconds * RATE as f32) as usize)
@@ -225,16 +239,18 @@ mod tests {
     }
 
     #[test]
-    fn a_short_clip_is_one_transcription_after_release() {
+    fn a_short_clip_is_one_transcription_guessed_in_the_tail() {
         let audio = speech(2.0);
         let d = simulated(&audio, &mut counting(), |t| t.to_uppercase()).unwrap();
-        assert_eq!(d.pieces, 0);
-        // The rest includes the tail of quiet room.
+        // The clip ends mid-word, so release waits a tail, and the worker guesses once the tail has been quiet a
+        // moment: the whole clip and some of the tail, then a tail's worth of padding.
+        assert_eq!((d.pieces, d.guesses, d.guess_used), (0, 1, true));
         let tail = (TAIL.as_secs_f64() * RATE as f64) as usize;
-        assert_eq!(d.raw, format!("{} samples.", audio.len() + tail));
+        let n: usize = d.raw.trim_end_matches(" samples.").parse().unwrap();
+        assert!(n > audio.len() + tail + tail / 2 && n <= audio.len() + 2 * tail, "{n}");
         assert_eq!(d.text, d.raw.to_uppercase());
         assert!(
-            d.after_release >= TAIL && d.after_release < TAIL + Duration::from_millis(100),
+            d.after_release >= Duration::from_millis(100) && d.after_release < TAIL + Duration::from_millis(100),
             "{:?}",
             d.after_release
         );
@@ -254,7 +270,10 @@ mod tests {
             .filter_map(|n| n.trim().parse().ok())
             .collect();
         let tail = (TAIL.as_secs_f64() * RATE as f64) as usize;
-        assert_eq!(words.iter().sum::<usize>(), audio.len() + tail);
+        // The piece is the guess made in that pause and the rest is the guess made in the tail, each padded with a
+        // tail's quiet. Together they cover every sample once, and part of the tail.
+        let sum = words.iter().sum::<usize>();
+        assert!(sum > audio.len() + 2 * tail + tail / 2 && sum <= audio.len() + 3 * tail, "{sum}");
     }
 
     #[test]
@@ -282,6 +301,62 @@ mod tests {
             sim.raw
         );
         assert!(live.after_release >= TAIL);
+    }
+
+    fn tail() -> usize {
+        (TAIL.as_secs_f64() * RATE as f64) as usize
+    }
+
+    #[test]
+    fn a_dictation_that_ends_in_a_pause_takes_its_guess_and_waits_for_nothing() {
+        let audio = [speech(3.0), pause(1.0)].concat();
+        let d = simulated(&audio, &mut counting(), |t| t.to_string()).unwrap();
+        assert_eq!(d.guesses, 1, "one pause, one guess");
+        assert!(d.guess_used);
+        // The guess stopped inside the pause, and the model heard a tail's worth of quiet after it.
+        let n: usize = d.raw.trim_end_matches(" samples.").parse().unwrap();
+        assert!(n > 3 * RATE as usize + tail() && n < audio.len() + tail(), "{n}");
+        // No tail and nothing to transcribe after release.
+        assert!(d.after_release < Duration::from_millis(50), "{:?}", d.after_release);
+    }
+
+    #[test]
+    fn speech_after_the_guess_throws_it_away() {
+        let audio = [speech(2.0), pause(0.6), speech(1.5)].concat();
+        let d = simulated(&audio, &mut counting(), |t| t.to_string()).unwrap();
+        // The guess in the pause is thrown away; the one made in the tail covers the whole clip.
+        assert_eq!(d.guesses, 2);
+        assert!(d.guess_used);
+        let n: usize = d.raw.trim_end_matches(" samples.").parse().unwrap();
+        assert!(n > audio.len() + tail() && n <= audio.len() + 2 * tail(), "{n}");
+    }
+
+    #[test]
+    fn a_failed_guess_loses_no_text() {
+        let audio = [speech(3.0), pause(1.0)].concat();
+        let mut calls = 0;
+        let mut model: Model = Box::new(move |a: &[f32]| {
+            calls += 1;
+            if calls == 1 {
+                anyhow::bail!("busy")
+            }
+            Ok(format!("{} samples.", a.len()))
+        });
+        let d = simulated(&audio, &mut model, |t| t.to_string()).unwrap();
+        assert_eq!(d.guesses, 1);
+        assert!(!d.guess_used);
+        // Release transcribed it all: the clip, then the quiet a tail would have recorded.
+        assert_eq!(d.raw, format!("{} samples.", audio.len() + tail()));
+    }
+
+    #[test]
+    fn live_guesses_like_simulated() {
+        let audio = [speech(2.0), pause(0.8)].concat();
+        let sim = simulated(&audio, &mut counting(), |t| t.to_string()).unwrap();
+        let model = Arc::new(Mutex::new(counting()));
+        let live = live(audio, &model, |t| t.to_string()).unwrap();
+        assert!(sim.guess_used && live.guess_used, "{sim:?} {live:?}");
+        assert!(live.after_release < TAIL, "{:?}", live.after_release);
     }
 
     #[test]
