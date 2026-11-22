@@ -10,6 +10,8 @@ use chrono::Utc;
 use rphonetic::{DoubleMetaphone, Encoder};
 use serde::{Deserialize, Serialize};
 
+use crate::snippets::{match_key, Snippet};
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Term {
@@ -51,6 +53,9 @@ pub struct Dictionary {
     pub pending: Vec<Pending>,
     #[serde(default = "default_fillers")]
     pub fillers: Vec<String>,
+    /// Phrases that type saved text (`snippets.rs`).
+    #[serde(default)]
+    pub snippets: Vec<Snippet>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -83,6 +88,7 @@ impl Default for Dictionary {
             corrections: vec![],
             pending: vec![],
             fillers: default_fillers(),
+            snippets: vec![],
         }
     }
 }
@@ -701,6 +707,27 @@ impl Dictionary {
         self.pending.retain(|p| !p.from.eq_ignore_ascii_case(from));
     }
 
+    /// Save `text` under `trigger`, replacing the text of a trigger that matches it. False when
+    /// either is empty.
+    pub fn add_snippet(&mut self, trigger: &str, text: &str) -> bool {
+        let trigger = trigger.trim();
+        let key = match_key(trigger);
+        if key.is_empty() || text.trim().is_empty() {
+            return false;
+        }
+        if let Some(s) = self.snippets.iter_mut().find(|s| match_key(&s.trigger) == key) {
+            s.text = text.into();
+            return true;
+        }
+        self.snippets.push(Snippet { trigger: trigger.into(), text: text.into(), added: now() });
+        true
+    }
+
+    pub fn remove_snippet(&mut self, trigger: &str) {
+        let key = match_key(trigger);
+        self.snippets.retain(|s| match_key(&s.trigger) != key);
+    }
+
     // ------------------------------------------------------------ learning
 
     /// Learn from the user turning `typed` into `fixed`. `explicit` means they fixed it on
@@ -789,13 +816,18 @@ impl Dictionary {
     /// Merge another dictionary: a Silas export or a TypeWhisper export
     /// (`[{type: "term"|"correction", original, replacement}]`).
     pub fn import(&mut self, json: &str) -> anyhow::Result<usize> {
-        let before = self.terms.len() + self.corrections.len();
+        let before = self.terms.len() + self.corrections.len() + self.snippets.len();
         if let Ok(other) = serde_json::from_str::<Dictionary>(json) {
             for t in other.terms {
                 self.add_term(&t.text, "import");
             }
             for c in other.corrections {
                 self.add_correction(&c.from, &c.to, "import");
+            }
+            for sn in other.snippets {
+                if !self.snippets.iter().any(|s| match_key(&s.trigger) == match_key(&sn.trigger)) {
+                    self.add_snippet(&sn.trigger, &sn.text);
+                }
             }
         } else {
             #[derive(Deserialize)]
@@ -817,7 +849,7 @@ impl Dictionary {
                 }
             }
         }
-        Ok(self.terms.len() + self.corrections.len() - before)
+        Ok(self.terms.len() + self.corrections.len() + self.snippets.len() - before)
     }
 }
 
@@ -1062,6 +1094,46 @@ mod tests {
         ] {
             assert_eq!(d.apply(s, true), s);
         }
+        // Snippets and spoken code (style.rs) match too: everyday sentences that hold a trigger's
+        // words or a symbol's name come through every style as said (Terminal drops the period).
+        d.add_snippet("my address", "12 Benson Rd");
+        d.add_snippet("sign off", "Thanks, Donovan");
+        for s in [
+            "i changed my address last week.",
+            "please sign off on the plan.",
+            "add a dash of salt.",
+            "we want to underscore the point.",
+            "she wore a polka dot dress.",
+            "the new line of laptops is out.",
+        ] {
+            let typed = d.apply(s, true);
+            assert_eq!(typed, s);
+            for style in crate::style::Style::ALL {
+                let want = if style == crate::style::Style::Terminal { s.trim_end_matches('.') } else { s };
+                assert_eq!(crate::style::render(&typed, style, &d.snippets), want, "{style:?}: {s}");
+            }
+        }
+    }
+
+    #[test]
+    fn snippets_are_kept_once_per_trigger_and_travel_with_an_export() {
+        let mut d = Dictionary::default();
+        assert!(d.add_snippet("My Address", "12 Benson Rd"));
+        assert!(d.add_snippet("my address.", "14 Benson Rd"), "the same trigger updates the text");
+        assert!(!d.add_snippet("  ", "text"));
+        assert!(!d.add_snippet("sign off", "  "));
+        assert_eq!(d.snippets.len(), 1);
+        assert_eq!((d.snippets[0].trigger.as_str(), d.snippets[0].text.as_str()), ("My Address", "14 Benson Rd"));
+        let export = serde_json::to_string(&d).unwrap();
+        assert!(export.contains("\"snippets\""));
+        let mut other = Dictionary::default();
+        assert_eq!(other.import(&export).unwrap(), 1);
+        assert_eq!(other.snippets[0].text, "14 Benson Rd");
+        // A dictionary saved before snippets existed still loads.
+        let old: Dictionary = serde_json::from_str(r#"{"terms": [], "corrections": []}"#).unwrap();
+        assert!(old.snippets.is_empty());
+        d.remove_snippet("MY ADDRESS");
+        assert!(d.snippets.is_empty());
     }
 
     #[test]

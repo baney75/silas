@@ -133,6 +133,11 @@ pub struct Settings {
     pub onboarded: bool,
     pub update_channel: String,
     pub auto_update: bool,
+    /// A second key that types the last dictation again. None: no key (the tray menu still does it).
+    pub retype_hotkey: Option<String>,
+    /// The user's style for an app, by app id (`style.rs`): "prose", "terminal", "code" or "chat".
+    /// Apps not listed use the built-in table.
+    pub app_styles: std::collections::BTreeMap<String, String>,
 }
 
 /// Settings saved before per-device picks have no `modelSource`. A model other than the
@@ -172,6 +177,8 @@ impl Default for Settings {
             onboarded: false,
             update_channel: "stable".into(),
             auto_update: true,
+            retype_hotkey: None,
+            app_styles: Default::default(),
         }
     }
 }

@@ -1,7 +1,8 @@
-import { api, errorText, type Settings, type TypingSpeed } from "./api";
+import { api, errorText, type AppStyle, type Settings, type TypingSpeed } from "./api";
+import { assignStyle, assignments, STYLES, styleFor, styleHelp, unassign } from "./appstyles";
 import { checkForUpdate, hotkeyLabel, installUpdate, store, subscribe, updateSettings } from "./store";
 import type { UpdateChannel } from "./api";
-import { clear, h, keycap, logo, segmented, switchEl, toast } from "./ui";
+import { clear, h, icon, keycap, logo, segmented, switchEl, toast } from "./ui";
 
 export const languages: Array<[string, string]> = [
   ["en", "English"],
@@ -34,48 +35,162 @@ function change(patch: Partial<Settings>) {
   void updateSettings(patch);
 }
 
+// A style change redraws the App styles rows (the description, the list of assigned apps), so it
+// skips `change`, which marks the page as already showing it.
+function restyle(appStyles: Settings["appStyles"]) {
+  void updateSettings({ appStyles });
+}
+
 function toggle(key: BoolKey, label: string, desc: string | null): HTMLElement {
   return row(label, desc, switchEl(store.settings[key], label, (v) => change({ [key]: v } as Partial<Settings>)));
 }
 
-let capturing = false;
+// Which key is being picked: the dictation key or the one that types the last dictation again.
+type KeySetting = "hotkey" | "retypeHotkey";
+let capturing: KeySetting | null = null;
+
+// An app id typed into "Add an app" but not added yet. Kept across redraws.
+let appDraft = "";
+let appDraftStyle: AppStyle = "terminal";
+
+/** What the page shows besides the settings themselves; a change to it redraws. */
+function drawnKey(): string {
+  return JSON.stringify([hotkeyLabel(), store.state.retypeHotkeyLabel, store.state.app]);
+}
 
 export function mountSettings(root: HTMLElement): () => void {
   const body = h("div", { class: "settings" });
   let drawnLabel = "";
   root.append(h("div", { class: "page-head" }, h("div", null, h("h1", null, "Settings"), h("p", { class: "lede" }, "Changes save as you make them."))), body);
 
-  function hotkeyControl(): HTMLElement {
+  /** Pick a key by pressing it. One capture call serves both keys. */
+  async function pickKey(which: KeySetting) {
+    capturing = which;
+    draw();
+    try {
+      const key = await api.captureHotkey();
+      capturing = null;
+      await updateSettings({ [which]: key });
+      if (which === "hotkey") toast(`Hotkey set to ${hotkeyLabel()}`);
+      else if (store.settings.retypeHotkey === key) toast(`${store.state.retypeHotkeyLabel ?? key} types your last dictation again`);
+    } catch (e) {
+      capturing = null;
+      // Escape ends the pick quietly; anything else says why.
+      if (errorText(e) !== "cancelled") toast(errorText(e), "error");
+    }
+    draw();
+  }
+
+  function keyControl(which: KeySetting): HTMLElement {
+    const label = which === "hotkey" ? hotkeyLabel() : store.state.retypeHotkeyLabel;
+    const waiting = capturing === which;
     const btn = h(
       "button",
-      {
-        class: "btn btn-ghost btn-sm",
-        type: "button",
-        disabled: capturing,
-        onclick: async () => {
-          capturing = true;
-          draw();
-          try {
-            const key = await api.captureHotkey();
-            capturing = false;
-            await updateSettings({ hotkey: key });
-            toast(`Hotkey set to ${hotkeyLabel()}`);
-          } catch (e) {
-            capturing = false;
-            // Escape ends the pick quietly; anything else says why.
-            if (errorText(e) !== "cancelled") toast(errorText(e), "error");
-          }
-          draw();
-        },
-      },
-      capturing ? "Waiting…" : "Change",
+      { class: "btn btn-ghost btn-sm", type: "button", disabled: capturing !== null, onclick: () => void pickKey(which) },
+      waiting ? "Waiting…" : label ? "Change" : "Set",
     );
+    const clearBtn =
+      which === "retypeHotkey" && label && !waiting
+        ? h("button", { class: "btn btn-ghost btn-sm", type: "button", disabled: capturing !== null, onclick: () => change({ retypeHotkey: null }) }, "Clear")
+        : null;
     return h(
       "div",
       { class: "hotkey" },
-      capturing ? h("span", { class: "keycap keycap-md capturing", "aria-live": "polite" }, "Press a key…") : keycap(hotkeyLabel(), "md"),
+      waiting
+        ? h("span", { class: "keycap keycap-md capturing", "aria-live": "polite" }, "Press a key…")
+        : label
+          ? keycap(label, "md")
+          : h("span", { class: "set-desc" }, "Not set"),
       btn,
+      clearBtn,
     );
+  }
+
+  function styleSelect(value: AppStyle, label: string, onChange: (v: AppStyle) => void): HTMLSelectElement {
+    const sel = h("select", { class: "select select-sm", "aria-label": label }) as HTMLSelectElement;
+    for (const st of STYLES) {
+      const o = h("option", { value: st.value }, st.label);
+      o.selected = st.value === value;
+      sel.append(o);
+    }
+    sel.addEventListener("change", () => onChange(sel.value as AppStyle));
+    return sel;
+  }
+
+  function appStyles(): HTMLElement[] {
+    const s = store.settings;
+    const app = store.state.app;
+    const rows: HTMLElement[] = [];
+    // Silas's own style for `id`, known only for the app it last saw.
+    const builtinFor = (id: string) => (app && app.id.toLowerCase() === id.trim().toLowerCase() ? app.builtin : undefined);
+    if (app) {
+      const style = styleFor(s.appStyles, app);
+      const named = app.name !== app.id ? `${app.name} (${app.id})` : app.id;
+      rows.push(
+        row(
+          "Last app",
+          `${named}. ${styleHelp(style)}`,
+          segmented<AppStyle>(
+            STYLES.map(({ value, label }) => ({ value, label })),
+            style,
+            `Style for ${app.name}`,
+            (v) => restyle(assignStyle(s.appStyles, app.id, v, app.builtin)),
+          ),
+        ),
+      );
+    } else {
+      rows.push(row("Last app", "Dictate into an app and it shows up here with the style Silas uses for it.", h("span")));
+    }
+    for (const [id, style] of assignments(s.appStyles)) {
+      const name = app && app.id.toLowerCase() === id.toLowerCase() ? app.name : id;
+      rows.push(
+        row(
+          name,
+          `You chose ${STYLES.find((x) => x.value === style)?.label ?? style}.`,
+          h(
+            "div",
+            { class: "hotkey" },
+            styleSelect(style, `Style for ${name}`, (v) => restyle(assignStyle(s.appStyles, id, v, builtinFor(id)))),
+            h(
+              "button",
+              { class: "icon-btn", type: "button", "aria-label": `Forget the style for ${name}`, title: "Use Silas's own style", onclick: () => restyle(unassign(s.appStyles, id)) },
+              icon("x", 16),
+            ),
+          ),
+        ),
+      );
+    }
+    const input = h("input", {
+      class: "input app-id",
+      type: "text",
+      placeholder: "App id",
+      "aria-label": "App id",
+      autocomplete: "off",
+      spellcheck: "false",
+      value: appDraft,
+    }) as HTMLInputElement;
+    const add = () => {
+      const id = input.value.trim();
+      if (!id) return input.focus();
+      appDraft = "";
+      restyle(assignStyle(s.appStyles, id, appDraftStyle, builtinFor(id)));
+    };
+    input.addEventListener("input", () => (appDraft = input.value));
+    input.addEventListener("keydown", (e) => e.key === "Enter" && add());
+    rows.push(
+      row(
+        "Add an app",
+        "Its bundle id on a Mac (com.example.App), its program on Windows (app.exe), or its window class on Linux.",
+        h(
+          "div",
+          { class: "add-row" },
+          input,
+          styleSelect(appDraftStyle, "Style for the new app", (v) => (appDraftStyle = v)),
+          h("button", { class: "btn btn-ghost btn-sm", type: "button", onclick: add }, "Add"),
+        ),
+      ),
+    );
+    return rows;
   }
 
   function micSelect(): HTMLElement {
@@ -110,13 +225,14 @@ export function mountSettings(root: HTMLElement): () => void {
   function draw() {
     const s = store.settings;
     shown = { ...s };
-    drawnLabel = hotkeyLabel();
+    drawnLabel = drawnKey();
     const isMac = store.state.platform === "macos";
     clear(
       body,
       group(
         "Dictation",
-        row("Hotkey", "Hold it to talk. Pick a key you don't use for anything else.", hotkeyControl()),
+        row("Hotkey", "Hold it to talk. Pick a key you don't use for anything else.", keyControl("hotkey")),
+        row("Type it again", "Press it to type your last dictation again where you are. Also in the tray menu.", keyControl("retypeHotkey")),
         toggle("tapToToggle", "Tap for hands-free", "A quick tap starts listening. Tap again to stop."),
         row(
           "Typing speed",
@@ -135,6 +251,7 @@ export function mountSettings(root: HTMLElement): () => void {
         toggle("newlineAsShiftEnter", "Shift+Enter for new lines", "So chat boxes don't send your message early."),
         toggle("trailingSpace", "Add a space after", "Ready for the next sentence."),
       ),
+      group("App styles", ...appStyles()),
       group(
         "Words",
         toggle("removeFillers", "Remove filler words", `Drops ${store.dict.fillers.slice(0, 3).join(", ") || "um, uh"} and the like.`),
@@ -189,13 +306,13 @@ export function mountSettings(root: HTMLElement): () => void {
   });
   const unsub = subscribe(["settings", "state"], () => {
     if (capturing) return;
-    if (JSON.stringify(shown) === JSON.stringify(store.settings) && drawnLabel === hotkeyLabel()) return;
+    if (JSON.stringify(shown) === JSON.stringify(store.settings) && drawnLabel === drawnKey()) return;
     // Keep focus where it was so keyboard users don't lose their place.
     const active = document.activeElement as HTMLElement | null;
-    const rows = [...body.querySelectorAll("button, select")];
+    const rows = [...body.querySelectorAll("button, select, input")];
     const index = active ? rows.indexOf(active) : -1;
     draw();
-    if (index >= 0) ([...body.querySelectorAll("button, select")][index] as HTMLElement | undefined)?.focus();
+    if (index >= 0) ([...body.querySelectorAll("button, select, input")][index] as HTMLElement | undefined)?.focus();
   });
   return () => {
     unsub();

@@ -90,9 +90,40 @@ for your key.
 | Tap the key once | listens hands-free until you tap it again |
 | Press **Esc** while it listens | cancels |
 | Press the key with another key (Right ⌘ + C) | does nothing; your shortcut still works |
+| Press your **Type it again** key, or pick *Type Last Dictation Again* in the tray menu | types your last dictation again where you are (Windows: the key only; the menu item is off until Silas can put your window back in front) |
 
 New lines are typed as Shift+Return, so chat boxes don't send early. Change the key,
-typing speed and the rest in Settings.
+typing speed and the rest in Settings. The *Type it again* key is unset until you pick one
+in Settings → Dictation.
+
+**Each app gets its style.** Silas checks which app you're typing into:
+
+| Style | For | What changes |
+| --- | --- | --- |
+| Terminal | Terminal, iTerm2, Ghostty, kitty, Windows Terminal, PowerShell, foot and others | Spoken code on, no capital at the start, no period at the end |
+| Code | VS Code, Cursor, Zed, Xcode, JetBrains IDEs and others | Spoken code on; no period after a line that reads as code |
+| Chat | Slack, Discord, Messages, Signal, Telegram and others | New lines always go out as Shift+Return |
+| Prose | everything else | Nothing: your words as you said them |
+
+Settings → App styles shows the app your last dictation went to and its style. Pick another
+style for it, or add any app by its id.
+
+**Spoken code** (Terminal and Code styles): "cargo test dash dash release" types
+`cargo test --release`; "cd tilde slash dot config" types `cd ~/.config`; "all caps node
+underscore env equals production" types `NODE_ENV=production`; "print open paren name close
+paren" types `print(name)`; "camel case user name" types `userName`. Also: dot, slash, back
+slash, underscore, tilde, pipe, equals, double equals, at sign, dollar sign, open and close
+bracket or brace, snake case, pascal case, kebab case, constant case, new line, new paragraph.
+Words that read as prose stay words: "a dash of salt", "results underscore the need" and "a red
+dot appears" are typed as you said them. Underscore, equals, pipe, dot, tilde and all caps turn
+into code only next to other code ("node underscore env equals production", "console dot log",
+"pipe grep"). Say "new line" on its own, between pauses, for a line break in a Code app; a
+Terminal never gets one from spoken code, since it would press Return.
+
+**Snippets.** Dictionary → Snippets saves text to type when you say a phrase: say "my
+address" on its own and Silas types your address. Inside a sentence, say "insert" first:
+"send it to insert my address". The phrase's words in ordinary speech ("I changed my address")
+are left alone.
 
 Music or a video playing when you press the key pauses while you speak and plays again after.
 Silas only restarts what it paused, so something you stopped yourself stays stopped. Turn it off

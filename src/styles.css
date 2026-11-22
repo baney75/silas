@@ -1215,6 +1215,52 @@ button {
   padding: 0 4px;
 }
 
+/* Snippets: a phrase to say and the text it types. */
+.snippet-add {
+  align-items: flex-start;
+}
+.snippet-add .pair-arrow,
+.snippet-add .btn {
+  margin-top: 6px;
+}
+.snippet-input {
+  height: auto;
+  min-height: 36px;
+  padding: 7px 12px;
+  line-height: 1.45;
+  resize: vertical;
+}
+.snippet {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+.snippet-trigger {
+  flex: none;
+  font-weight: 600;
+}
+.snippet-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+}
+
+/* App styles in Settings. */
+.select-sm {
+  height: 30px;
+  min-width: 120px;
+  font-size: 13px;
+}
+.app-id {
+  flex: none;
+  width: 200px;
+  height: 30px;
+  font-size: 13px;
+}
+
 .term-list {
   list-style: none;
   margin: 0;

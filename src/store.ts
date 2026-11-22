@@ -28,7 +28,7 @@ export const store = {
   settings: null as unknown as Settings,
   models: [] as ModelEntry[],
   history: [] as HistoryItem[],
-  dict: { terms: [], corrections: [], pending: [], fillers: [] } as Dictionary,
+  dict: { terms: [], corrections: [], pending: [], fillers: [], snippets: [] } as Dictionary,
   stats: null as Stats | null,
   progress: {} as Record<string, ModelProgress>,
   microphones: [] as string[],
@@ -119,7 +119,7 @@ export async function updateSettings(patch: Partial<Settings>) {
   try {
     store.settings = await api.setSettings(store.settings);
     notify("settings");
-    if ("hotkey" in patch || "model" in patch) await refreshState();
+    if ("hotkey" in patch || "retypeHotkey" in patch || "appStyles" in patch || "model" in patch) await refreshState();
   } catch (e) {
     store.settings = before;
     notify("settings");
