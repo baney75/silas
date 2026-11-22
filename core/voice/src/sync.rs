@@ -256,8 +256,13 @@ impl Kind {
         }
     }
 
+    /// The key for an entry named `name`, or None when its normal form is empty. A snippet's
+    /// key is the form Silas matches spoken triggers in (`snippets::match_key`), after NFC.
     pub fn key_for(self, name: &str) -> Option<String> {
-        let n = norm(name);
+        let n = match self {
+            Kind::Snippet => crate::snippets::match_key(&name.nfc().collect::<String>()),
+            _ => norm(name),
+        };
         (!n.is_empty()).then(|| format!("{}{n}", self.prefix()))
     }
 }
@@ -842,6 +847,13 @@ mod tests {
         }
         // Decomposed é (e + U+0301) is the same key as the composed one.
         assert_eq!(norm("Cafe\u{301}"), norm("Café"));
+    }
+
+    #[test]
+    fn snippet_keys_match_the_vectors() {
+        for pair in vectors()["snippet_key"].as_array().unwrap() {
+            assert_eq!(Kind::Snippet.key_for(pair[0].as_str().unwrap()).as_deref(), pair[1].as_str(), "{pair}");
+        }
     }
 
     fn hlc(v: &Value) -> Hlc {
