@@ -306,6 +306,11 @@ pub struct SyncEngine {
     st: Mutex<SyncState>,
     key: Mutex<Option<SyncKey>>,
     rt: Mutex<Option<Runtime>>,
+    /// Held across a whole start, stop or restart, so two lifecycle commands that overlap (Rename
+    /// clicked twice) never both start a runtime.
+    life: Mutex<()>,
+    /// Accept loops running now. One while sync runs, none once it stops.
+    listeners: Arc<AtomicUsize>,
     /// Moves on, under the state lock, whenever sync stops or the key changes. See [`Epoch`].
     gen: AtomicU64,
     last: Mutex<Option<LastSync>>,
@@ -332,6 +337,8 @@ impl SyncEngine {
             st: Mutex::new(st),
             key: Mutex::new(key),
             rt: Mutex::new(None),
+            life: Mutex::new(()),
+            listeners: Arc::new(AtomicUsize::new(0)),
             gen: AtomicU64::new(0),
             last: Mutex::new(None),
             inbound: AtomicUsize::new(0),
@@ -395,6 +402,11 @@ impl SyncEngine {
 
     /// Start the network and folder side if sync is on and paired. Safe to call again.
     pub fn start(&self) {
+        let _life = self.life.lock();
+        self.start_locked();
+    }
+
+    fn start_locked(&self) {
         let on = self.st.lock().enabled && self.key.lock().is_some();
         if on && self.rt.lock().is_none() {
             if let Err(e) = self.start_runtime() {
@@ -405,6 +417,11 @@ impl SyncEngine {
     }
 
     pub fn stop(&self) {
+        let _life = self.life.lock();
+        self.stop_locked();
+    }
+
+    fn stop_locked(&self) {
         self.next_gen();
         let rt = self.rt.lock().take();
         if let Some(rt) = rt {
@@ -414,8 +431,9 @@ impl SyncEngine {
     }
 
     fn restart(&self) {
-        self.stop();
-        self.start();
+        let _life = self.life.lock();
+        self.stop_locked();
+        self.start_locked();
     }
 
     pub fn set_enabled(&self, on: bool) -> Result<SyncStatus> {
@@ -762,9 +780,17 @@ impl SyncEngine {
         let me = self.me.clone();
         let live = alive.clone();
         let accept_ep = ep.clone();
+        let listeners = self.listeners.clone();
+        listeners.fetch_add(1, Ordering::SeqCst);
         let accept = std::thread::Builder::new()
             .name("sync-listen".into())
-            .spawn(move || accept_loop(listener, me, live, accept_ep))?;
+            .spawn(move || {
+                accept_loop(listener, me, live, accept_ep);
+                listeners.fetch_sub(1, Ordering::SeqCst);
+            })
+            .inspect_err(|_| {
+                self.listeners.fetch_sub(1, Ordering::SeqCst);
+            })?;
 
         let (device, name, folder) = {
             let st = self.st.lock();
@@ -796,7 +822,11 @@ impl SyncEngine {
             return Err(e.into());
         }
         log::info!("sync: listening on port {}", addr.port());
-        *self.rt.lock() = Some(Runtime { alive, tx, addr, accept, mdns, _watcher: watcher });
+        let replaced = self.rt.lock().replace(Runtime { alive, tx, addr, accept, mdns, _watcher: watcher });
+        // The lifecycle lock means there is none to replace; if there were, it must not run on.
+        if let Some(old) = replaced {
+            old.stop();
+        }
         Ok(())
     }
 
@@ -1184,6 +1214,31 @@ mod tests {
         let w = std::thread::spawn(move || write_frame(&mut c, &f2).unwrap());
         assert_eq!(read_frame(&mut s, Instant::now() + Duration::from_secs(5)).unwrap(), frame);
         w.join().unwrap();
+    }
+
+    #[test]
+    fn overlapping_restarts_leave_one_listener() {
+        let (e, _dict, _dir) = engine("lifecycle-race", None);
+        let threads: Vec<_> = (0..8)
+            .map(|t| {
+                let e = e.clone();
+                std::thread::spawn(move || {
+                    for i in 0..10 {
+                        if (t + i) % 2 == 0 {
+                            e.set_name(&format!("name {t} {i}")).unwrap();
+                        } else {
+                            e.set_enabled(true).unwrap();
+                        }
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert_eq!(e.listeners.load(Ordering::SeqCst), 1, "one runtime while sync is on");
+        e.stop();
+        assert_eq!(e.listeners.load(Ordering::SeqCst), 0, "no listener left running after stop");
     }
 
     fn engine(tag: &str, key: Option<&SyncKey>) -> (Arc<SyncEngine>, Arc<FileDict>, PathBuf) {
