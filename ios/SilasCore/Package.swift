@@ -6,7 +6,7 @@ let package = Package(
     platforms: [.iOS(.v17), .macOS(.v14)],
     products: [.library(name: "SilasCore", targets: ["SilasCore"])],
     targets: [
-        .target(name: "SilasCore"),
-        .testTarget(name: "SilasCoreTests", dependencies: ["SilasCore"]),
+        .target(name: "SilasCore", resources: [.copy("Resources/common-en.txt")]),
+        .testTarget(name: "SilasCoreTests", dependencies: ["SilasCore"], exclude: ["Fixtures"]),
     ]
 )

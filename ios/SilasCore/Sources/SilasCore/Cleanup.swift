@@ -13,15 +13,20 @@ public enum Cleanup {
     /// sentence case kept.
     public static func apply(_ text: String, fillers: [String] = defaultFillers) -> String {
         var toks = tokenize(text)
+        toks = dropFillers(toks, fillers: fillerSet(fillers, for: toks))
+        toks = dropStutters(toks)
+        return render(toks)
+    }
+
+    /// The fillers to drop from `toks`. "er" and "um" are English hesitations but ordinary German
+    /// words ("Er ist hier", "um zu"): they stay when the rest of the text is confidently another
+    /// language. The desktop has no such check yet; this one came from the iPad review.
+    static func fillerSet(_ fillers: [String], for toks: [Tok]) -> Set<String> {
         var set = Set(fillers.map(norm))
-        // "er" and "um" are English hesitations but ordinary German words ("Er ist hier",
-        // "um zu"). Skip them when the rest of the text is confidently another language.
         if !set.isDisjoint(with: ambiguousFillers) && looksNonEnglish(toks, ignoring: ambiguousFillers) {
             set.subtract(ambiguousFillers)
         }
-        toks = dropFillers(toks, fillers: set)
-        toks = dropStutters(toks)
-        return render(toks)
+        return set
     }
 }
 
@@ -87,7 +92,7 @@ func looksNonEnglish(_ toks: [Tok], ignoring: Set<String>) -> Bool {
 
 private func startsUpper(_ s: String) -> Bool { s.first?.isUppercase ?? false }
 
-private func endsSentence(_ t: Tok) -> Bool { t.post.contains(where: { ".!?".contains($0) }) }
+func endsSentence(_ t: Tok) -> Bool { t.post.contains(where: { ".!?".contains($0) }) }
 
 private func capitalize(_ s: String) -> String {
     guard let f = s.first else { return "" }

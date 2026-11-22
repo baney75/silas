@@ -10,9 +10,11 @@ let package = Package(
     platforms: [.iOS(.v17), .macOS(.v14)],
     products: [.library(name: "SilasCore", targets: ["SilasCore"])],
     targets: [
-        .target(name: "SilasCore", path: "ios/SilasCore/Sources/SilasCore"),
+        .target(
+            name: "SilasCore", path: "ios/SilasCore/Sources/SilasCore",
+            resources: [.copy("Resources/common-en.txt")]),
         .testTarget(
             name: "SilasCoreTests", dependencies: ["SilasCore"],
-            path: "ios/SilasCore/Tests/SilasCoreTests"),
+            path: "ios/SilasCore/Tests/SilasCoreTests", exclude: ["Fixtures"]),
     ]
 )
