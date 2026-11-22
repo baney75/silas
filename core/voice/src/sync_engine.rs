@@ -1042,6 +1042,11 @@ fn watch_folder(dir: &Path, own: &str, tx: mpsc::Sender<Cmd>) -> notify::Result<
     let tx = Mutex::new(tx);
     let mut w = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         let Ok(ev) = res else { return };
+        // Opening a file to read it is an event too: without this, each round's own reads of the
+        // other devices' files would schedule another round.
+        if ev.kind.is_access() {
+            return;
+        }
         let theirs = ev.paths.iter().any(|p| {
             p.extension().is_some_and(|e| e == "silas") && p.file_name().is_some_and(|n| n.to_string_lossy() != own)
         });
