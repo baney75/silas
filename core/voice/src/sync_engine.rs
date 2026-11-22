@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant, SystemTime};
@@ -25,7 +25,7 @@ use sha2::{Digest, Sha256};
 
 use crate::dictionary::Dictionary;
 use crate::sync::{
-    clip, now_ms, read_entries, sync_dictionary, Changes, FrameKey, SeenDevice, StateMessage, SyncKey,
+    clip, now_ms, read_entries, sync_dictionary, Changes, SeenDevice, StateMessage, SyncKey,
     SyncState, MAX_FRAME, MIN_FRAME, PORT, SERVICE,
 };
 use crate::sync_key::KeyStore;
@@ -285,12 +285,23 @@ impl Runtime {
     }
 }
 
+/// What one exchange started under: the generation and the key. When sync stops or the key
+/// changes the generation moves on, and an exchange that started before then merges nothing and
+/// answers nothing.
+#[derive(Clone)]
+struct Epoch {
+    gen: u64,
+    key: SyncKey,
+}
+
 pub struct SyncEngine {
     o: Options,
     me: Weak<SyncEngine>,
     st: Mutex<SyncState>,
     key: Mutex<Option<SyncKey>>,
     rt: Mutex<Option<Runtime>>,
+    /// Moves on, under the state lock, whenever sync stops or the key changes. See [`Epoch`].
+    gen: AtomicU64,
     last: Mutex<Option<LastSync>>,
     inbound: AtomicUsize,
     /// mtime and length of each folder file already merged.
@@ -315,6 +326,7 @@ impl SyncEngine {
             st: Mutex::new(st),
             key: Mutex::new(key),
             rt: Mutex::new(None),
+            gen: AtomicU64::new(0),
             last: Mutex::new(None),
             inbound: AtomicUsize::new(0),
             folder_seen: Mutex::new(HashMap::new()),
@@ -387,6 +399,7 @@ impl SyncEngine {
     }
 
     pub fn stop(&self) {
+        self.next_gen();
         let rt = self.rt.lock().take();
         if let Some(rt) = rt {
             rt.stop();
@@ -411,7 +424,8 @@ impl SyncEngine {
     /// The code and pairing URL, shown only when the person asks. Makes a key, and turns sync
     /// on, the first time.
     pub fn pairing_code(&self) -> Result<PairingCode> {
-        if self.key.lock().is_none() || !self.st.lock().enabled {
+        let unpaired = self.key.lock().is_none();
+        if unpaired || !self.st.lock().enabled {
             self.set_enabled(true)?;
         }
         let key = self.key.lock().clone().ok_or_else(|| anyhow!("no sync key"))?;
@@ -450,6 +464,7 @@ impl SyncEngine {
         self.stop();
         self.o.keys.delete().context("removing the sync key")?;
         *self.key.lock() = None;
+        self.next_gen();
         *self.last.lock() = None;
         self.edit_state(|st| {
             st.enabled = false;
@@ -463,6 +478,7 @@ impl SyncEngine {
     fn install_key(&self, key: SyncKey) -> Result<()> {
         self.o.keys.store(&key).context("saving the sync key")?;
         *self.key.lock() = Some(key);
+        self.next_gen();
         *self.folder_written.lock() = None;
         self.folder_seen.lock().clear();
         self.edit_state(|st| st.paired = true);
@@ -540,8 +556,23 @@ impl SyncEngine {
 
     // ------------------------------------------------------------ merging
 
-    fn frame_key(&self) -> Result<FrameKey> {
-        Ok(self.key.lock().as_ref().ok_or_else(|| anyhow!("sync has no key"))?.frame_key())
+    /// The generation first, then the key: a key installed after the generation was read
+    /// moves it on, so a stale pair never passes [`Self::current`].
+    fn epoch(&self) -> Result<Epoch> {
+        let gen = self.gen.load(Ordering::SeqCst);
+        let key = self.key.lock().clone().ok_or_else(|| anyhow!("sync has no key"))?;
+        Ok(Epoch { gen, key })
+    }
+
+    /// Whether `ep` still holds. Call it with the state lock held: [`Self::next_gen`] takes that
+    /// lock too, so the answer stays true until the lock is released.
+    fn current(&self, ep: &Epoch) -> bool {
+        self.gen.load(Ordering::SeqCst) == ep.gen && self.key.lock().as_ref() == Some(&ep.key)
+    }
+
+    fn next_gen(&self) {
+        let _st = self.st.lock();
+        self.gen.fetch_add(1, Ordering::SeqCst);
     }
 
     /// Stamp the person's edits since the last round. Returns how many keys changed.
@@ -559,18 +590,25 @@ impl SyncEngine {
         stamped
     }
 
-    fn state_frame(&self) -> Result<Vec<u8>> {
+    fn state_frame(&self, ep: &Epoch) -> Result<Vec<u8>> {
         self.absorb_local();
-        let fk = self.frame_key()?;
         let st = self.st.lock();
-        Ok(StateMessage::new(&st.device, &self.name_of(&st), platform(), &st.entries).seal(&fk))
+        if !self.current(ep) {
+            bail!("sync stopped or its key changed");
+        }
+        Ok(StateMessage::new(&st.device, &self.name_of(&st), platform(), &st.entries).seal(&ep.key.frame_key()))
     }
 
-    /// Merge a peer's state into ours and the dictionary.
-    fn take_in(&self, msg: StateMessage, via: &str) -> Changes {
+    /// Merge a peer's state into ours and the dictionary. `None`, and nothing merged, once sync
+    /// stopped or the key changed after `ep`.
+    fn take_in(&self, msg: StateMessage, via: &str, ep: &Epoch) -> Option<Changes> {
         let incoming = read_entries(&msg.entries);
         let (round, name) = {
             let mut g = self.st.lock();
+            if !self.current(ep) {
+                log::debug!("sync: dropped a state from {} that came in after sync stopped or its key changed", msg.device);
+                return None;
+            }
             let st = &mut *g;
             let mut round = Default::default();
             self.o.dict.update(&mut |d| {
@@ -606,7 +644,7 @@ impl SyncEngine {
             }
         }
         self.changed();
-        c
+        Some(c)
     }
 
     fn stranger(&self, from: &str) {
@@ -622,8 +660,12 @@ impl SyncEngine {
     /// Connect to a peer, swap states, merge. The frame goes out on its own thread while the
     /// reply is read, so two large states can't wedge each other.
     pub fn sync_with(&self, addr: SocketAddr) -> Result<Changes> {
-        let out = self.state_frame()?;
-        let fk = self.frame_key()?;
+        self.exchange(addr, &self.epoch()?)
+    }
+
+    fn exchange(&self, addr: SocketAddr, ep: &Epoch) -> Result<Changes> {
+        let out = self.state_frame(ep)?;
+        let fk = ep.key.frame_key();
         let mut s = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).with_context(|| format!("connecting to {addr}"))?;
         let _ = s.set_nodelay(true);
         s.set_write_timeout(Some(WRITE_TIMEOUT))?;
@@ -644,16 +686,16 @@ impl SyncEngine {
         if msg.device == self.st.lock().device {
             bail!("{addr} is this device");
         }
-        Ok(self.take_in(msg, "network"))
+        self.take_in(msg, "network", ep).ok_or_else(|| anyhow!("sync stopped or its key changed while syncing with {addr}"))
     }
 
     /// Serve one inbound connection: read, check, merge, answer. A stranger gets nothing back.
-    fn serve(&self, mut s: TcpStream, peer: SocketAddr) -> Result<()> {
+    fn serve(&self, mut s: TcpStream, peer: SocketAddr, ep: &Epoch) -> Result<()> {
         s.set_nonblocking(false)?;
         let _ = s.set_nodelay(true);
         s.set_write_timeout(Some(WRITE_TIMEOUT))?;
         let frame = read_frame(&mut s, Instant::now() + self.o.frame_timeout)?;
-        let fk = self.frame_key()?;
+        let fk = ep.key.frame_key();
         let Some(plain) = fk.open(&frame) else {
             self.stranger(&peer.ip().to_string());
             return Ok(());
@@ -662,14 +704,16 @@ impl SyncEngine {
         if msg.device == self.st.lock().device {
             return Ok(());
         }
-        self.take_in(msg, "network");
-        write_frame(&mut s, &self.state_frame()?)?;
+        if self.take_in(msg, "network", ep).is_none() {
+            return Ok(());
+        }
+        write_frame(&mut s, &self.state_frame(ep)?)?;
         Ok(())
     }
 
-    fn sync_any(&self, addrs: &[SocketAddr]) -> bool {
+    fn sync_any(&self, addrs: &[SocketAddr], ep: &Epoch) -> bool {
         for a in addrs {
-            match self.sync_with(*a) {
+            match self.exchange(*a, ep) {
                 Ok(_) => return true,
                 Err(e) => log::debug!("sync: {e:#}"),
             }
@@ -677,7 +721,7 @@ impl SyncEngine {
         false
     }
 
-    fn sync_peer(&self, peer: &str) {
+    fn sync_peer(&self, peer: &str, ep: &Epoch) {
         let with_port = if peer.rsplit_once(':').is_some_and(|(_, p)| p.parse::<u16>().is_ok()) {
             peer.to_string()
         } else {
@@ -687,7 +731,7 @@ impl SyncEngine {
             Ok(addrs) => {
                 let mut addrs: Vec<SocketAddr> = addrs.collect();
                 addrs.sort_by_key(|a| !a.is_ipv4());
-                if !self.sync_any(&addrs) {
+                if !self.sync_any(&addrs, ep) {
                     log::info!("sync: couldn't reach {peer}");
                 }
             }
@@ -696,7 +740,8 @@ impl SyncEngine {
     }
 
     fn start_runtime(&self) -> Result<()> {
-        let key = self.key.lock().clone().ok_or_else(|| anyhow!("no key"))?;
+        let ep = self.epoch()?;
+        let key = ep.key.clone();
         let listener = match self.o.port {
             Some(p) => TcpListener::bind((self.o.bind, p))?,
             None => TcpListener::bind((self.o.bind, PORT)).or_else(|_| TcpListener::bind((self.o.bind, 0)))?,
@@ -708,8 +753,10 @@ impl SyncEngine {
 
         let me = self.me.clone();
         let live = alive.clone();
-        let accept =
-            std::thread::Builder::new().name("sync-listen".into()).spawn(move || accept_loop(listener, me, live))?;
+        let accept_ep = ep.clone();
+        let accept = std::thread::Builder::new()
+            .name("sync-listen".into())
+            .spawn(move || accept_loop(listener, me, live, accept_ep))?;
 
         let (device, name, folder) = {
             let st = self.st.lock();
@@ -730,7 +777,7 @@ impl SyncEngine {
 
         let engine = self.arc();
         let live = alive.clone();
-        if let Err(e) = std::thread::Builder::new().name("sync".into()).spawn(move || engine.worker(rx, live)) {
+        if let Err(e) = std::thread::Builder::new().name("sync".into()).spawn(move || engine.worker(rx, live, ep)) {
             alive.store(false, Ordering::SeqCst);
             let _ = accept.join();
             return Err(e.into());
@@ -740,7 +787,7 @@ impl SyncEngine {
         Ok(())
     }
 
-    fn worker(self: Arc<Self>, rx: mpsc::Receiver<Cmd>, alive: Arc<AtomicBool>) {
+    fn worker(self: Arc<Self>, rx: mpsc::Receiver<Cmd>, alive: Arc<AtomicBool>, ep: Epoch) {
         let own = self.st.lock().device.clone();
         let mut found: HashMap<String, Vec<SocketAddr>> = HashMap::new();
         let mut push_due: Option<Instant> = None;
@@ -765,7 +812,7 @@ impl SyncEngine {
                     found.insert(device.clone(), addrs.clone());
                     // The smaller id connects, so two devices that see each other sync once.
                     if new && own < device {
-                        self.sync_any(&addrs);
+                        self.sync_any(&addrs, &ep);
                     }
                 }
                 Ok(Cmd::FolderChanged) => {
@@ -773,7 +820,7 @@ impl SyncEngine {
                     folder_due = Some(folder_due.map_or(soon, |d| d.min(soon)));
                 }
                 Ok(Cmd::Now) => {
-                    self.round(&own, &found, true);
+                    self.round(&own, &found, true, &ep);
                     folder_due = None;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -785,46 +832,53 @@ impl SyncEngine {
             // After a local change only this side knows, so it reaches every peer it can.
             if push_due.is_some_and(|d| d <= now) {
                 push_due = None;
-                self.round(&own, &found, true);
+                self.round(&own, &found, true, &ep);
                 folder_due = None;
             }
             if resync_due <= now {
                 resync_due = now + RESYNC;
-                self.round(&own, &found, false);
+                self.round(&own, &found, false, &ep);
                 folder_due = None;
             }
             if folder_due.is_some_and(|d| d <= now) || poll_due <= now {
                 folder_due = None;
                 poll_due = now + FOLDER_POLL;
-                self.folder_round();
+                self.folder_round(&ep);
             }
         }
     }
 
     /// Sync found peers (all of them, or only those this side connects to), peers by address
     /// and the folder.
-    fn round(&self, own: &str, found: &HashMap<String, Vec<SocketAddr>>, all: bool) {
+    fn round(&self, own: &str, found: &HashMap<String, Vec<SocketAddr>>, all: bool, ep: &Epoch) {
         for (device, addrs) in found {
             if all || own < device.as_str() {
-                self.sync_any(addrs);
+                self.sync_any(addrs, ep);
             }
         }
         let peers = self.st.lock().peers.clone();
         for p in peers {
-            self.sync_peer(&p);
+            self.sync_peer(&p, ep);
         }
-        self.folder_round();
+        self.folder_round(ep);
     }
 
     // ------------------------------------------------------------ transport B: a synced folder
 
     /// Read every other device's file in the folder, then write ours if it changed.
     pub fn sync_folder(&self) -> Result<()> {
+        if self.st.lock().folder.is_none() {
+            return Ok(());
+        }
+        self.folder_with(&self.epoch()?)
+    }
+
+    fn folder_with(&self, ep: &Epoch) -> Result<()> {
         let Some(folder) = self.st.lock().folder.clone() else { return Ok(()) };
         let dir = Path::new(&folder).join(FOLDER_NAME);
         std::fs::create_dir_all(&dir).with_context(|| format!("making {}", dir.display()))?;
         let own = self.st.lock().device.clone();
-        let fk = self.frame_key()?;
+        let fk = ep.key.frame_key();
         let own_file = dir.join(format!("{own}.silas"));
         for entry in std::fs::read_dir(&dir)?.flatten() {
             let path = entry.path();
@@ -846,13 +900,20 @@ impl SyncEngine {
                 continue;
             };
             if let Some(msg) = StateMessage::parse(&plain).filter(|m| m.device != own) {
-                self.take_in(msg, "folder");
+                if self.take_in(msg, "folder", ep).is_none() {
+                    // Not merged: read it again next time.
+                    self.folder_seen.lock().remove(&path);
+                    bail!("sync stopped or its key changed");
+                }
             }
         }
         // Write ours when it changed since the last write, or someone removed it.
         let (digest, frame) = {
             self.absorb_local();
             let st = self.st.lock();
+            if !self.current(ep) {
+                bail!("sync stopped or its key changed");
+            }
             let digest: [u8; 32] = Sha256::digest(serde_json::to_vec(&(&st.entries, self.name_of(&st)))?).into();
             (digest, StateMessage::new(&st.device, &self.name_of(&st), platform(), &st.entries).seal(&fk))
         };
@@ -865,14 +926,14 @@ impl SyncEngine {
         Ok(())
     }
 
-    fn folder_round(&self) {
-        if let Err(e) = self.sync_folder() {
+    fn folder_round(&self, ep: &Epoch) {
+        if let Err(e) = self.folder_with(ep) {
             log::warn!("sync: the sync folder: {e:#}");
         }
     }
 }
 
-fn accept_loop(listener: TcpListener, me: Weak<SyncEngine>, alive: Arc<AtomicBool>) {
+fn accept_loop(listener: TcpListener, me: Weak<SyncEngine>, alive: Arc<AtomicBool>, ep: Epoch) {
     while alive.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((s, peer)) => {
@@ -884,8 +945,9 @@ fn accept_loop(listener: TcpListener, me: Weak<SyncEngine>, alive: Arc<AtomicBoo
                 }
                 let spawned = std::thread::Builder::new().name("sync-serve".into()).spawn({
                     let engine = engine.clone();
+                    let ep = ep.clone();
                     move || {
-                        if let Err(e) = engine.serve(s, peer) {
+                        if let Err(e) = engine.serve(s, peer, &ep) {
                             log::debug!("sync: from {peer}: {e:#}");
                         }
                         engine.inbound.fetch_sub(1, Ordering::SeqCst);
@@ -1149,6 +1211,72 @@ mod tests {
         e.set_enabled(true).unwrap();
         assert_eq!(e.listen_addr().map(|a| a.port()), Some(port), "after a toggle");
         e.stop();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Another device's whole state, holding one term, sealed with `key`.
+    fn sealed(term: &str, key: &SyncKey) -> Vec<u8> {
+        let other = "ffffffffffffffffffffffffffffffff";
+        let mut entries = crate::sync::Entries::new();
+        let mut d = Dictionary::default();
+        d.add_term(term, "user");
+        sync_dictionary(&mut d, &mut entries, None, &mut Default::default(), other, 1);
+        StateMessage::new(other, "Other", "linux", &entries).seal(&key.frame_key())
+    }
+
+    fn has_term(dict: &FileDict, text: &str) -> bool {
+        dict.get().terms.iter().any(|t| t.text == text)
+    }
+
+    #[test]
+    fn a_reply_that_lands_after_the_key_changed_merges_nothing() {
+        let (e, dict, dir) = engine("rotate", None);
+        let old = e.key.lock().clone().unwrap();
+        // A peer in the old group that answers only once this device has a new key.
+        let peer = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = peer.local_addr().unwrap();
+        let (got_tx, got_rx) = mpsc::channel();
+        let (go_tx, go_rx) = mpsc::channel::<()>();
+        let fake = std::thread::spawn(move || {
+            let (mut s, _) = peer.accept().unwrap();
+            read_frame(&mut s, Instant::now() + Duration::from_secs(5)).unwrap();
+            got_tx.send(()).unwrap();
+            go_rx.recv().unwrap();
+            let _ = write_frame(&mut s, &sealed("Stale", &old));
+        });
+        let exchange = {
+            let e = e.clone();
+            std::thread::spawn(move || e.sync_with(addr))
+        };
+        got_rx.recv().unwrap();
+        e.new_key().unwrap();
+        go_tx.send(()).unwrap();
+        let got = exchange.join().unwrap();
+        fake.join().unwrap();
+        assert!(got.is_err(), "{got:?}");
+        assert!(!has_term(&dict, "Stale"));
+        assert!(e.status().devices.is_empty());
+        e.stop();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_frame_that_lands_after_sync_stopped_merges_nothing_and_gets_no_answer() {
+        let (e, dict, dir) = engine("off", None);
+        let key = e.key.lock().clone().unwrap();
+        let mut s = TcpStream::connect(e.listen_addr().unwrap()).unwrap();
+        let until = Instant::now() + Duration::from_secs(3);
+        while e.inbound.load(Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < until, "the listener never took the connection");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        e.set_enabled(false).unwrap();
+        write_frame(&mut s, &sealed("Late", &key)).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let mut buf = [0u8; 1];
+        assert_eq!(s.read(&mut buf).unwrap_or(0), 0, "no answer once sync is off");
+        assert!(!has_term(&dict, "Late"));
+        assert!(e.status().devices.is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 

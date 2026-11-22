@@ -70,7 +70,8 @@ impl std::fmt::Debug for SyncKey {
 
 impl PartialEq for SyncKey {
     fn eq(&self, other: &Self) -> bool {
-        // Only tests compare keys; constant time is not needed for that.
+        // Both keys are this device's own (the one it holds and one it was given or held
+        // before), so a timing difference tells no one anything.
         self.0[..] == other.0[..]
     }
 }
