@@ -411,6 +411,58 @@ final class SyncTransportTests: XCTestCase {
         XCTAssertEqual(SyncProjection.rebase(merged, from: snapshot, onto: snapshot), merged)
     }
 
+    /// A peer that connects and never sends its frame is dropped after the deadline.
+    func testServeDropsASilentPeer() async throws {
+        let server = SyncNetwork()
+        server.serveTimeout = 0.5
+        try await server.start(identity: .init(name: "Mac", groupID: "g", deviceID: "d"), port: 0, advertise: false)
+        defer { server.stop() }
+        let silent = try await connect(to: try XCTUnwrap(server.port))
+        defer { silent.cancel() }
+        let closed = await closedByServer(silent, within: 5)
+        XCTAssertTrue(closed, "a silent peer held its connection open")
+    }
+
+    /// Past the cap, an incoming connection is closed at once; the ones already open stay.
+    func testServeCapsOpenConnections() async throws {
+        let server = SyncNetwork()
+        server.maxServed = 2
+        try await server.start(identity: .init(name: "Mac", groupID: "g", deviceID: "d"), port: 0, advertise: false)
+        defer { server.stop() }
+        let port = try XCTUnwrap(server.port)
+        let open = [try await connect(to: port), try await connect(to: port)]
+        defer { open.forEach { $0.cancel() } }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        let extra = try await connect(to: port)
+        defer { extra.cancel() }
+        let extraClosed = await closedByServer(extra, within: 5)
+        XCTAssertTrue(extraClosed, "a third connection was served past the cap of 2")
+        let firstClosed = await closedByServer(open[0], within: 0.5)
+        XCTAssertFalse(firstClosed, "a connection within the cap was dropped")
+    }
+
+    private func connect(to port: UInt16) async throws -> NWConnection {
+        let conn = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        try await SyncNetwork.ready(conn, queue: .global(), timeout: 5)
+        return conn
+    }
+
+    /// True when the server closes `conn` (end of stream or an error) within `seconds`.
+    private func closedByServer(_ conn: NWConnection, within seconds: TimeInterval) async -> Bool {
+        await withCheckedContinuation { k in
+            let lock = NSLock()
+            var done = false
+            func finish(_ v: Bool) {
+                let first: Bool = lock.withLock { defer { done = true }; return !done }
+                if first { k.resume(returning: v) }
+            }
+            conn.receive(minimumIncompleteLength: 1, maximumLength: 1) { data, _, complete, error in
+                finish(error != nil || complete || data == nil)
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { finish(false) }
+        }
+    }
+
     func testHostPort() {
         XCTAssertEqual(parseHostPort("rectory1:47823")?.host, "rectory1")
         XCTAssertEqual(parseHostPort("rectory1")?.port, 47823)

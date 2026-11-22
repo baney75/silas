@@ -151,6 +151,12 @@ public final class SyncNetwork {
     public var peerAppeared: ((NWEndpoint) -> Void)?
     public private(set) var port: UInt16?
     public var onState: ((String) -> Void)?
+    /// An incoming peer that hasn't sent its whole frame by then is dropped.
+    public var serveTimeout: TimeInterval = 15
+    /// Incoming syncs served at once; more are refused until one ends.
+    public var maxServed = 8
+    private let servedLock = NSLock()
+    private var served = 0
 
     public init() {}
 
@@ -288,11 +294,29 @@ public final class SyncNetwork {
     }
 
     private func serve(_ conn: NWConnection) {
+        let admitted = servedLock.withLock {
+            guard served < maxServed else { return false }
+            served += 1
+            return true
+        }
+        guard admitted else {
+            conn.cancel()
+            onState?("incoming sync refused: \(maxServed) already open")
+            return
+        }
         conn.start(queue: queue)
+        // Cancelling the connection ends a read that is still waiting.
+        let deadline = DispatchWorkItem { conn.cancel() }
+        queue.asyncAfter(deadline: .now() + serveTimeout, execute: deadline)
         Task {
-            defer { conn.cancel() }
+            defer {
+                deadline.cancel()
+                conn.cancel()
+                self.servedLock.withLock { self.served -= 1 }
+            }
             do {
                 let theirs = try await Self.readFrame(conn)
+                deadline.cancel()
                 guard let frame = await self.ownFrame?() else { return }
                 try await Self.send(try SyncFrame.lengthPrefixed(frame), on: conn)
                 await self.receivedFrame?(theirs, "\(conn.endpoint)")
