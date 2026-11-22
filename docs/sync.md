@@ -38,12 +38,30 @@ The synced state is a map from **key** to **entry**. An entry is `{ "v": <value 
 | --- | --- | --- |
 | term | `t:` + norm(text) | `{ "text": "Parish1", "added": "<RFC 3339>", "source": "edit" }` |
 | correction | `c:` + norm(from) | `{ "from": "parish one", "to": "Parish1", "added": "<RFC 3339>", "source": "user" }` |
-| snippet | `s:` + norm(trigger) | `{ "trigger": "my address", "text": "12 Benson Rd…", "added": "<RFC 3339>" }` |
+| snippet | `s:` + match_key(NFC(trigger)) | `{ "trigger": "my address", "text": "12 Benson Rd…", "added": "<RFC 3339>" }` |
 | filler | `f:` + norm(word) | `{ "word": "um" }` |
 
 `norm(s)`: Unicode NFC, then trim, then collapse every run of whitespace to one ASCII space,
 then lower-case with the full Unicode lower-case mapping (Rust `str::to_lowercase`, Swift
 `lowercased()` with `Locale(identifier: "en_US_POSIX")`).
+
+`match_key(s)` (snippets only) is `snippets::match_key` in `core/voice/src/snippets.rs`, the
+form Silas matches spoken triggers in, so two triggers that match the same speech share one key.
+The sync key applies Unicode NFC first, as `norm` does. Then, one Unicode scalar at a time
+(Rust `char`, Swift `unicodeScalars`, never `Character`):
+
+1. Drop every apostrophe: U+0027 `'` and U+2019 `’`.
+2. Keep a scalar that is alphanumeric (Rust `char::is_alphanumeric`: the Unicode `Alphabetic`
+   property, or general category Nd, Nl or No; Swift `properties.isAlphabetic` or
+   `properties.generalCategory` in `.decimalNumber`, `.letterNumber`, `.otherNumber`). Replace
+   every other scalar with one ASCII space.
+3. Split on Unicode whitespace and join the pieces with one ASCII space (this also trims).
+4. Lower-case with the same mapping as `norm`.
+
+So "My Address." and "my address" are both `s:my address`, "e-mail" and "e mail" are both
+`s:e mail`, and "Donovan's phone" is `s:donovans phone`. A trigger whose `match_key` is empty
+never syncs. The value keeps the trigger as typed; on a merge the winning entry's trigger is the
+one shown.
 
 ### Hybrid logical clock
 

@@ -23,7 +23,30 @@ export interface AppState {
   model: string | null;
   hotkey: string;
   hotkeyLabel: string;
+  /** The key that types the last dictation again, or null when none is set. */
+  retypeHotkeyLabel: string | null;
+  /** The app the last dictation went to, or null before the first one (or where the system doesn't name apps). */
+  app: AppInfo | null;
   permissions: Permissions;
+}
+
+/** How Silas shapes text for an app. See docs/ipc.md "App styles". */
+export type AppStyle = "prose" | "terminal" | "code" | "chat";
+
+export interface AppInfo {
+  /** macOS bundle id, Windows exe name, or Hyprland window class. */
+  id: string;
+  name: string;
+  /** The style the app gets now: the user's choice, else `builtin`. */
+  style: AppStyle;
+  /** The style Silas gives the app on its own. */
+  builtin: AppStyle;
+}
+
+export interface Snippet {
+  trigger: string;
+  text: string;
+  added: string;
 }
 
 export type TypingSpeed = "steady" | "fast" | "instant";
@@ -39,6 +62,10 @@ export interface Settings {
   trailingSpace: boolean;
   typingSpeed: TypingSpeed;
   newlineAsShiftEnter: boolean;
+  /** A second key that types the last dictation again. null when unset. */
+  retypeHotkey: string | null;
+  /** App id to style, for apps the user assigned by hand. */
+  appStyles: Record<string, AppStyle>;
   learnFromEdits: boolean;
   sounds: boolean;
   showOverlay: boolean;
@@ -164,6 +191,7 @@ export interface Dictionary {
   corrections: Correction[];
   pending: Pending[];
   fillers: string[];
+  snippets: Snippet[];
 }
 
 export interface Stats {
@@ -250,6 +278,7 @@ export interface EventMap {
   transcript: HistoryItem;
   learned: LearnResult;
   notice: Notice;
+  app: AppInfo;
   "model-progress": ModelProgress;
   "benchmark-progress": BenchmarkProgress;
   "benchmark-done": Report;
@@ -295,6 +324,8 @@ export const api = {
   removeTerm: (text: string) => call<Dictionary>("remove_term", { text }),
   addCorrection: (from: string, to: string) => call<Dictionary>("add_correction", { from, to }),
   removeCorrection: (from: string) => call<Dictionary>("remove_correction", { from }),
+  addSnippet: (trigger: string, text: string) => call<Dictionary>("add_snippet", { trigger, text }),
+  removeSnippet: (trigger: string) => call<Dictionary>("remove_snippet", { trigger }),
   acceptPending: (from: string) => call<Dictionary>("accept_pending", { from }),
   dismissPending: (from: string) => call<Dictionary>("dismiss_pending", { from }),
   importDictionary: (json: string) => call<Dictionary>("import_dictionary", { json }),
@@ -304,6 +335,8 @@ export const api = {
 
   getStats: () => call<Stats>("get_stats"),
   toggleRecording: () => call<null>("toggle_recording"),
+  /** Types the newest History item again into the field with the keyboard. Rejects with the reason when it can't. */
+  typeAgain: () => call<null>("type_again"),
   captureHotkey: () => call<string>("capture_hotkey"),
   openPermission: (kind: PermissionKind) => call<null>("open_permission", { kind }),
   /** macOS: clear Silas's Accessibility entry and ask again (fixes a stale grant). */

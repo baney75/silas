@@ -78,6 +78,12 @@ function wireEvents() {
     void refreshStats();
   });
   void on("notice", ({ kind, message }) => toast(message, kind === "error" ? "error" : "info", 5000));
+  // The app a dictation went to, for Settings → App styles.
+  void on("app", (app) => {
+    if (JSON.stringify(store.state.app) === JSON.stringify(app)) return;
+    store.state = { ...store.state, app };
+    notify("state");
+  });
   void on("learned", (res) => {
     for (const c of res.learned) toast(`Learned: ${c.from} → ${c.to}`, "learned", 4200);
     void refreshDict();

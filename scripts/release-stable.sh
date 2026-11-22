@@ -78,6 +78,9 @@ sed -i '' -E "1,10s/^version = \".*\"/version = \"$version\"/" src-tauri/Cargo.t
 
 export TAURI_SIGNING_PRIVATE_KEY="$(cat "$key")" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" APPLE_SIGNING_IDENTITY="$identity"
 rustup target add aarch64-apple-darwin >/dev/null
+# A fresh clone has no node_modules, and then bunx looks up a package named "tauri" instead of
+# the project's @tauri-apps/cli.
+bun install --frozen-lockfile
 bunx tauri build --target aarch64-apple-darwin --bundles app
 
 out=src-tauri/target/aarch64-apple-darwin/release/bundle

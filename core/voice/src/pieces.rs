@@ -430,13 +430,19 @@ mod tests {
 
     #[test]
     fn finishing_an_idle_worker_wakes_it_at_once() {
-        for _ in 0..5 {
-            let pieces = Pieces::start(Arc::new(Mutex::new(vec![])), RATE, |_| Ok(String::new()));
-            std::thread::sleep(Duration::from_millis(10));
-            let t = std::time::Instant::now();
-            pieces.finish();
-            assert!(t.elapsed() < Duration::from_millis(30), "{:?}", t.elapsed());
-        }
+        // Without the wake-up every finish waits out the rest of POLL (about 90 ms). A busy CI
+        // runner can stall any one try (50 ms on macOS, 2026-11-22), so judge the fastest of five.
+        let fastest = (0..5)
+            .map(|_| {
+                let pieces = Pieces::start(Arc::new(Mutex::new(vec![])), RATE, |_| Ok(String::new()));
+                std::thread::sleep(Duration::from_millis(10));
+                let t = std::time::Instant::now();
+                pieces.finish();
+                t.elapsed()
+            })
+            .min()
+            .unwrap();
+        assert!(fastest < Duration::from_millis(30), "{fastest:?}");
     }
 
     #[test]

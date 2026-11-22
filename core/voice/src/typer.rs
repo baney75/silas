@@ -91,8 +91,8 @@ fn chunks(text: &str, size: usize) -> Vec<String> {
 /// is a handful of processes.
 const WHOLE_BATCH: usize = 24;
 
-/// The key events for one run of text. A tool that types a whole string per call (wtype,
-/// ydotool) gets batches of about `WHOLE_BATCH` characters: starting a process per character made
+/// The key events for one run of text. A tool that types a whole string per call
+/// (ydotool) gets batches of about `WHOLE_BATCH` characters: starting a process per character made
 /// a sentence take seconds, and one process for the whole run kept typing a long paragraph into
 /// whatever window took focus, with no check until it finished. It paces itself, and the
 /// double-space shortcut `chunks` guards against is macOS's.
@@ -109,6 +109,11 @@ trait Keys {
     /// The tool types a whole string per call, so it gets batches rather than key events.
     fn whole_runs(&self) -> bool {
         false
+    }
+    /// Readies the keyboard for the whole text before its first event (the Wayland keymap), so
+    /// the target app sees the keymap change once. A failure is not fatal: each event readies its own.
+    fn prepare(&mut self, _text: &str) -> anyhow::Result<()> {
+        Ok(())
     }
     fn text(&mut self, t: &str) -> anyhow::Result<()>;
     fn enter(&mut self, shift: bool) -> anyhow::Result<()>;
@@ -153,6 +158,9 @@ fn type_with(
     shift_enter: bool,
     still_here: &dyn Fn(bool) -> bool,
 ) -> anyhow::Result<bool> {
+    // One keymap for the whole text when it fits. When it doesn't (more unusual characters than
+    // spare keys, review r2 on #6), each event brings its own, so this can't fail the dictation.
+    let _ = k.prepare(text);
     let mut due = Instant::now();
     // A Tab or Return may move focus to the next field on purpose.
     let mut after_focus_key = false;
@@ -263,8 +271,11 @@ mod x11;
 
 #[cfg(target_os = "linux")]
 enum Keyboard {
-    /// wtype or ydotool, for native Wayland windows, which ignore X11 input.
-    Tool(&'static str),
+    /// Wayland's virtual-keyboard protocol: Hyprland, Sway and other wlroots compositors.
+    Wayland(Box<crate::wayland::VirtualKeyboard>),
+    /// ydotool, for Wayland compositors without virtual keyboards (GNOME, KDE). Native Wayland
+    /// windows ignore X11 input. wtype is not tried: it needs the protocol the native path uses.
+    Ydotool,
     X11(Box<x11::Keys>),
 }
 
@@ -272,10 +283,11 @@ enum Keyboard {
 impl Keyboard {
     fn new() -> anyhow::Result<Self> {
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-            for tool in ["wtype", "ydotool"] {
-                if which(tool) {
-                    return Ok(Self::Tool(tool));
-                }
+            if let Some(vk) = crate::wayland::VirtualKeyboard::new() {
+                return Ok(Self::Wayland(Box::new(vk)));
+            }
+            if which("ydotool") {
+                return Ok(Self::Ydotool);
             }
         }
         x11::Keys::new()
@@ -286,19 +298,28 @@ impl Keyboard {
 
 #[cfg(target_os = "linux")]
 impl Keys for Keyboard {
+    /// ydotool types a whole run per process; the virtual keyboard and XTest go key event by key
+    /// event.
     fn whole_runs(&self) -> bool {
-        matches!(self, Self::Tool(_))
+        matches!(self, Self::Ydotool)
+    }
+
+    /// Sends the virtual keyboard's keymap for the whole text up front, so the target app sees
+    /// it change once.
+    fn prepare(&mut self, text: &str) -> anyhow::Result<()> {
+        match self {
+            Self::Wayland(vk) => vk.prepare(text),
+            _ => Ok(()),
+        }
     }
 
     fn text(&mut self, t: &str) -> anyhow::Result<()> {
         match self {
-            Self::Tool(tool) => {
-                let mut cmd = std::process::Command::new(*tool);
-                match *tool {
-                    "wtype" => cmd.arg("--").arg(t),
-                    _ => cmd.args(ydotool_type(ydotool_holds())).arg("--").arg(t),
-                };
-                run(tool, &mut cmd)
+            Self::Wayland(vk) => vk.text(t),
+            Self::Ydotool => {
+                let mut cmd = std::process::Command::new("ydotool");
+                cmd.args(ydotool_type(ydotool_holds())).arg("--").arg(t);
+                run("ydotool", &mut cmd)
             }
             Self::X11(x) => x.text(t),
         }
@@ -306,16 +327,15 @@ impl Keys for Keyboard {
 
     fn enter(&mut self, shift: bool) -> anyhow::Result<()> {
         match self {
-            Self::Tool(tool) => {
-                let mut cmd = std::process::Command::new(*tool);
-                match (*tool, shift) {
-                    ("wtype", true) => cmd.args(["-M", "shift", "-k", "Return", "-m", "shift"]),
-                    ("wtype", false) => cmd.args(["-k", "Return"]),
-                    // ydotool keycodes: 42 = Left Shift, 28 = Enter.
-                    (_, true) => cmd.args(["key", "42:1", "28:1", "28:0", "42:0"]),
-                    (_, false) => cmd.args(["key", "28:1", "28:0"]),
+            Self::Wayland(vk) => vk.enter(shift),
+            Self::Ydotool => {
+                let mut cmd = std::process::Command::new("ydotool");
+                // ydotool keycodes: 42 = Left Shift, 28 = Enter.
+                match shift {
+                    true => cmd.args(["key", "42:1", "28:1", "28:0", "42:0"]),
+                    false => cmd.args(["key", "28:1", "28:0"]),
                 };
-                run(tool, &mut cmd)
+                run("ydotool", &mut cmd)
             }
             Self::X11(x) => x.enter(shift),
         }
@@ -323,14 +343,15 @@ impl Keys for Keyboard {
 
     fn held(&mut self) -> bool {
         match self {
-            Self::Tool(_) => false,
             Self::X11(x) => x.held(),
+            _ => false,
         }
     }
 
     fn finish(&mut self) -> anyhow::Result<()> {
         match self {
-            Self::Tool(_) => Ok(()),
+            Self::Wayland(vk) => vk.finish(),
+            Self::Ydotool => Ok(()),
             Self::X11(x) => x.finish(),
         }
     }
@@ -473,9 +494,17 @@ mod tests {
         held: bool,
         /// When each event, Returns included, started and ended.
         spans: Vec<(Instant, Instant)>,
+        /// What `prepare` was given, and whether it says no.
+        prepared: Vec<String>,
+        prepare_fails: bool,
     }
 
     impl Keys for Fake {
+        fn prepare(&mut self, text: &str) -> anyhow::Result<()> {
+            self.prepared.push(text.into());
+            anyhow::ensure!(!self.prepare_fails, "too many different characters to type at once");
+            Ok(())
+        }
         fn text(&mut self, t: &str) -> anyhow::Result<()> {
             self.starts.push(Instant::now());
             self.log.push(t.into());
@@ -526,6 +555,17 @@ mod tests {
         assert!(type_with(&mut k, "Ab\ncd\te", NO_GAP, true, &|_| true).unwrap());
         assert_eq!(k.log, ["A", "b", "Shift+Return", "c", "d", "\t", "e"]);
         assert!(k.finished);
+    }
+
+    #[test]
+    fn the_whole_text_is_prepared_once_and_a_failed_prepare_still_types() {
+        // Review r2 on #6: a keymap that can't hold every character must not fail the dictation.
+        for fails in [false, true] {
+            let mut k = Fake { prepare_fails: fails, ..Fake::default() };
+            assert!(type_with(&mut k, "a\nb", NO_GAP, false, &|_| true).unwrap());
+            assert_eq!(k.prepared, ["a\nb"]);
+            assert_eq!(k.log, ["a", "Return", "b"]);
+        }
     }
 
     #[test]
@@ -593,5 +633,28 @@ mod tests {
             assert_eq!(c.concat(), text);
             assert!(c.iter().all(|e| !e.starts_with(' ') && e.chars().count() <= 20));
         }
+    }
+
+    /// Live check on a Wayland compositor. Run a terminal that writes what it gets to a file,
+    /// headless so nothing lands on your screen:
+    ///   WLR_BACKENDS=headless cage -- foot sh -c 'stty -icanon; cat > /tmp/typed.txt'
+    /// then `SILAS_TYPED=/tmp/typed.txt WAYLAND_DISPLAY=wayland-N cargo test --lib typer -- --ignored`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore]
+    fn types_every_character_on_wayland() {
+        let path = std::env::var("SILAS_TYPED").expect("SILAS_TYPED names the terminal's file");
+        let before = std::fs::read_to_string(&path).unwrap_or_default().len();
+        let text = "Man needs no excuse. Parish1 runs Hyprland: naïve café, “quotes” \u{2014} 100% ok? <a href='x'>{y}</a> ~`|\\ ";
+        let words = text.repeat(4);
+        let t = std::time::Instant::now();
+        assert!(type_text(&words, Pace::from_setting("normal"), false, &|_| true).unwrap());
+        let took = t.elapsed();
+        std::thread::sleep(Duration::from_millis(500));
+        let got = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(&got[before..], words);
+        let per_sec = words.chars().count() as f64 / took.as_secs_f64();
+        eprintln!("{} chars in {took:?}: {per_sec:.0} chars/s", words.chars().count());
+        assert!(per_sec > 400.0, "{per_sec:.0} chars/s");
     }
 }

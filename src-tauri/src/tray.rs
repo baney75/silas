@@ -12,6 +12,9 @@ const ICON_LIVE: &[u8] = include_bytes!("../icons/tray-recording@2x.png");
 
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open Silas", true, None::<&str>)?;
+    // Off on Windows: the menu leaves Silas's own window in front, so it would type blind
+    // (`core::again::allowed`). The retype key works there.
+    let again = MenuItem::with_id(app, "again", "Type Last Dictation Again", !cfg!(target_os = "windows"), None::<&str>)?;
     let status = MenuItem::with_id(app, "status", "Starting…", false, None::<&str>)?;
     let update = MenuItem::with_id(app, "update", "Check for Updates…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Silas", true, Some("CmdOrCtrl+Q"))?;
@@ -21,6 +24,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         &[
             &status,
             &sep,
+            &again,
             &open,
             &update,
             &PredefinedMenuItem::separator(app)?,
@@ -35,6 +39,12 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(cfg!(target_os = "macos"))
         .on_menu_event(|app, ev| match ev.id().as_ref() {
             "open" => crate::show_main(app),
+            // A refusal (nothing in History, busy) shows as a notice; the typing runs off this thread.
+            "again" => {
+                if let Some(core) = app.try_state::<crate::core::Shared>() {
+                    let _ = core.type_again(crate::core::Via::Menu);
+                }
+            }
             "update" => {
                 crate::show_main(app);
                 let app = app.clone();
