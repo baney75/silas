@@ -29,7 +29,7 @@ interface Settings {
   hotkey: string;                 // handy-keys string: "CmdRight", "CtrlRight", "AltRight", "Fn", "F13", ...
   tapToToggle: boolean;           // quick tap starts hands-free; tap again to stop
   model: string;                  // model id. Read-only through set_settings: use select_model
-  modelSource: "default" | "registry" | "benchmark" | "user"; // who chose `model`. "user" is never overridden. Read-only through set_settings
+  modelSource: "default" | "registry" | "community" | "benchmark" | "user"; // who chose `model`. "user" is never overridden. Read-only through set_settings
   language: string;               // "en" etc. (Cohere needs it; Parakeet auto-detects)
   removeFillers: boolean;
   trailingSpace: boolean;
@@ -60,7 +60,7 @@ interface ModelEntry {
 // Benchmark types keep snake_case: the same JSON is the shared device report.
 interface Device {
   key: string;                    // "macos/apple-m5/10": slug(os)/slug(cpu brand)/logical cores
-  os: "macos" | "windows" | "linux";
+  os: "macos" | "windows" | "linux" | "ios" | "ipados";
   os_version: string;
   cpu: string;
   cores: number;
@@ -75,12 +75,23 @@ interface ModelResult {
   audio_seconds: number;
   compute_seconds: number;
   clips: number;
+  wait_seconds: number;           // median compute for the 5 to 10 s clips: the wait after you stop talking
+  clip_seconds?: number[];        // compute per clip; kept in benchmark.json, left out of a shared report
 }
+
+interface CommunityDevice {       // GET /v1/devices?key= on the report service, one device key
+  reports: number;
+  pick: string | null;            // the pick rule over the per-model medians
+  agree: number;                  // reports whose own pick is `pick`
+  models: Record<string, { reports: number; speed: number; wer: number; wait: number }>; // medians
+}
+
+interface ShareReply { key: string; reports: number; pick: string | null; agree: number }
 
 interface Report {
   schema: 1;
   silas: string;                  // app version
-  suite: string;                  // which speech set produced the numbers, "librispeech-test-clean-9clips-v1"
+  suite: string;                  // which speech set produced the numbers, registry/suite.json `id` ("silas-bench-mixed-14clips-v2")
   device: Device;
   results: ModelResult[];
   pick: string | null;            // model id; rule in src-tauri/src/benchmark.rs (mirrored in registry/ingest.py)
@@ -152,7 +163,10 @@ interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string
 | `show_main` | | `null` |
 | `get_benchmark` | | `Report \| null` (saved `benchmark.json`) |
 | `run_benchmark` | `{ all }` | `null` when the run ends. Measures the active model, and with `all` every other installed one. Errors at once if a benchmark is already running or no model is loaded. Results of models not run this time are kept in the report |
-| `share_benchmark` | | `null` opens a prefilled GitHub issue (`report_url`) in the default browser; the user reviews and submits it |
+| `share_preview` | | `string \| null`: the exact JSON a share posts (`Report` without `clip_seconds`), or null before any benchmark |
+| `share_benchmark` | `{ payload }` | `ShareReply`. Posts `payload` to the report service (10 s timeout) and refreshes the community copy. Errors with a sentence if `payload` is not the current `share_preview` (so what the user saw is what is sent), on 413 or 429, on a rejected report, or when the service is out of reach |
+| `share_benchmark_github` | | `null` opens a prefilled GitHub issue (`report_url`) in the default browser; the user reviews and submits it |
+| `get_community` | | `CommunityDevice \| null`: shared results for this device (3 s timeout, then the cached `community.json`; null offline with no copy) |
 | `get_device` | | `Device` |
 
 ## Events (`listen(name, cb)`)
@@ -191,12 +205,21 @@ socket (baney75/local-studio#6).
 ## Choosing a model for this computer
 
 At startup, in the background, the core fetches `registry/devices.json` from GitHub (5 s timeout,
-cached as `registry.json`) and looks up the device key.
+cached as `registry.json`) and looks up the device key. On a miss it asks the report service
+(`GET /v1/devices?key=`, 3 s timeout, cached as `community.json`). Trust order:
 
-- A hit while `modelSource` is `"default"` sets `model` and `modelSource = "registry"`, with no benchmark.
+1. This computer's own `benchmark.json` for the current `suite`.
+2. The registry: maintainer-approved.
+3. The community: used only when at least 3 shared reports agree (`agree >= 3`), the pick
+   recomputed over the medians matches the service's, the model is known, and its medians pass both
+   bars (`modelSource = "community"`). Fewer than 3 are shown on the Model page as information only.
+
+Offline, the cached copies answer; with no copy, Silas measures as before.
+
+- A hit while `modelSource` is `"default"` sets `model` and `modelSource` (`"registry"` or `"community"`), with no benchmark.
   It switches only if that model is installed, or if no model is installed yet.
-- A miss with no `benchmark.json`: once a model is loaded, the core runs the bundled LibriSpeech set
-  (`core/voice/bench/`) clip by clip, waiting while a dictation is happening. An automatic run
+- A miss in both with no `benchmark.json`: once a model is loaded, the core runs the bundled set
+  (`core/voice/bench/`, 14 clips, 84 s: clean, noisy, accented, dictation, command and code speech) clip by clip, waiting while a dictation is happening. An automatic run
   measures the active model and then every other installed model (nothing is downloaded). It saves the
   `Report` and, unless `modelSource` is `"user"`, switches to the pick only if it is installed and
   passes both bars (`modelSource = "benchmark"`); a pick that misses a bar is shown, never switched to.

@@ -332,14 +332,52 @@ pub async fn run_benchmark(core: State<'_, Shared>, all: bool) -> R<()> {
     .map_err(err)
 }
 
+/// The exact text "Share results" would send: the saved report without per-clip timings.
 #[tauri::command]
-pub async fn share_benchmark() -> R<()> {
+pub async fn share_preview() -> R<Option<String>> {
+    tauri::async_runtime::spawn_blocking(|| benchmark::load_report().map(|r| r.share_payload()))
+        .await
+        .map_err(err)
+}
+
+/// Send `payload` to the report service. It must be exactly what `share_preview` gives for the
+/// saved report now, so what the user saw is what leaves the computer.
+#[tauri::command]
+pub async fn share_benchmark(payload: String) -> R<benchmark::ShareReply> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let report = benchmark::load_report().ok_or("Run the benchmark first".to_string())?;
+        if report.share_payload() != payload {
+            return Err("The results changed. Look them over again before sharing.".to_string());
+        }
+        let reply = benchmark::send_report(&payload).map_err(err)?;
+        benchmark::fetch_community(&report.device.key);
+        Ok(reply)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// The older way to share: a prefilled GitHub issue the user reviews and submits.
+#[tauri::command]
+pub async fn share_benchmark_github() -> R<()> {
     tauri::async_runtime::spawn_blocking(|| {
         let report = benchmark::load_report().ok_or("Run the benchmark first".to_string())?;
         benchmark::open_url(&benchmark::report_url(&report)).map_err(err)
     })
     .await
     .map_err(err)?
+}
+
+/// What others with this kind of computer shared (3 s timeout, else the cached copy). For display:
+/// it moves the model only through the device pick's trust order.
+#[tauri::command]
+pub async fn get_community() -> R<Option<benchmark::CommunityDevice>> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let key = benchmark::device().key.clone();
+        benchmark::fetch_community(&key).devices.get(&key).cloned()
+    })
+    .await
+    .map_err(err)
 }
 
 /// Resolves once this run has asked the device registry (at most 6 s), for first-run setup.

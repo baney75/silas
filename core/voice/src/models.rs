@@ -676,7 +676,7 @@ mod tests {
         let (onnx, gguf) = (installed(PARAKEET_V3_ONNX), installed("parakeet-v3"));
         // That start quit before saving: the next one moves nothing and must still retarget.
         let again = move_legacy_parakeet().unwrap();
-        let r = |m: &str| ModelResult { model: m.into(), speed: 20.0, wer: 0.01, audio_seconds: 1.0, compute_seconds: 0.05, clips: 9 };
+        let r = |m: &str| ModelResult { model: m.into(), speed: 20.0, wer: 0.01, audio_seconds: 1.0, compute_seconds: 0.05, clips: 9, wait_seconds: 0.0, clip_seconds: vec![] };
         let mut report = benchmark::Report::new(benchmark::detect(), vec![r("parakeet-v3"), r("cohere-int4")]);
         report.pick = Some("parakeet-v3".into());
         benchmark::save_report(&report);
@@ -713,7 +713,7 @@ mod tests {
         std::fs::write(model_path("parakeet-v3").join(PARAKEET_V3_GGUF), b"x").unwrap();
         let older_build_sees_it = models_dir().join("parakeet-v3/.complete").exists();
         let gguf = installed("parakeet-v3");
-        let r = ModelResult { model: "parakeet-v3".into(), speed: 20.0, wer: 0.01, audio_seconds: 1.0, compute_seconds: 0.05, clips: 9 };
+        let r = ModelResult { model: "parakeet-v3".into(), speed: 20.0, wer: 0.01, audio_seconds: 1.0, compute_seconds: 0.05, clips: 9, wait_seconds: 0.0, clip_seconds: vec![] };
         benchmark::save_report(&benchmark::Report::new(benchmark::detect(), vec![r]));
         remove("parakeet-v3").unwrap();
         let moved = move_legacy_parakeet().unwrap();

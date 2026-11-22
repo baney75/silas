@@ -724,8 +724,9 @@ impl Core {
 
     // ------------------------------------------------------------ device pick
 
-    /// At startup, in the background: look this computer up in the registry, and with no
-    /// answer there, measure the active model once.
+    /// At startup, in the background: look this computer up in the registry, then in the
+    /// community results (only a pick at least `benchmark::MIN_AGREE` reports agree on), and with no
+    /// answer from either, measure the active model once.
     pub fn start_device_pick(self: &Shared) {
         let me = self.clone();
         std::thread::spawn(move || me.device_pick());
@@ -733,27 +734,32 @@ impl Core {
 
     fn device_pick(self: &Shared) {
         let key = benchmark::device().key.clone();
-        let entry = benchmark::fetch_registry().lookup(&key).cloned();
-        if let Some(entry) = entry {
-            // A device the registry knows needs no benchmark. Switch only if that model is
-            // here, or if no model is installed yet (onboarding downloads the recommended one);
-            // never strand someone who has a working model on one they haven't downloaded.
-            let usable = models::installed(&entry.model)
-                || !models::MODELS.iter().any(|m| models::installed(m.id));
+        let lookup = benchmark::LookupDone;
+        // The maintainer-approved registry first; the community only when the registry has no entry.
+        let found = match benchmark::fetch_registry().lookup(&key) {
+            Some(entry) => Some((entry.model.clone(), "registry")),
+            None => benchmark::fetch_community(&key).lookup(&key).map(|m| (m, "community")),
+        };
+        drop(lookup);
+        if let Some((model, source)) = found {
+            // A device the registry or community knows needs no benchmark. Switch only if that
+            // model is here, or if no model is installed yet (onboarding downloads the recommended
+            // one); never strand someone who has a working model on one they haven't downloaded.
+            let usable = models::installed(&model) || !models::MODELS.iter().any(|m| models::installed(m.id));
             // (applies, the model changed)
             let (apply, changed) = {
                 let mut s = self.settings.lock();
                 let apply = s.model_source == "default" && usable;
-                let changed = apply && s.model != entry.model;
+                let changed = apply && s.model != model;
                 if apply {
-                    s.model = entry.model.clone();
-                    s.model_source = "registry".into();
+                    s.model = model.clone();
+                    s.model_source = source.into();
                 }
                 (apply, changed)
             };
             if apply {
                 self.save_settings();
-                if changed && models::installed(&entry.model) {
+                if changed && models::installed(&model) {
                     self.wait_quiet();
                     self.load_model();
                 }
@@ -922,7 +928,7 @@ impl Core {
         // Keep earlier results for models this run skipped, but only from this version of Silas
         // and this speech set: numbers from another build aren't comparable.
         let mut results: Vec<ModelResult> = benchmark::load_report()
-            .filter(|r| r.silas == env!("CARGO_PKG_VERSION") && r.suite == benchmark::SUITE_ID)
+            .filter(|r| r.silas == env!("CARGO_PKG_VERSION") && r.suite == benchmark::suite_id())
             .map(|r| r.results)
             .unwrap_or_default()
             .into_iter()
@@ -2154,7 +2160,7 @@ mod tests {
         assert!(allows_model_change("user", false, true));
         // The user's model was deleted: setup may load its pick.
         assert!(allows_model_change("user", true, false));
-        for src in ["default", "registry", "benchmark"] {
+        for src in ["default", "registry", "community", "benchmark"] {
             assert!(allows_model_change(src, true, true));
             assert!(allows_model_change(src, false, true));
         }

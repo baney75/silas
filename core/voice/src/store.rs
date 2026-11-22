@@ -116,7 +116,7 @@ pub struct Settings {
     pub hotkey_fallback: Option<String>,
     pub tap_to_toggle: bool,
     pub model: String,
-    /// Who chose `model`: default | registry | benchmark | user. A user choice is never overridden.
+    /// Who chose `model`: default | registry | community | benchmark | user. A user choice is never overridden.
     pub model_source: String,
     pub language: String,
     pub remove_fillers: bool,

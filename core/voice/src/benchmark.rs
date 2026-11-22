@@ -20,11 +20,36 @@ pub const MAX_WER: f64 = 0.08;
 /// Two passing models closer than this in WER count as tied; the faster one wins.
 pub const TIE_WER: f32 = 0.005;
 
-/// Names the bundled speech set. Results from different sets are not comparable, so a new
-/// set gets a new id.
-pub const SUITE_ID: &str = "librispeech-test-clean-9clips-v1";
+/// The bundled speech set's definition: its id, clip count and total seconds. `registry/ingest.py`
+/// and `registry/service` read the same file. Results from different sets are not comparable, so a
+/// new set gets a new id there.
+const SUITE_JSON: &str = include_str!("../../../registry/suite.json");
+
+#[derive(Debug, Deserialize)]
+pub struct Suite {
+    pub id: String,
+    pub clips: u32,
+    pub seconds: f64,
+    /// "The wait after you stop talking" is the median compute time of clips this long.
+    pub wait_clip_min_seconds: f32,
+    pub wait_clip_max_seconds: f32,
+    /// Earlier sets, oldest first. A report saved before reports named their set was made on the first.
+    pub legacy_ids: Vec<String>,
+}
+
+pub fn suite() -> &'static Suite {
+    static SUITE: std::sync::OnceLock<Suite> = std::sync::OnceLock::new();
+    SUITE.get_or_init(|| serde_json::from_str(SUITE_JSON).expect("registry/suite.json is valid"))
+}
+
+/// Names the bundled speech set (`suite().id`).
+pub fn suite_id() -> &'static str {
+    &suite().id
+}
 
 pub const REGISTRY_URL: &str = "https://raw.githubusercontent.com/baney75/silas/main/registry/devices.json";
+/// The anonymous report service (`registry/service`): one-tap sharing and the community results.
+pub const SERVICE_URL: &str = "https://silas-registry.magnus-b37.workers.dev";
 const ISSUE_URL: &str = "https://github.com/baney75/silas/issues/new";
 
 // ---------------------------------------------------------------- device
@@ -159,29 +184,48 @@ pub fn device() -> &'static Device {
 #[derive(Debug, Deserialize)]
 pub struct ManifestClip {
     pub file: String,
+    pub id: String,
+    pub category: String,
+    /// The reference transcript.
     pub text: String,
+    /// Another accepted reference: the spoken form of code and numbers ("dash m" for `-m`), or an
+    /// accented clip without its fillers. A clip is scored on whichever reference fits better.
+    #[serde(default)]
+    pub alt: Option<String>,
     pub seconds: f32,
+    pub source: String,
+    pub license: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Manifest {
-    pub source: String,
-    pub license: String,
+    pub about: String,
     pub clips: Vec<ManifestClip>,
 }
 
 const MANIFEST: &str = include_str!("../bench/manifest.json");
 
+macro_rules! wav {
+    ($name:literal) => {
+        ($name, include_bytes!(concat!("../bench/", $name)) as &[u8])
+    };
+}
+
 const WAVS: &[(&str, &[u8])] = &[
-    ("6930-75918-0002.wav", include_bytes!("../bench/6930-75918-0002.wav") as &[u8]),
-    ("7729-102255-0039.wav", include_bytes!("../bench/7729-102255-0039.wav") as &[u8]),
-    ("8463-294828-0027.wav", include_bytes!("../bench/8463-294828-0027.wav") as &[u8]),
-    ("5142-33396-0024.wav", include_bytes!("../bench/5142-33396-0024.wav") as &[u8]),
-    ("4446-2275-0007.wav", include_bytes!("../bench/4446-2275-0007.wav") as &[u8]),
-    ("4507-16021-0033.wav", include_bytes!("../bench/4507-16021-0033.wav") as &[u8]),
-    ("1188-133604-0032.wav", include_bytes!("../bench/1188-133604-0032.wav") as &[u8]),
-    ("4970-29093-0007.wav", include_bytes!("../bench/4970-29093-0007.wav") as &[u8]),
-    ("237-134493-0015.wav", include_bytes!("../bench/237-134493-0015.wav") as &[u8]),
+    wav!("clean-0053.wav"),
+    wav!("clean-0059.wav"),
+    wav!("noise-0044.wav"),
+    wav!("noise-0054.wav"),
+    wav!("noise-0058.wav"),
+    wav!("accent-0026.wav"),
+    wav!("accent-0036.wav"),
+    wav!("accent-0041.wav"),
+    wav!("accent-0042.wav"),
+    wav!("dictation-0019.wav"),
+    wav!("dictation-0021.wav"),
+    wav!("command-0005.wav"),
+    wav!("code-0001.wav"),
+    wav!("code-0003.wav"),
 ];
 
 pub fn manifest() -> anyhow::Result<Manifest> {
@@ -190,6 +234,7 @@ pub fn manifest() -> anyhow::Result<Manifest> {
 
 pub struct Clip {
     pub text: String,
+    pub alt: Option<String>,
     pub seconds: f32,
     pub samples: Vec<f32>,
 }
@@ -219,7 +264,7 @@ pub fn load_clips() -> anyhow::Result<Vec<Clip>> {
                 .find(|(f, _)| *f == c.file)
                 .map(|(_, b)| *b)
                 .ok_or_else(|| anyhow::anyhow!("clip {} is not bundled", c.file))?;
-            Ok(Clip { text: c.text.clone(), seconds: c.seconds, samples: decode_wav(bytes)? })
+            Ok(Clip { text: c.text.clone(), alt: c.alt.clone(), seconds: c.seconds, samples: decode_wav(bytes)? })
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     anyhow::ensure!(!clips.is_empty(), "the benchmark set is empty");
@@ -258,6 +303,36 @@ fn word_errors(reference: &str, hypothesis: &str) -> (usize, usize) {
     (prev[h.len()], r.len())
 }
 
+/// Errors and reference words of a clip, on whichever of its references the hypothesis fits better
+/// (the lower rate; the main reference on a tie).
+fn clip_errors(clip: &Clip, hypothesis: &str) -> (usize, usize) {
+    let main = word_errors(&clip.text, hypothesis);
+    let rate = |(e, w): (usize, usize)| if w == 0 { f64::from(u8::from(e > 0)) } else { e as f64 / w as f64 };
+    match &clip.alt {
+        Some(alt) => {
+            let other = word_errors(alt, hypothesis);
+            if rate(other) < rate(main) {
+                other
+            } else {
+                main
+            }
+        }
+        None => main,
+    }
+}
+
+/// The median; the mean of the middle two for an even count. `None` when empty.
+pub fn median(values: &[f32]) -> Option<f32> {
+    let mut v: Vec<f32> = values.to_vec();
+    v.sort_by(f32::total_cmp);
+    let n = v.len();
+    match n {
+        0 => None,
+        _ if n % 2 == 1 => Some(v[n / 2]),
+        _ => Some((v[n / 2 - 1] + v[n / 2]) / 2.0),
+    }
+}
+
 /// Word error rate of one hypothesis against one reference.
 pub fn wer(reference: &str, hypothesis: &str) -> f32 {
     let (errors, words) = word_errors(reference, hypothesis);
@@ -277,6 +352,12 @@ pub struct ModelResult {
     pub audio_seconds: f32,
     pub compute_seconds: f32,
     pub clips: u32,
+    /// The wait after you stop talking: the median compute seconds of the set's 5 to 10 s clips.
+    #[serde(default)]
+    pub wait_seconds: f32,
+    /// Compute seconds of each clip, in the set's order. Kept on this computer; never shared.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clip_seconds: Vec<f32>,
 }
 
 /// Fast enough and accurate enough: both bars cleared.
@@ -329,12 +410,20 @@ pub fn run_suite(
     transcribe(&clips[0].samples)?;
     let (mut audio, mut compute) = (0f64, 0f64);
     let (mut errors, mut words) = (0usize, 0usize);
+    let (mut clip_seconds, mut waits) = (vec![], vec![]);
+    let (lo, hi) = (suite().wait_clip_min_seconds, suite().wait_clip_max_seconds);
     for (i, clip) in clips.iter().enumerate() {
         progress(i, total);
         let (text, took) = transcribe(&clip.samples)?;
-        compute += took.as_secs_f64();
-        audio += clip.samples.len() as f64 / 16_000.0;
-        let (e, w) = word_errors(&clip.text, &text);
+        let took = took.as_secs_f64();
+        let length = clip.samples.len() as f64 / 16_000.0;
+        compute += took;
+        audio += length;
+        clip_seconds.push(took as f32);
+        if (f64::from(lo)..=f64::from(hi)).contains(&length) {
+            waits.push(took as f32);
+        }
+        let (e, w) = clip_errors(clip, &text);
         errors += e;
         words += w;
     }
@@ -346,6 +435,9 @@ pub fn run_suite(
         audio_seconds: audio as f32,
         compute_seconds: compute as f32,
         clips: total as u32,
+        // Every set has clips of that length (a test checks); the whole set is the fallback.
+        wait_seconds: median(&waits).or_else(|| median(&clip_seconds)).unwrap_or(0.0),
+        clip_seconds,
     })
 }
 
@@ -366,8 +458,9 @@ pub struct Report {
 
 pub const REPORT_FILE: &str = "benchmark.json";
 
+/// A report saved before reports named their set was made on the first one.
 fn default_suite() -> String {
-    SUITE_ID.into()
+    suite().legacy_ids.first().cloned().unwrap_or_default()
 }
 
 impl Report {
@@ -375,12 +468,27 @@ impl Report {
         Report {
             schema: 1,
             silas: env!("CARGO_PKG_VERSION").into(),
-            suite: SUITE_ID.into(),
+            suite: suite_id().into(),
             device,
             pick: pick(&results),
             results,
             ran_at: chrono::Utc::now().to_rfc3339(),
         }
+    }
+
+    /// What leaves this computer when the user shares: the report without the per-clip timings.
+    /// No audio and no transcript is ever in a report.
+    pub fn shared(&self) -> Report {
+        let mut r = self.clone();
+        for x in &mut r.results {
+            x.clip_seconds.clear();
+        }
+        r
+    }
+
+    /// The exact text sent: shown to the user first, then posted unchanged.
+    pub fn share_payload(&self) -> String {
+        serde_json::to_string_pretty(&self.shared()).unwrap_or_default()
     }
 }
 
@@ -416,7 +524,7 @@ fn utf8_percent(s: &str) -> String {
 /// The prefilled GitHub issue the user reviews and submits.
 pub fn report_url(r: &Report) -> String {
     let title = format!("Device report: {} ({})", r.device.cpu, r.device.os);
-    let body = serde_json::to_string_pretty(r).unwrap_or_default();
+    let body = r.share_payload();
     format!(
         "{ISSUE_URL}?template=device-report.yml&title={}&report={}",
         utf8_percent(&title),
@@ -460,6 +568,9 @@ pub struct Entry {
     pub wer: f64,
     #[serde(default)]
     pub reports: u32,
+    /// Median wait after you stop talking, in seconds.
+    #[serde(default)]
+    pub wait: f64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -506,11 +617,19 @@ fn mark_registry_tried() {
 }
 
 /// The registry from GitHub (5 s timeout), cached on success. Offline, the cached copy;
-/// with neither, an empty registry.
+/// with neither, an empty registry. Call `mark_registry_tried` once the lookups are done.
 pub fn fetch_registry() -> Registry {
-    let r = fetch_registry_inner();
-    mark_registry_tried();
-    r
+    fetch_registry_inner()
+}
+
+/// Marks this run's device lookup (registry, then community) as tried when dropped, so
+/// `wait_for_registry` never waits out its timeout on a path that returned early.
+pub struct LookupDone;
+
+impl Drop for LookupDone {
+    fn drop(&mut self) {
+        mark_registry_tried();
+    }
 }
 
 fn fetch_registry_inner() -> Registry {
@@ -542,8 +661,9 @@ pub fn cached_registry() -> Registry {
     Registry::parse(&serde_json::to_string(&r).unwrap_or_default()).unwrap_or_default()
 }
 
-/// The model this device is known to run well: one that clears both bars, by this computer's
-/// own measurement if it has one, else the registry's entry for this device type.
+/// The model this device is known to run well: one that clears both bars. Trust order: this
+/// computer's own measurement; else the maintainer-approved registry; else the community results,
+/// only when at least `MIN_AGREE` reports agree.
 pub fn best_for_device() -> Option<String> {
     best_for_device_from(load_report().as_ref())
 }
@@ -555,7 +675,151 @@ pub fn best_for_device_from(report: Option<&Report>) -> Option<String> {
             .pick
             .clone()
             .filter(|p| r.results.iter().any(|x| &x.model == p && passes(x)) && models::spec(p).is_some()),
-        None => cached_registry().lookup(&device().key).map(|e| e.model.clone()),
+        None => {
+            let key = &device().key;
+            cached_registry()
+                .lookup(key)
+                .map(|e| e.model.clone())
+                .or_else(|| cached_community().lookup(key))
+        }
+    }
+}
+
+// ---------------------------------------------------------------- community results and sharing
+
+/// A community pick switches models only when at least this many reports for the device key
+/// picked the same model. Fewer are shown as information.
+pub const MIN_AGREE: u32 = 3;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct CommunityModel {
+    pub reports: u32,
+    /// Medians over the reports for this device key.
+    pub speed: f64,
+    pub wer: f64,
+    pub wait: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct CommunityDevice {
+    pub reports: u32,
+    /// The pick rule over the medians, as the service computed it.
+    pub pick: Option<String>,
+    /// Reports whose own pick is `pick`.
+    pub agree: u32,
+    pub models: HashMap<String, CommunityModel>,
+}
+
+/// The service's `GET /v1/devices` answer.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Community {
+    pub schema: u32,
+    pub suite: String,
+    pub devices: HashMap<String, CommunityDevice>,
+}
+
+pub const COMMUNITY_FILE: &str = "community.json";
+
+impl Community {
+    /// Parse an answer. Results from another speech set aren't comparable, so they are dropped.
+    pub fn parse(text: &str) -> anyhow::Result<Community> {
+        let mut c: Community = serde_json::from_str(text)?;
+        anyhow::ensure!(c.schema == 1, "unsupported community schema {}", c.schema);
+        if c.suite != suite_id() {
+            c.devices.clear();
+        }
+        Ok(c)
+    }
+
+    /// The model to use on this device key, if the community settles it: the pick rule recomputed
+    /// here over the medians agrees with the service's, at least `MIN_AGREE` reports picked it,
+    /// this build offers it and its medians clear both bars.
+    pub fn lookup(&self, key: &str) -> Option<String> {
+        let d = self.devices.get(key)?;
+        let meds: Vec<ModelResult> = d
+            .models
+            .iter()
+            .map(|(m, x)| ModelResult { model: m.clone(), speed: x.speed as f32, wer: x.wer as f32, ..Default::default() })
+            .collect();
+        let pick = d.pick.clone().filter(|p| pick(&meds).as_ref() == Some(p))?;
+        let m = d.models.get(&pick)?;
+        (d.agree >= MIN_AGREE && models::spec(&pick).is_some() && passes_bars(m.speed, m.wer)).then_some(pick)
+    }
+}
+
+/// This device's community results from the service (3 s timeout), cached on success. Offline,
+/// the cached copy; with neither, nothing.
+pub fn fetch_community(key: &str) -> Community {
+    let fetched = (|| -> anyhow::Result<Community> {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(3)))
+            .build()
+            .into();
+        let url = format!("{SERVICE_URL}/v1/devices?key={}", utf8_percent(key));
+        let text = agent.get(&url).call()?.body_mut().read_to_string()?;
+        Community::parse(&text)
+    })();
+    match fetched {
+        Ok(c) => {
+            store::save(COMMUNITY_FILE, &c);
+            c
+        }
+        Err(e) => {
+            log::info!("community results unavailable ({e}); using the cached copy");
+            cached_community()
+        }
+    }
+}
+
+pub fn cached_community() -> Community {
+    if !store::exists(COMMUNITY_FILE) {
+        return Community::default();
+    }
+    let c: Community = store::load(COMMUNITY_FILE);
+    Community::parse(&serde_json::to_string(&c).unwrap_or_default()).unwrap_or_default()
+}
+
+/// The service's answer to a shared report.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ShareReply {
+    pub key: String,
+    pub reports: u32,
+    pub pick: Option<String>,
+    pub agree: u32,
+}
+
+/// Post `payload` (from `Report::share_payload`) to the service. No account, no cookies; the
+/// service stores the validated numbers and the day, never the address it came from.
+pub fn send_report(payload: &str) -> anyhow::Result<ShareReply> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .http_status_as_error(false)
+        .build()
+        .into();
+    let mut resp = agent
+        .post(&format!("{SERVICE_URL}/v1/reports"))
+        .header("Content-Type", "application/json")
+        .send(payload)?;
+    let status = resp.status().as_u16();
+    let text = resp.body_mut().read_to_string().unwrap_or_default();
+    share_outcome(status, &text)
+}
+
+/// Turn the service's status and body into the reply or a sentence for the user.
+fn share_outcome(status: u16, body: &str) -> anyhow::Result<ShareReply> {
+    #[derive(Deserialize)]
+    struct Problem {
+        error: Option<String>,
+    }
+    match status {
+        200 | 201 => Ok(serde_json::from_str(body)?),
+        413 => anyhow::bail!("The report is too large to share."),
+        429 => anyhow::bail!("Too many reports have been shared today. Try again tomorrow."),
+        400..=499 => {
+            let why = serde_json::from_str::<Problem>(body).ok().and_then(|p| p.error);
+            anyhow::bail!("The service couldn't use this report. {}", why.unwrap_or_default())
+        }
+        _ => anyhow::bail!("The report service isn't available right now (HTTP {status}). Try again later, or share on GitHub."),
     }
 }
 
@@ -684,9 +948,10 @@ mod tests {
     #[test]
     fn reports_carry_the_suite_id_and_old_files_read_as_v1() {
         let rep = Report::new(build_device("macos", "Apple M5", "x", 10, 32, None), vec![r("parakeet-v3", 20.0, 0.03)]);
-        assert_eq!(rep.suite, SUITE_ID);
+        assert_eq!(rep.suite, suite_id());
+        assert_ne!(suite_id(), "librispeech-test-clean-9clips-v1");
         let mut v: serde_json::Value = serde_json::to_value(&rep).unwrap();
-        assert_eq!(v["suite"], SUITE_ID);
+        assert_eq!(v["suite"], suite_id());
         v.as_object_mut().unwrap().remove("suite");
         let old: Report = serde_json::from_value(v).unwrap();
         assert_eq!(old.suite, "librispeech-test-clean-9clips-v1");
@@ -729,9 +994,11 @@ mod tests {
     #[test]
     fn manifest_loads_and_every_wav_decodes_to_its_length() {
         let m = manifest().unwrap();
-        assert!(!m.clips.is_empty());
-        assert!(!m.source.is_empty() && !m.license.is_empty());
+        assert!(!m.clips.is_empty() && !m.about.is_empty());
+        assert_eq!(m.clips.len(), WAVS.len());
         for c in &m.clips {
+            assert!(!c.license.is_empty() && !c.source.is_empty() && !c.category.is_empty());
+            assert_eq!(c.file, format!("{}.wav", c.id));
             let bytes = WAVS.iter().find(|(f, _)| *f == c.file).unwrap_or_else(|| panic!("{} not bundled", c.file)).1;
             let samples = decode_wav(bytes).unwrap();
             let secs = samples.len() as f32 / 16_000.0;
@@ -755,11 +1022,160 @@ mod tests {
         let res = run_suite("m", &mut transcribe, &|_, _| {}).unwrap();
         assert_eq!(res.wer, 0.0);
         assert_eq!(res.clips as usize, texts.len());
-        assert!((res.audio_seconds - 62.2).abs() < 0.5);
+        assert!((f64::from(res.audio_seconds) - suite().seconds).abs() < 0.1);
         assert_eq!(calls, texts.len() + 1);
-        // Only the returned compute time counts: 9 clips at 100 ms, warm-up excluded.
-        assert!((res.compute_seconds - 0.9).abs() < 1e-3);
-        assert!((res.speed - res.audio_seconds / 0.9).abs() < 0.1);
+        // Only the returned compute time counts: every clip at 100 ms, warm-up excluded.
+        let want = 0.1 * texts.len() as f32;
+        assert!((res.compute_seconds - want).abs() < 1e-3);
+        assert!((res.speed - res.audio_seconds / want).abs() < 0.1);
+        assert_eq!(res.clip_seconds.len(), texts.len());
+        assert!((res.wait_seconds - 0.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn wait_is_the_median_of_the_five_to_ten_second_clips() {
+        let clips = load_clips().unwrap();
+        let mut i = 0usize;
+        // Compute time = 1/100 of the clip's length plus a step per clip, so each clip differs.
+        let lengths: Vec<f32> = clips.iter().map(|c| c.samples.len() as f32 / 16_000.0).collect();
+        let mut transcribe = |s: &[f32]| -> anyhow::Result<(String, Duration)> {
+            let secs = s.len() as f32 / 16_000.0 / 100.0 + i as f32 * 0.001;
+            i += 1;
+            Ok((String::new(), Duration::from_secs_f32(secs)))
+        };
+        let res = run_suite("m", &mut transcribe, &|_, _| {}).unwrap();
+        let waits: Vec<f32> = res
+            .clip_seconds
+            .iter()
+            .zip(&lengths)
+            .filter(|(_, l)| (5.0..=10.0).contains(*l))
+            .map(|(t, _)| *t)
+            .collect();
+        assert!(waits.len() >= 5);
+        assert_eq!(res.wait_seconds, median(&waits).unwrap());
+        assert_eq!(res.wer, 1.0);
+    }
+
+    #[test]
+    fn suite_json_agrees_with_the_bundled_set() {
+        // registry/suite.json is what ingest.py and the service check reports against.
+        let s = suite();
+        let clips = load_clips().unwrap();
+        assert_eq!(clips.len() as u32, s.clips);
+        let total: f64 = clips.iter().map(|c| c.samples.len() as f64 / 16_000.0).sum();
+        assert!((total - s.seconds).abs() < 0.05, "{total} vs {}", s.seconds);
+        let manifest_total: f64 = manifest().unwrap().clips.iter().map(|c| f64::from(c.seconds)).sum();
+        assert!((manifest_total - s.seconds).abs() < 0.05);
+        assert!(s.legacy_ids.iter().all(|l| l != &s.id));
+        assert_eq!(s.legacy_ids.first().map(String::as_str), Some("librispeech-test-clean-9clips-v1"));
+        let size: usize = WAVS.iter().map(|(_, b)| b.len()).sum();
+        assert!(size <= 3 << 20, "the bundled set is {size} bytes");
+    }
+
+    #[test]
+    fn models_json_lists_the_catalog() {
+        // registry/models.json is the list ingest.py and the service accept; it follows models.rs.
+        #[derive(Deserialize)]
+        struct Known {
+            models: Vec<String>,
+        }
+        let known: Known = serde_json::from_str(include_str!("../../../registry/models.json")).unwrap();
+        let mut known = known.models;
+        known.sort();
+        let mut catalog: Vec<String> = models::MODELS.iter().map(|m| m.id.to_string()).collect();
+        catalog.sort();
+        assert_eq!(known, catalog, "update registry/models.json to match models::MODELS");
+    }
+
+    #[test]
+    fn a_clip_scores_on_its_better_reference() {
+        let clip = |text: &str, alt: Option<&str>| Clip { text: text.into(), alt: alt.map(Into::into), seconds: 1.0, samples: vec![] };
+        let code = clip("git commit -m \"fix login redirect\"", Some("git commit dash m quote fix login redirect quote"));
+        assert_eq!(clip_errors(&code, "git commit -m \"fix login redirect\""), (0, 6));
+        assert_eq!(clip_errors(&code, "git commit dash m quote fix login redirect quote"), (0, 9));
+        assert_eq!(clip_errors(&code, "get commit dash m quote fix login redirect quote"), (1, 9));
+        assert_eq!(clip_errors(&clip("the cat", None), "a cat"), (1, 2));
+        // A tie keeps the main reference.
+        assert_eq!(clip_errors(&clip("a b", Some("a b")), "a c"), (1, 2));
+    }
+
+    #[test]
+    fn median_matches_python() {
+        assert_eq!(median(&[]), None);
+        assert_eq!(median(&[3.0, 1.0, 2.0]), Some(2.0));
+        assert_eq!(median(&[4.0, 1.0, 3.0, 2.0]), Some(2.5));
+    }
+
+    #[test]
+    fn shared_report_leaves_out_clip_timings() {
+        let mut rep = Report::new(build_device("macos", "Apple M5", "x", 10, 32, None), vec![r("parakeet-v3", 20.0, 0.03)]);
+        rep.results[0].clip_seconds = vec![0.1, 0.2];
+        rep.results[0].wait_seconds = 0.4;
+        let payload = rep.share_payload();
+        assert!(!payload.contains("clip_seconds"));
+        assert!(payload.contains("\"wait_seconds\": 0.4"));
+        assert!(serde_json::to_string(&rep).unwrap().contains("clip_seconds"));
+        let back: Report = serde_json::from_str(&payload).unwrap();
+        assert_eq!(back.results[0].clip_seconds, Vec::<f32>::new());
+        assert_eq!(back.device, rep.device);
+    }
+
+    fn community(pick: &str, agree: u32, models: &[(&str, f64, f64)]) -> Community {
+        let mut devices = HashMap::new();
+        devices.insert(
+            "macos/apple-m5/10".to_string(),
+            CommunityDevice {
+                reports: agree.max(1),
+                pick: Some(pick.into()),
+                agree,
+                models: models
+                    .iter()
+                    .map(|(m, speed, wer)| (m.to_string(), CommunityModel { reports: agree, speed: *speed, wer: *wer, wait: 0.4 }))
+                    .collect(),
+            },
+        );
+        Community { schema: 1, suite: suite_id().into(), devices }
+    }
+
+    #[test]
+    fn community_pick_needs_three_agreeing_reports_and_both_bars() {
+        let two = [("parakeet-v3", 20.0, 0.06), ("cohere-int4", 4.0, 0.05)];
+        let key = "macos/apple-m5/10";
+        assert_eq!(community("parakeet-v3", 3, &two).lookup(key).as_deref(), Some("parakeet-v3"));
+        // Fewer than three agree: information only.
+        assert_eq!(community("parakeet-v3", 2, &two).lookup(key), None);
+        // The service's pick must be what the rule gives over the medians.
+        assert_eq!(community("cohere-int4", 5, &two).lookup(key), None);
+        // A pick that misses a bar never switches.
+        assert_eq!(community("parakeet-v3", 5, &[("parakeet-v3", 9.0, 0.06)]).lookup(key), None);
+        assert_eq!(community("parakeet-v3", 5, &[("parakeet-v3", 20.0, 0.09)]).lookup(key), None);
+        // A model this build doesn't offer.
+        assert_eq!(community("future-model", 5, &[("future-model", 30.0, 0.01)]).lookup(key), None);
+        assert_eq!(community("parakeet-v3", 3, &two).lookup("linux/other/4"), None);
+    }
+
+    #[test]
+    fn community_from_another_set_is_dropped() {
+        let mut c = community("parakeet-v3", 3, &[("parakeet-v3", 20.0, 0.06)]);
+        c.suite = "librispeech-test-clean-9clips-v1".into();
+        let parsed = Community::parse(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert!(parsed.devices.is_empty());
+        let json = r#"{"schema":1,"suite":"SUITE","min_agree":3,"devices":{"macos/apple-m5/10":{"reports":3,"pick":"parakeet-v3","agree":3,
+            "models":{"parakeet-v3":{"reports":3,"speed":20.0,"wer":0.06,"wait":0.4}}}}}"#
+            .replace("SUITE", suite_id());
+        assert_eq!(Community::parse(&json).unwrap().lookup("macos/apple-m5/10").as_deref(), Some("parakeet-v3"));
+        assert!(Community::parse(r#"{"schema":2,"suite":"x","devices":{}}"#).is_err());
+    }
+
+    #[test]
+    fn share_outcomes_read_as_sentences() {
+        let ok = share_outcome(201, r#"{"ok":true,"key":"macos/apple-m5/10","reports":2,"pick":"parakeet-v3","agree":2}"#).unwrap();
+        assert_eq!((ok.key.as_str(), ok.reports, ok.agree), ("macos/apple-m5/10", 2, 2));
+        let e = share_outcome(422, r#"{"error":"Unknown operating system.","stale":false}"#).unwrap_err().to_string();
+        assert!(e.ends_with("Unknown operating system."), "{e}");
+        assert!(share_outcome(429, "").unwrap_err().to_string().contains("tomorrow"));
+        assert!(share_outcome(413, "").is_err());
+        assert!(share_outcome(503, "").unwrap_err().to_string().contains("GitHub"));
     }
 
     #[test]

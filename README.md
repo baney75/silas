@@ -121,21 +121,28 @@ laptop CPU ([the study](bench/models/accent-2026-11.md)).
 
 Silas picks the model for your computer by itself:
 
-1. It looks your computer up (operating system, processor, core count) in the
-   [device registry](registry/devices.json). If your kind of computer is there, it uses that model.
-2. If not, once the default model is ready it measures it in the background on a minute of public
-   recordings with known text ([LibriSpeech](https://www.openslr.org/12), CC BY 4.0), along with every
-   other model you've already downloaded (Silas downloads nothing for this). A model passes when it
-   runs at least **10x real time** (10 s of speech ready in 1 s) and gets at least **92% of words**
-   right. Silas switches to the most accurate model that passes. If none passes, it shows the
-   numbers and keeps your model. Measuring the other models starts only after 30 seconds without
+1. Your computer's own measurement, once it has one, always wins.
+2. Otherwise it looks your computer up (operating system, processor, core count) in the
+   [device registry](registry/devices.json), which a maintainer approves.
+3. If the registry has no entry, it asks the [report service](registry/service/README.md) what
+   people with the same kind of computer shared. It uses that only when at least 3 shared results
+   agree on a model that passes both bars; fewer show on the Model page as information only. The
+   service gets 3 seconds, and the last answer is kept, so Silas works the same offline.
+4. With no answer from any of these, once the default model is ready it measures it in the background
+   on 84 seconds of bundled speech with known text: clean, noisy and accented speech, dictation,
+   commands and code ([the clips](core/voice/bench/LICENSES.md)), along with every other model you've
+   already downloaded (Silas downloads nothing for this). A model passes when it runs at least
+   **10x real time** (10 s of speech ready in 1 s) and gets at least **92% of words** right. Silas
+   switches to the most accurate model that passes. If none passes, it shows the numbers and keeps
+   your model. The Model page also shows the wait: how long after you stop talking the text of a
+   5 to 10 s sentence is ready. Measuring the other models starts only after 30 seconds without
    dictation, and while it runs it can make a dictation slower.
-3. You can still pick any model. Once you choose one, Silas never switches it for you.
+5. You can still pick any model. Once you choose one, Silas never switches it for you.
 
-**Share results** opens a GitHub issue with your device type, OS, Silas version and the numbers.
-No audio or dictated text is sent. A bot checks the report and comments; once a maintainer approves
-it, everyone with the same computer gets your result. `silas-bench suite` runs the same measurement
-from a terminal.
+**Share results** shows exactly what will be sent, then sends it in one tap with no account:
+your device type, OS, Silas version and the measured numbers. No audio or dictated text is sent.
+**Share on GitHub instead** opens the same report as a GitHub issue for a maintainer to approve
+into the registry. `silas-bench suite` runs the same measurement from a terminal.
 
 ## Updates
 
@@ -204,13 +211,30 @@ plus `libgtk-layer-shell0` at run time for the overlay on Wayland.
 Audio never leaves the computer. Silas listens only while the key is held (or hands-free
 is on), and keeps history and the dictionary as JSON in its app-data folder.
 
+Silas sends nothing about you unless you tap **Send** under **Share results**. Then it posts the
+report it showed you: the device type (like `macos/apple-m5/10`), processor, core count, memory,
+Mac model, OS version, Silas version, the benchmark set, and per model the speed, word error rate,
+wait and clip count. Never audio, dictated text, your name or an account. The
+[report service](registry/service/README.md) checks the report and stores only those fields and
+the day (UTC). It never stores your IP address, browser or app headers; to limit each sender to
+20 reports a day it keeps a keyed hash of the address under a key that changes daily, and deletes
+it after 48 hours. Every stored report is open data under
+[CC0](https://creativecommons.org/publicdomain/zero/1.0/) at
+`https://silas-registry.magnus-b37.workers.dev/v1/reports.jsonl`.
+
+To recommend a model, Silas reads the device registry from GitHub and the shared results for your
+device type from the report service. Those requests carry your device type and nothing else.
+
 ## Credits
 
 Speech engines through [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) (MIT) and
 [transcribe-rs](https://github.com/cjpais/transcribe-rs) (MIT, vendored with a decoder fix), keys
 through [handy-keys](https://github.com/handy-computer/handy-keys) (MIT); all three come from the
 [Handy](https://github.com/cjpais/Handy) project. Parakeet is NVIDIA's (CC-BY-4.0). The benchmark
-clips come from [LibriSpeech](https://www.openslr.org/12) (CC BY 4.0; Panayotov et al., ICASSP 2015). The
+clips come from [LibriSpeech](https://www.openslr.org/12) (CC BY 4.0; Panayotov et al., ICASSP 2015),
+[EdAcc](https://groups.inf.ed.ac.uk/edacc/) (CC BY-SA 4.0; Sanabria et al., ICASSP 2023),
+[DEMAND](https://zenodo.org/records/1227121) and [FSD50K](https://zenodo.org/records/4060432) noise, and
+speech synthesized for Silas; [the full list](core/voice/bench/LICENSES.md). The
 common-word list comes from [FrequencyWords](https://github.com/hermitdave/FrequencyWords)
 (CC-BY-SA-4.0 content).
 

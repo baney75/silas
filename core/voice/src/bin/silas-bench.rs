@@ -19,6 +19,10 @@
 //! Types each row's `hypothesis` with the app's typer (`typer::type_text`) at a typing-speed setting
 //! (default: the app's default, "fast") and writes how long each took. Run it on a display that
 //! takes synthetic keys (Xvfb on Linux); it types into whatever has focus.
+//!        silas-bench suite <model-id>...
+//! Runs the app's bundled benchmark set (`benchmark::run_suite`, the one that picks a model for each
+//! computer) on app models, downloading any that are missing, and prints each model's speed, word
+//! errors and wait after you stop talking, then the report exactly as "Share results" would send it.
 //! Build: cargo build --release --features bench --bin silas-bench
 
 use std::io::Write;
@@ -189,11 +193,7 @@ fn clips(manifest: &Path, subset: Option<&Path>) -> anyhow::Result<Vec<serde_jso
 fn run(args: &[String]) -> anyhow::Result<()> {
     use polycarp_voice::{benchmark, dictionary::Dictionary, models, replay, store};
     let a = run_args(args)?;
-    let data = std::env::var_os("SILAS_BENCH_DATA")
-        .map(PathBuf::from)
-        .or_else(|| dirs::cache_dir().map(|d| d.join("silas-bench/silas-data")))
-        .ok_or_else(|| anyhow::anyhow!("set SILAS_BENCH_DATA"))?;
-    store::set_data_dir(Some(data));
+    store::set_data_dir(Some(data_dir()?));
     if models::move_legacy_parakeet()? {
         eprintln!("moved the old ONNX parakeet-v3 to {}", models::PARAKEET_V3_ONNX);
     }
@@ -292,6 +292,50 @@ fn run(args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn data_dir() -> anyhow::Result<PathBuf> {
+    std::env::var_os("SILAS_BENCH_DATA")
+        .map(PathBuf::from)
+        .or_else(|| dirs::cache_dir().map(|d| d.join("silas-bench/silas-data")))
+        .ok_or_else(|| anyhow::anyhow!("set SILAS_BENCH_DATA"))
+}
+
+fn suite(ids: &[String]) -> anyhow::Result<()> {
+    use polycarp_voice::{benchmark, models, store};
+    anyhow::ensure!(!ids.is_empty(), "usage: silas-bench suite <model-id>...");
+    store::set_data_dir(Some(data_dir()?));
+    let mut results = vec![];
+    for id in ids {
+        anyhow::ensure!(models::spec(id).is_some(), "unknown model {id}");
+        if !models::installed(id) {
+            eprintln!("{id}: downloading");
+            models::download(id, &|_, _, _| {}, &|| false)?;
+        }
+        let t = Instant::now();
+        let mut engine = models::Engine::load(id)?;
+        eprintln!("{id}: loaded in {:.2}s", t.elapsed().as_secs_f32());
+        let r = benchmark::run_suite(
+            id,
+            &mut |s: &[f32]| {
+                let t = Instant::now();
+                let text = engine.transcribe(s, "en")?;
+                Ok((text, t.elapsed()))
+            },
+            &|done, total| eprint!("\r{id}: {done}/{total}"),
+        )?;
+        eprintln!(
+            "\n{id}: {:.1}x real time, {:.1}% word errors, {:.2}s wait after you stop talking, {}",
+            r.speed,
+            r.wer * 100.0,
+            r.wait_seconds,
+            if benchmark::passes(&r) { "passes both bars" } else { "misses a bar" }
+        );
+        results.push(r);
+    }
+    let report = benchmark::Report::new(benchmark::detect(), results);
+    println!("{}", report.share_payload());
+    Ok(())
+}
+
 /// Times the typer on each row's text: key events from the first to the last, as a dictation types
 /// them once its text is final.
 fn type_rows(args: &[String]) -> anyhow::Result<()> {
@@ -333,8 +377,9 @@ fn main() -> anyhow::Result<()> {
     match args.get(1).map(String::as_str) {
         Some("run") => run(&args[2..]),
         Some("type") => type_rows(&args[2..]),
+        Some("suite") => suite(&args[2..]),
         _ => anyhow::bail!(
-            "usage: silas-bench run --manifest <file> --model <id> --out <results.jsonl> [options]\n       silas-bench type --results <results.jsonl> --out <typing.jsonl> [--speed <setting>]"
+            "usage: silas-bench run --manifest <file> --model <id> --out <results.jsonl> [options]\n       silas-bench type --results <results.jsonl> --out <typing.jsonl> [--speed <setting>]\n       silas-bench suite <model-id>..."
         ),
     }
 }

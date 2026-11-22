@@ -6,6 +6,7 @@ import {
   errorText,
   type AppState,
   type BenchmarkProgress,
+  type CommunityDevice,
   type Device,
   type Dictionary,
   type HistoryItem,
@@ -13,6 +14,7 @@ import {
   type ModelProgress,
   type Report,
   type Settings,
+  type ShareReply,
   type Stats,
   type Status,
   type UpdateInfo,
@@ -36,6 +38,10 @@ export const store = {
   benchmark: null as Report | null,
   /** The benchmark in flight (or its last error); `null` when none has run since launch. */
   bench: null as BenchRun | null,
+  /** What people with the same device key shared; `null` when offline with no saved copy. */
+  community: null as CommunityDevice | null,
+  /** The share sheet; `null` when closed. */
+  share: null as ShareSheet | null,
   update: null as UpdateInfo | null,
   /** Result of the last manual check: "none" means up to date. */
   updateCheck: "idle" as "idle" | "checking" | "none" | "found" | "error",
@@ -45,6 +51,14 @@ export const store = {
 export interface BenchRun {
   running: boolean;
   progress: BenchmarkProgress | null;
+  error: string | null;
+}
+
+export interface ShareSheet {
+  /** The exact JSON that Send posts. */
+  payload: string;
+  sending: boolean;
+  reply: ShareReply | null;
   error: string | null;
 }
 
@@ -179,12 +193,60 @@ export async function runBenchmark(all: boolean) {
   notify("benchmark");
 }
 
-export async function shareBenchmark() {
+/** Open the share sheet with exactly what Send will post. */
+export async function openShare() {
   try {
-    await api.shareBenchmark();
+    const payload = await api.sharePreview();
+    if (!payload) {
+      toast("Run the benchmark first.", "error");
+      return;
+    }
+    store.share = { payload, sending: false, reply: null, error: null };
+  } catch (e) {
+    toast(`Couldn't prepare the report. ${errorText(e)}`, "error", 6000);
+  }
+  notify("benchmark");
+}
+
+export function closeShare() {
+  store.share = null;
+  notify("benchmark");
+}
+
+/** One tap: post the previewed report to the service. */
+export async function sendShare() {
+  const sheet = store.share;
+  if (!sheet || sheet.sending) return;
+  sheet.sending = true;
+  sheet.error = null;
+  notify("benchmark");
+  try {
+    sheet.reply = await api.shareBenchmark(sheet.payload);
+  } catch (e) {
+    sheet.error = errorText(e);
+  }
+  sheet.sending = false;
+  notify("benchmark");
+  if (sheet.reply) await refreshCommunity();
+}
+
+/** The older way: a prefilled GitHub issue the user reviews and submits. */
+export async function shareOnGithub() {
+  try {
+    await api.shareBenchmarkGithub();
   } catch (e) {
     toast(`Couldn't open the report. ${errorText(e)}`, "error", 6000);
   }
+}
+
+/** Shared results for this device. Offline, this keeps the last good copy or nothing. */
+export async function refreshCommunity() {
+  try {
+    store.community = await api.getCommunity();
+  } catch {
+    // The page works without shared results.
+  }
+  notify("benchmark");
 }
 
 export async function checkForUpdate() {
