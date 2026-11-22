@@ -6,13 +6,16 @@ import {
   errorText,
   type AppState,
   type BenchmarkProgress,
+  type CommunityDevice,
   type Device,
+  type FileProgress,
   type Dictionary,
   type HistoryItem,
   type ModelEntry,
   type ModelProgress,
   type Report,
   type Settings,
+  type ShareReply,
   type Stats,
   type Status,
   type UpdateInfo,
@@ -20,14 +23,14 @@ import {
 } from "./api";
 import { toast } from "./ui";
 
-export type Topic = "state" | "settings" | "models" | "history" | "dict" | "stats" | "progress" | "update" | "benchmark" | "microphones";
+export type Topic = "state" | "settings" | "models" | "history" | "dict" | "stats" | "progress" | "update" | "benchmark" | "microphones" | "file";
 
 export const store = {
   state: null as unknown as AppState,
   settings: null as unknown as Settings,
   models: [] as ModelEntry[],
   history: [] as HistoryItem[],
-  dict: { terms: [], corrections: [], pending: [], fillers: [] } as Dictionary,
+  dict: { terms: [], corrections: [], pending: [], fillers: [], snippets: [] } as Dictionary,
   stats: null as Stats | null,
   progress: {} as Record<string, ModelProgress>,
   microphones: [] as string[],
@@ -36,15 +39,31 @@ export const store = {
   benchmark: null as Report | null,
   /** The benchmark in flight (or its last error); `null` when none has run since launch. */
   bench: null as BenchRun | null,
+  /** What people with the same device key shared; `null` when offline with no saved copy. */
+  community: null as CommunityDevice | null,
+  /** The share sheet; `null` when closed. */
+  share: null as ShareSheet | null,
   update: null as UpdateInfo | null,
   /** Result of the last manual check: "none" means up to date. */
   updateCheck: "idle" as "idle" | "checking" | "none" | "found" | "error",
   updateProgress: null as UpdateProgress | null,
+  /** The file being transcribed, or the last one for a moment after it ends. */
+  file: null as FileProgress | null,
+  /** Files are being dragged over the window. */
+  dragging: false,
 };
 
 export interface BenchRun {
   running: boolean;
   progress: BenchmarkProgress | null;
+  error: string | null;
+}
+
+export interface ShareSheet {
+  /** The exact JSON that Send posts. */
+  payload: string;
+  sending: boolean;
+  reply: ShareReply | null;
   error: string | null;
 }
 
@@ -114,7 +133,7 @@ export async function updateSettings(patch: Partial<Settings>) {
   try {
     store.settings = await api.setSettings(store.settings);
     notify("settings");
-    if ("hotkey" in patch || "model" in patch) await refreshState();
+    if ("hotkey" in patch || "retypeHotkey" in patch || "appStyles" in patch || "model" in patch) await refreshState();
   } catch (e) {
     store.settings = before;
     notify("settings");
@@ -179,12 +198,60 @@ export async function runBenchmark(all: boolean) {
   notify("benchmark");
 }
 
-export async function shareBenchmark() {
+/** Open the share sheet with exactly what Send will post. */
+export async function openShare() {
   try {
-    await api.shareBenchmark();
+    const payload = await api.sharePreview();
+    if (!payload) {
+      toast("Run the benchmark first.", "error");
+      return;
+    }
+    store.share = { payload, sending: false, reply: null, error: null };
+  } catch (e) {
+    toast(`Couldn't prepare the report. ${errorText(e)}`, "error", 6000);
+  }
+  notify("benchmark");
+}
+
+export function closeShare() {
+  store.share = null;
+  notify("benchmark");
+}
+
+/** One tap: post the previewed report to the service. */
+export async function sendShare() {
+  const sheet = store.share;
+  if (!sheet || sheet.sending) return;
+  sheet.sending = true;
+  sheet.error = null;
+  notify("benchmark");
+  try {
+    sheet.reply = await api.shareBenchmark(sheet.payload);
+  } catch (e) {
+    sheet.error = errorText(e);
+  }
+  sheet.sending = false;
+  notify("benchmark");
+  if (sheet.reply) await refreshCommunity();
+}
+
+/** The older way: a prefilled GitHub issue the user reviews and submits. */
+export async function shareOnGithub() {
+  try {
+    await api.shareBenchmarkGithub();
   } catch (e) {
     toast(`Couldn't open the report. ${errorText(e)}`, "error", 6000);
   }
+}
+
+/** Shared results for this device. Offline, this keeps the last good copy or nothing. */
+export async function refreshCommunity() {
+  try {
+    store.community = await api.getCommunity();
+  } catch {
+    // The page works without shared results.
+  }
+  notify("benchmark");
 }
 
 export async function checkForUpdate() {
@@ -211,4 +278,21 @@ export async function installUpdate() {
     notify("update");
     toast(`The update didn't install. ${errorText(e)}`, "error", 6000);
   }
+}
+
+/** "Transcribe a file": the picker, then the core. Progress and the outcome arrive as `file-progress`
+ * events, which main.ts shows; this only reports what never became an event (the picker failing). */
+export async function transcribeFile(path?: string) {
+  try {
+    await api.transcribeFile(path);
+  } catch (e) {
+    const message = errorText(e);
+    if (store.file?.message !== message && lastRefusal !== message) toast(`Couldn't transcribe that file. ${message}`, "error", 6000);
+  }
+}
+
+/** The last refusal's text, so the rejected call doesn't show it twice. */
+export let lastRefusal = "";
+export function noteRefusal(message: string) {
+  lastRefusal = message;
 }

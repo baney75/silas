@@ -23,7 +23,30 @@ export interface AppState {
   model: string | null;
   hotkey: string;
   hotkeyLabel: string;
+  /** The key that types the last dictation again, or null when none is set. */
+  retypeHotkeyLabel: string | null;
+  /** The app the last dictation went to, or null before the first one (or where the system doesn't name apps). */
+  app: AppInfo | null;
   permissions: Permissions;
+}
+
+/** How Silas shapes text for an app. See docs/ipc.md "App styles". */
+export type AppStyle = "prose" | "terminal" | "code" | "chat";
+
+export interface AppInfo {
+  /** macOS bundle id, Windows exe name, or Hyprland window class. */
+  id: string;
+  name: string;
+  /** The style the app gets now: the user's choice, else `builtin`. */
+  style: AppStyle;
+  /** The style Silas gives the app on its own. */
+  builtin: AppStyle;
+}
+
+export interface Snippet {
+  trigger: string;
+  text: string;
+  added: string;
 }
 
 export type TypingSpeed = "steady" | "fast" | "instant";
@@ -32,15 +55,21 @@ export interface Settings {
   hotkey: string;
   tapToToggle: boolean;
   model: string;
-  /** Who chose the model: the app's default, the device registry, a benchmark, or the user. */
+  /** Who chose the model: the app's default, the device registry, shared community results, a benchmark, or the user. */
   modelSource: ModelSource;
   language: string;
   removeFillers: boolean;
   trailingSpace: boolean;
   typingSpeed: TypingSpeed;
   newlineAsShiftEnter: boolean;
+  /** A second key that types the last dictation again. null when unset. */
+  retypeHotkey: string | null;
+  /** App id to style, for apps the user assigned by hand. */
+  appStyles: Record<string, AppStyle>;
   learnFromEdits: boolean;
   sounds: boolean;
+  /** Pause music and videos while dictating, and play them again after. */
+  pauseMedia: boolean;
   showOverlay: boolean;
   launchAtLogin: boolean;
   microphone: string | null;
@@ -49,7 +78,7 @@ export interface Settings {
   autoUpdate: boolean;
 }
 
-export type ModelSource = "default" | "registry" | "benchmark" | "user";
+export type ModelSource = "default" | "registry" | "community" | "benchmark" | "user";
 
 export type UpdateChannel = "stable" | "nightly" | "dev";
 
@@ -105,6 +134,34 @@ export interface ModelResult {
   audio_seconds: number;
   compute_seconds: number;
   clips: number;
+  /** Median compute seconds for a 5 to 10 s clip: the wait after you stop talking. */
+  wait_seconds: number;
+  /** Compute seconds per clip, kept on this computer and left out of a shared report. */
+  clip_seconds?: number[];
+}
+
+/** Medians over the shared reports for one model on one device key. */
+export interface CommunityModel {
+  reports: number;
+  speed: number;
+  wer: number;
+  wait: number;
+}
+
+/** What people with the same device key shared. Only `agree >= 3` can choose a model. */
+export interface CommunityDevice {
+  reports: number;
+  pick: string | null;
+  agree: number;
+  models: Record<string, CommunityModel>;
+}
+
+/** The report service's answer to a shared report. */
+export interface ShareReply {
+  key: string;
+  reports: number;
+  pick: string | null;
+  agree: number;
 }
 
 export interface Report {
@@ -133,6 +190,22 @@ export interface HistoryItem {
   latencyMs: number;
   words: number;
   corrected: string | null;
+  /** The file's name when the text came from "Transcribe a file", not a dictation. */
+  file?: string;
+}
+
+/** Where a file transcription is. `refused` means it never started (and `message` says why). */
+export type FileStage = "decoding" | "transcribing" | "waiting" | "done" | "error" | "cancelled" | "refused";
+
+/** A file transcription's progress: `doneS` of `totalS` seconds of audio (`null` when unknown). */
+export interface FileProgress {
+  name: string;
+  stage: FileStage;
+  doneS: number;
+  totalS: number | null;
+  message?: string;
+  /** With `done`: the new History entry. */
+  item?: HistoryItem;
 }
 
 export type Source = "user" | "learned" | "import";
@@ -164,6 +237,7 @@ export interface Dictionary {
   corrections: Correction[];
   pending: Pending[];
   fillers: string[];
+  snippets: Snippet[];
 }
 
 export interface Stats {
@@ -208,12 +282,16 @@ export interface EventMap {
   transcript: HistoryItem;
   learned: LearnResult;
   notice: Notice;
+  app: AppInfo;
   "model-progress": ModelProgress;
   "benchmark-progress": BenchmarkProgress;
   "benchmark-done": Report;
   "benchmark-error": { message: string };
   "update-available": UpdateInfo;
   "update-progress": UpdateProgress;
+  "file-progress": FileProgress;
+  /** Files are being dragged over the main window (`active`), or left or were dropped. */
+  "file-drag": { active: boolean };
 }
 
 export type PermissionKind = "microphone" | "accessibility" | "input";
@@ -251,6 +329,8 @@ export const api = {
   removeTerm: (text: string) => call<Dictionary>("remove_term", { text }),
   addCorrection: (from: string, to: string) => call<Dictionary>("add_correction", { from, to }),
   removeCorrection: (from: string) => call<Dictionary>("remove_correction", { from }),
+  addSnippet: (trigger: string, text: string) => call<Dictionary>("add_snippet", { trigger, text }),
+  removeSnippet: (trigger: string) => call<Dictionary>("remove_snippet", { trigger }),
   acceptPending: (from: string) => call<Dictionary>("accept_pending", { from }),
   dismissPending: (from: string) => call<Dictionary>("dismiss_pending", { from }),
   importDictionary: (json: string) => call<Dictionary>("import_dictionary", { json }),
@@ -260,6 +340,8 @@ export const api = {
 
   getStats: () => call<Stats>("get_stats"),
   toggleRecording: () => call<null>("toggle_recording"),
+  /** Types the newest History item again into the field with the keyboard. Rejects with the reason when it can't. */
+  typeAgain: () => call<null>("type_again"),
   captureHotkey: () => call<string>("capture_hotkey"),
   openPermission: (kind: PermissionKind) => call<null>("open_permission", { kind }),
   /** macOS: clear Silas's Accessibility entry and ask again (fixes a stale grant). */
@@ -271,11 +353,20 @@ export const api = {
   getBenchmark: () => call<Report | null>("get_benchmark"),
   /** Resolves when the run ends; progress and the result also arrive as events. */
   runBenchmark: (all: boolean) => call<null>("run_benchmark", { all }),
+  /** The exact JSON a share sends, or null before any benchmark. */
+  sharePreview: () => call<string | null>("share_preview"),
+  /** Sends `payload` (from sharePreview) to the report service. No account, no audio, no text. */
+  shareBenchmark: (payload: string) => call<ShareReply>("share_benchmark", { payload }),
   /** Opens a prefilled GitHub issue in the browser; the user reviews and submits it. */
-  shareBenchmark: () => call<null>("share_benchmark"),
+  shareBenchmarkGithub: () => call<null>("share_benchmark_github"),
+  /** Shared results for this device, fetched with a short timeout or from the last good copy. */
+  getCommunity: () => call<CommunityDevice | null>("get_community"),
   getDevice: () => call<Device>("get_device"),
   checkUpdate: () => call<UpdateInfo | null>("check_update"),
   installUpdate: () => call<null>("install_update"),
+  /** Transcribes a file into History. With no path it opens the picker; `null` if that was cancelled. */
+  transcribeFile: (path?: string) => call<HistoryItem | null>("transcribe_file", { path: path ?? null }),
+  cancelFile: () => call<boolean>("cancel_file"),
 };
 
 /** Error text from a rejected invoke (Tauri rejects with a string). */

@@ -1,70 +1,139 @@
 {
-  "source": "LibriSpeech test-clean (openslr.org/12), via the Hugging Face dataset openslr/librispeech_asr",
-  "license": "CC BY 4.0",
-  "attribution": "V. Panayotov, G. Chen, D. Povey, S. Khudanpur. LibriSpeech: an ASR corpus based on public domain audio books. ICASSP 2015.",
+  "about": "Silas's in-app benchmark set v2: 14 clips from the Silas bench set (bench/manifest.jsonl), chosen where speech models disagree. Each clip keeps its own license; see LICENSES.md in this folder.",
   "clips": [
     {
-      "file": "6930-75918-0002.wav",
-      "text": "congratulations were poured in upon the princess everywhere during her journey",
-      "seconds": 5.03,
-      "speaker": 6930,
-      "id": "6930-75918-0002"
+      "file": "clean-0053.wav",
+      "id": "clean-0053",
+      "category": "clean",
+      "text": "or hath he given us any gift",
+      "seconds": 3.87,
+      "source": "librispeech test-clean 8224-274384-0003",
+      "license": "CC BY 4.0"
     },
     {
-      "file": "7729-102255-0039.wav",
-      "text": "the inmates being removed at the appointed hour a few cannon balls were fired through the stone walls",
-      "seconds": 6.82,
-      "speaker": 7729,
-      "id": "7729-102255-0039"
+      "file": "clean-0059.wav",
+      "id": "clean-0059",
+      "category": "clean",
+      "text": "you are mate replied the sailor",
+      "seconds": 3.27,
+      "source": "librispeech test-clean 8555-284449-0009",
+      "license": "CC BY 4.0"
     },
     {
-      "file": "8463-294828-0027.wav",
-      "text": "i left instructions for shipping my containers of stuffed animals and dried plants to paris france",
-      "seconds": 5.98,
-      "speaker": 8463,
-      "id": "8463-294828-0027"
+      "file": "noise-0044.wav",
+      "id": "noise-0044",
+      "category": "noise",
+      "text": "well i'm convinced that the boarded up house mystery happened not earlier than april sixteenth eighteen sixty one and probably not much later",
+      "alt": "Well, I'm convinced that the Boarded-up House mystery happened not earlier than April 16, 1861, and probably not much later.",
+      "seconds": 9.875,
+      "source": "librispeech test-clean 6930-76324-0028 (clean-0044) + DEMAND STRAFFIC ch09 at 183.105 s",
+      "license": "CC BY 4.0"
     },
     {
-      "file": "5142-33396-0024.wav",
-      "text": "i stood with my back to the wall for i wanted no sword reaching out of the dark for me",
-      "seconds": 5.34,
-      "speaker": 5142,
-      "id": "5142-33396-0024"
+      "file": "noise-0054.wav",
+      "id": "noise-0054",
+      "category": "noise",
+      "text": "by quick marches through these inaccessible mountains that general freed himself from the superior forces of the covenanters",
+      "seconds": 10.085,
+      "source": "librispeech test-clean 8224-274381-0007 (clean-0054) + FSD50K dev 155910 at 1.294 s",
+      "license": "CC BY 4.0"
     },
     {
-      "file": "4446-2275-0007.wav",
-      "text": "she pushed him toward the big chair by the fire and sat down on a stool at the opposite side of the hearth her knees drawn up to her chin laughing like a happy little girl",
-      "seconds": 8.97,
-      "speaker": 4446,
-      "id": "4446-2275-0007"
+      "file": "noise-0058.wav",
+      "id": "noise-0058",
+      "category": "noise",
+      "text": "nemo builds a fabulous futuristic submarine the nautilus then conducts an underwater campaign of vengeance against his imperialist oppressor",
+      "seconds": 9.935,
+      "source": "librispeech test-clean 8463-294825-0003 (clean-0058) + DEMAND PCAFETER ch09 at 49.408 s",
+      "license": "CC BY 4.0"
     },
     {
-      "file": "4507-16021-0033.wav",
-      "text": "do we really know the mountain well when we are not acquainted with the cavern",
-      "seconds": 5.54,
-      "speaker": 4507,
-      "id": "4507-16021-0033"
+      "file": "accent-0026.wav",
+      "id": "accent-0026",
+      "category": "accent",
+      "text": "i don't know okay continue continue talking because i'm gonna try to",
+      "seconds": 3.49,
+      "source": "edacc test data/test-00006-of-00010-cc4648d0f66f65a4.parquet row 160",
+      "license": "CC BY-SA 4.0"
     },
     {
-      "file": "1188-133604-0032.wav",
-      "text": "it is only a pencil outline by edward burne jones in illustration of the story of psyche it is the introduction of psyche after all her troubles into heaven",
-      "seconds": 10.98,
-      "speaker": 1188,
-      "id": "1188-133604-0032"
+      "file": "accent-0036.wav",
+      "id": "accent-0036",
+      "category": "accent",
+      "text": "uh you could you have a like you have a iphone just delete some photos",
+      "alt": "You could, you have a, like, you have a iPhone. Just delete some photos.",
+      "seconds": 5.23,
+      "source": "edacc test data/test-00007-of-00010-ea5ed4464ecff3c9.parquet row 653",
+      "license": "CC BY-SA 4.0"
     },
     {
-      "file": "4970-29093-0007.wav",
-      "text": "it is such a noble ambition that it is a pity it has usually such a shallow foundation",
-      "seconds": 7.0,
-      "speaker": 4970,
-      "id": "4970-29093-0007"
+      "file": "accent-0041.wav",
+      "id": "accent-0041",
+      "category": "accent",
+      "text": "successful at at at this diet and uh you can uh uh uh prepare for yourself",
+      "alt": "Successful at this diet, and you can prepare for yourself.",
+      "seconds": 7.9,
+      "source": "edacc test data/test-00009-of-00010-648ce5002d124496.parquet row 131",
+      "license": "CC BY-SA 4.0"
     },
     {
-      "file": "237-134493-0015.wav",
-      "text": "there was something individual about the great farm a most unusual trimness and care for detail",
-      "seconds": 6.55,
-      "speaker": 237,
-      "id": "237-134493-0015"
+      "file": "accent-0042.wav",
+      "id": "accent-0042",
+      "category": "accent",
+      "text": "how are you are you are you following that trend that trend",
+      "alt": "How are you? Are you following that trend?",
+      "seconds": 3.37,
+      "source": "edacc test data/test-00009-of-00010-648ce5002d124496.parquet row 118",
+      "license": "CC BY-SA 4.0"
+    },
+    {
+      "file": "dictation-0019.wav",
+      "id": "dictation-0019",
+      "category": "dictation",
+      "text": "Doctor's appointment on April 9 at 2:15. Bring the insurance card and the list of medications.",
+      "alt": "doctor's appointment on april ninth at two fifteen bring the insurance card and the list of medications",
+      "seconds": 8.171,
+      "source": "synthesized from bench/sources/synth.toml",
+      "license": "CC BY 4.0"
+    },
+    {
+      "file": "dictation-0021.wav",
+      "id": "dictation-0021",
+      "category": "dictation",
+      "text": "My new email is d.reyes@proton.me, so please update your contacts.",
+      "alt": "my new email is d dot reyes at proton dot me so please update your contacts",
+      "seconds": 6.211,
+      "source": "synthesized from bench/sources/synth.toml",
+      "license": "CC BY 4.0"
+    },
+    {
+      "file": "command-0005.wav",
+      "id": "command-0005",
+      "category": "command",
+      "text": "undo",
+      "seconds": 1.453,
+      "source": "synthesized from bench/sources/synth.toml",
+      "license": "CC BY 4.0"
+    },
+    {
+      "file": "code-0001.wav",
+      "id": "code-0001",
+      "category": "code",
+      "text": "git commit -m \"fix login redirect\"",
+      "alt": "git commit dash m quote fix login redirect quote",
+      "seconds": 3.907,
+      "source": "synthesized from bench/sources/synth.toml",
+      "license": "CC BY 4.0"
+    },
+    {
+      "file": "code-0003.wav",
+      "id": "code-0003",
+      "category": "code",
+      "text": "const userName = await fetchUser(id);",
+      "alt": "const camel case user name equals await camel case fetch user open paren id close paren semicolon",
+      "seconds": 7.32,
+      "source": "synthesized from bench/sources/synth.toml",
+      "license": "CC BY 4.0"
     }
   ]
 }

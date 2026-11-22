@@ -1,5 +1,5 @@
-import { api, errorText, type HistoryItem, type LearnResult } from "./api";
-import { hotkeyLabel, notify, refreshDict, refreshStats, store, subscribe } from "./store";
+import { api, errorText, type FileProgress, type HistoryItem, type LearnResult } from "./api";
+import { hotkeyLabel, notify, refreshDict, refreshStats, store, subscribe, transcribeFile } from "./store";
 import { append, clear, fixChip, h, icon, keycap, seconds, timeAgo, toast } from "./ui";
 
 // What Silas learned from each teach, kept so it survives re-renders.
@@ -10,39 +10,58 @@ export function mountHistory(root: HTMLElement): () => void {
   let confirmClear = false;
 
   const head = h("div", { class: "page-head" });
+  const job = h("div", { class: "file-job", role: "status", "aria-live": "polite" });
   const list = h("ul", { class: "entries", "aria-label": "Dictation history" });
-  root.append(head, list);
+  root.append(head, job, list);
+
+  function drawJob() {
+    const p = store.file;
+    job.hidden = !p;
+    if (p) clear(job, ...fileJob(p));
+  }
 
   function drawHead() {
     const n = store.history.length;
+    const busy = !!store.file && !["done", "error", "cancelled"].includes(store.file.stage);
+    const pick = h(
+      "button",
+      { class: "btn btn-ghost", type: "button", disabled: busy, title: "Or drop an audio or video file on this window", onclick: () => void transcribeFile() },
+      icon("file", 16),
+      "Transcribe a file",
+    );
     clear(
       head,
-      h("div", null, h("h1", null, "History"), h("p", { class: "lede" }, n ? `${n} dictation${n === 1 ? "" : "s"}, newest first. Teach a fix and Silas remembers it.` : "Your dictations show up here.")),
-      n
-        ? h(
-            "button",
-            {
-              class: `btn ${confirmClear ? "btn-danger" : "btn-ghost"}`,
-              type: "button",
-              onclick: async () => {
-                if (!confirmClear) {
-                  confirmClear = true;
-                  drawHead();
-                  window.setTimeout(() => {
-                    confirmClear = false;
+      h("div", null, h("h1", null, "History"), h("p", { class: "lede" }, n ? `${n} entr${n === 1 ? "y" : "ies"}, newest first. Teach a fix and Silas remembers it.` : "Your dictations and transcribed files show up here.")),
+      h(
+        "div",
+        { class: "head-actions" },
+        pick,
+        n
+          ? h(
+              "button",
+              {
+                class: `btn ${confirmClear ? "btn-danger" : "btn-ghost"}`,
+                type: "button",
+                onclick: async () => {
+                  if (!confirmClear) {
+                    confirmClear = true;
                     drawHead();
-                  }, 3000);
-                  return;
-                }
-                confirmClear = false;
-                await api.clearHistory();
-                store.history = [];
-                notify("history");
+                    window.setTimeout(() => {
+                      confirmClear = false;
+                      drawHead();
+                    }, 3000);
+                    return;
+                  }
+                  confirmClear = false;
+                  await api.clearHistory();
+                  store.history = [];
+                  notify("history");
+                },
               },
-            },
-            confirmClear ? "Click again to clear" : "Clear all",
-          )
-        : null,
+              confirmClear ? "Click again to clear" : "Clear all",
+            )
+          : null,
+      ),
     );
   }
 
@@ -56,7 +75,10 @@ export function mountHistory(root: HTMLElement): () => void {
       { class: "entry-meta" },
       h("time", { datetime: it.ts, title: new Date(it.ts).toLocaleString() }, timeAgo(it.ts)),
       h("span", { title: "Audio length" }, seconds(it.durationS)),
-      h("span", { title: "Time from release to text" }, `${it.latencyMs} ms`),
+      it.file
+        ? h("span", { title: "Time to transcribe" }, seconds(it.latencyMs / 1000))
+        : h("span", { title: "Time from release to text" }, `${it.latencyMs} ms`),
+      it.file ? h("span", { class: "badge badge-file", title: it.file }, icon("file", 14), h("span", { class: "badge-name" }, it.file)) : null,
       it.corrected ? h("span", { class: "badge badge-gold" }, "Fixed") : null,
     );
 
@@ -175,6 +197,7 @@ export function mountHistory(root: HTMLElement): () => void {
           "li",
           { class: "empty" },
           h("p", null, "No dictations yet. Click into any text field, hold ", keycap(hotkeyLabel(), "sm"), " and speak."),
+          h("p", { class: "hint" }, "Or drop an audio or video file here to transcribe it."),
         ),
       );
       return;
@@ -183,6 +206,11 @@ export function mountHistory(root: HTMLElement): () => void {
   }
 
   draw();
+  drawJob();
+  const unsubFile = subscribe(["file"], () => {
+    drawJob();
+    drawHead();
+  });
   // A new transcript should not throw away an edit in progress.
   const unsub = subscribe(["history"], () => {
     if (editing && store.history.some((x) => x.id === editing)) {
@@ -197,7 +225,59 @@ export function mountHistory(root: HTMLElement): () => void {
     editing = null;
     draw();
   });
-  return unsub;
+  return () => {
+    unsub();
+    unsubFile();
+  };
+}
+
+const STAGE: Record<FileProgress["stage"], string> = {
+  decoding: "Reading the file",
+  transcribing: "Transcribing",
+  waiting: "Waiting while you dictate",
+  done: "Done",
+  error: "Couldn't transcribe it",
+  cancelled: "Stopped",
+  refused: "",
+};
+
+/** The row for the file being transcribed: its name, where it is, a bar, and Cancel. */
+function fileJob(p: FileProgress): Node[] {
+  const running = p.stage === "decoding" || p.stage === "transcribing" || p.stage === "waiting";
+  const known = p.totalS != null && p.totalS > 0;
+  const fraction = p.stage === "done" ? 1 : known ? Math.min(1, p.doneS / p.totalS!) : 0;
+  const amount = p.stage === "transcribing" && known ? `${seconds(p.doneS)} of ${seconds(p.totalS!)}` : null;
+  const fill = h("div", { class: "progress-fill" });
+  fill.style.transform = `scaleX(${fraction})`;
+  const bar = h(
+    "div",
+    { class: `progress${running && (!known || p.stage === "decoding") ? " indeterminate" : ""}`, role: "progressbar", "aria-label": `Transcribing ${p.name}`, "aria-valuemin": 0, "aria-valuemax": 100, "aria-valuenow": Math.round(fraction * 100) },
+    fill,
+  );
+  return [
+    h(
+      "div",
+      { class: "file-job-top" },
+      icon("file", 16),
+      h("span", { class: "file-job-name", title: p.name }, p.name),
+      h("span", { class: "file-job-stage" }, p.stage === "error" && p.message ? p.message : STAGE[p.stage], amount ? ` · ${amount}` : null),
+      running
+        ? h(
+            "button",
+            {
+              class: "btn btn-ghost btn-sm",
+              type: "button",
+              onclick: (e: Event) => {
+                (e.currentTarget as HTMLButtonElement).disabled = true;
+                void api.cancelFile();
+              },
+            },
+            "Cancel",
+          )
+        : null,
+    ),
+    bar,
+  ];
 }
 
 function lessonRow(res: LearnResult): HTMLElement {

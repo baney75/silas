@@ -7,28 +7,44 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
 import ingest  # noqa: E402
 
-GOOD = {
-    "schema": 1,
-    "suite": "librispeech-test-clean-9clips-v1",
-    "silas": "0.1.7",
-    "device": {
-        "key": "macos/apple-m5/10",
-        "os": "macos",
-        "os_version": "macOS 27.2",
-        "cpu": "Apple M5",
-        "cores": 10,
-        "memory_gb": 24,
-        "hw_model": "Mac17,2",
-    },
-    "results": [
-        {"model": "parakeet-v3", "speed": 23.0, "wer": 0.021, "clips": 9, "audio_seconds": 62.2, "compute_seconds": 2.7043}
-    ],
-    "pick": "parakeet-v3",
-    "ran_at": "2026-10-31T20:00:00Z",
-}
+# Shared with registry/service: every validator runs the same good and bad reports.
+VECTORS = json.loads((HERE / "vectors.json").read_text())
+GOOD = VECTORS["base"]
+SECONDS = GOOD["results"][0]["audio_seconds"]
+SHARED = ("suite.json", "models.json")
+
+
+def apply(case) -> str:
+    """The request body a vector describes (the same rules as registry/service/test/vectors.ts)."""
+    if "body" in case:
+        return case["body"]
+    rep = copy.deepcopy(GOOD)
+    for path, value in case.get("set", {}).items():
+        *parents, last = path.split(".")
+        node = rep
+        for k in parents:
+            node = node[int(k)] if isinstance(node, list) else node[k]
+        if isinstance(node, list):
+            i = int(last)
+            node[i:i + 1] = [value]
+        else:
+            node[last] = value
+    for path in case.get("remove", []):
+        *parents, last = path.split(".")
+        node = rep
+        for k in parents:
+            node = node[int(k)] if isinstance(node, list) else node[k]
+        del node[int(last) if isinstance(node, list) else last]
+    text = json.dumps(rep, indent=2)
+    if "replace" in case:
+        old, new = case["replace"]
+        assert old in text, case["name"]
+        text = text.replace(old, new, 1)
+    return text
 
 
 def body(report) -> str:
@@ -55,6 +71,47 @@ class Pick(unittest.TestCase):
         self.assertEqual(ingest.pick([self.r("a", 4, 0.2), self.r("b", 8, 0.3)]), "b")
 
 
+class Vectors(unittest.TestCase):
+    def test_good_pass(self):
+        for case in VECTORS["good"]:
+            with self.subTest(case["name"]):
+                out = ingest.validate(ingest.extract(apply(case)))
+                self.assertNotIn("pick", out)
+
+    def test_bad_rejected_not_stale(self):
+        for case in VECTORS["bad"]:
+            with self.subTest(case["name"]):
+                with self.assertRaises(ingest.Reject) as cm:
+                    ingest.validate(ingest.extract(apply(case)))
+                self.assertNotIsInstance(cm.exception, ingest.Stale)
+
+    def test_stale_rejected_as_stale(self):
+        for case in VECTORS["stale"]:
+            with self.subTest(case["name"]):
+                with self.assertRaises(ingest.Stale):
+                    ingest.validate(ingest.extract(apply(case)))
+
+    def test_vectors_measure_the_current_suite(self):
+        self.assertEqual(GOOD["suite"], ingest.SUITE_ID)
+        self.assertEqual(GOOD["results"][0]["clips"], ingest.SUITE_CLIPS)
+        self.assertEqual(SECONDS, ingest.SUITE_SECONDS)
+
+
+class Suite(unittest.TestCase):
+    def test_suite_json_matches_the_bundled_set(self):
+        """suite.json is what Silas builds in (benchmark.rs reads it with include_str!); the bundled
+        manifest must hold exactly that many clips and seconds."""
+        manifest = json.loads((HERE.parent / "core/voice/bench/manifest.json").read_text())
+        clips = manifest["clips"]
+        self.assertEqual(len(clips), ingest.SUITE_CLIPS)
+        self.assertAlmostEqual(sum(c["seconds"] for c in clips), ingest.SUITE_SECONDS, delta=0.05)
+        self.assertGreaterEqual(sum(1 for c in clips if 5 <= c["seconds"] <= 10), 5)
+
+    def test_models_json_lists_known_ids(self):
+        self.assertIn("parakeet-v3", ingest.KNOWN_MODELS)
+        self.assertTrue(all(isinstance(m, str) and m for m in ingest.KNOWN_MODELS))
+
+
 class Validate(unittest.TestCase):
     def test_real_cpu_names_pass(self):
         for cpu in ("Intel(R) Core(TM) i7-1165G7 @ 2.80GHz", "AMD Ryzen 7 5800X 8-Core Processor", "Apple M5"):
@@ -71,50 +128,15 @@ class Validate(unittest.TestCase):
         with self.assertRaises(ingest.Reject):
             ingest.validate(ingest.extract(body(bad)))
 
-    def test_rejects_key_mismatch(self):
-        self.rejects(lambda b: b["device"].update(key="macos/apple-m4/10"))
-
-    def test_rejects_unknown_model(self):
-        self.rejects(lambda b: b["results"][0].update(model="evil"))
-
-    def test_rejects_out_of_range(self):
-        self.rejects(lambda b: b["results"][0].update(wer=1.5))
-        self.rejects(lambda b: b["results"][0].update(speed="fast"))
-        self.rejects(lambda b: b["results"][0].update(speed=True))
-
-    def test_rejects_markup_in_text(self):
-        self.rejects(lambda b: b["device"].update(cpu="Apple M5 <script>", key="macos/apple-m5-script/10"))
-        self.rejects(lambda b: b["device"].update(cpu="[click](https://x)", key="macos/click-https-x/10"))
-        self.rejects(lambda b: b["device"].update(cpu="x\ny", key="macos/x-y/10"))
+    def test_rejects_markup_in_long_text(self):
         self.rejects(lambda b: b["device"].update(os_version="a" * 500))
 
-    def test_rejects_trailing_newline(self):
-        self.rejects(lambda b: b.update(silas="0.1.7\n"))
-        self.rejects(lambda b: b["device"].update(os_version="macOS 27.2\n"))
-
-    def test_rejects_non_finite(self):
-        for bad in ("Infinity", "NaN", "1e999"):
-            with self.assertRaises(ingest.Reject):
-                ingest.validate(ingest.extract(body(GOOD).replace('"cores": 10', f'"cores": {bad}')))
-
-    def test_rejects_huge_integer_and_non_string_model(self):
-        with self.assertRaises(ingest.Reject):
-            ingest.validate(ingest.extract(body(GOOD).replace('"cores": 10', '"cores": 1' + "0" * 400)))
-        self.rejects(lambda b: b["results"][0].update(model=[]))
-        self.rejects(lambda b: b["results"][0].update(model={}))
+    def test_issue_body_in_a_code_fence(self):
+        self.assertEqual(ingest.validate(ingest.extract(body(GOOD)))["device"]["key"], "macos/apple-m5/10")
 
     def test_rejects_deep_nesting(self):
         with self.assertRaises(ingest.Reject):
             ingest.extract("```json\n" + "[" * 100000 + "]" * 100000 + "\n```")
-
-    def test_rejects_numbers_not_from_the_suite(self):
-        self.rejects(lambda b: b["results"][0].update(clips=3))
-        self.rejects(lambda b: b["results"][0].update(audio_seconds=600.0, compute_seconds=26.0))
-        self.rejects(lambda b: b["results"][0].update(speed=90.0))  # disagrees with 62.2 / 2.7043
-        self.rejects(lambda b: b["results"][0].update(speed=900.0, compute_seconds=0.0691))
-
-    def test_rejects_duplicate_model(self):
-        self.rejects(lambda b: b["results"].append(dict(b["results"][0])))
 
     def test_rejects_not_json(self):
         with self.assertRaises(ingest.Reject):
@@ -132,7 +154,8 @@ class EndToEnd(unittest.TestCase):
 
     def registry(self, tmp):
         reg = Path(tmp)
-        (reg / "ingest.py").write_text(Path(ingest.__file__).read_text())
+        for name in ("ingest.py", *SHARED):
+            (reg / name).write_text((HERE / name).read_text())
         return reg
 
     def test_check_stores_nothing_and_approve_stores_and_rebuilds_median(self):
@@ -144,18 +167,19 @@ class EndToEnd(unittest.TestCase):
             for n, speed in ((1, 20.0), (2, 30.0), (3, 25.0)):
                 rep = copy.deepcopy(GOOD)
                 rep["results"][0]["speed"] = speed
-                rep["results"][0]["compute_seconds"] = 62.2 / speed
+                rep["results"][0]["compute_seconds"] = SECONDS / speed
+                rep["results"][0]["wait_seconds"] = n / 10
                 p = self.run_ingest(reg, number=str(n), body_text=body(rep))
                 self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
                 self.assertNotIn("Apple M5", p.stdout)  # comments carry the slug key, not free text
             dev = json.loads((reg / "devices.json").read_text())["devices"]["macos/apple-m5/10"]
-            self.assertEqual(dev, {"model": "parakeet-v3", "speed": 25.0, "wer": 0.021, "reports": 3})
+            self.assertEqual(dev, {"model": "parakeet-v3", "speed": 25.0, "wer": 0.061, "wait": 0.2, "reports": 3})
 
     def test_precision_is_kept(self):
         with tempfile.TemporaryDirectory() as tmp:
             reg = self.registry(tmp)
             rep = copy.deepcopy(GOOD)
-            rep["results"][0].update(speed=9.999, compute_seconds=62.2 / 9.999)
+            rep["results"][0].update(speed=9.999, compute_seconds=SECONDS / 9.999)
             self.assertEqual(self.run_ingest(reg, body_text=body(rep)).returncode, 0)
             dev = json.loads((reg / "devices.json").read_text())["devices"]["macos/apple-m5/10"]
             self.assertLess(dev["speed"], 10.0)  # never rounded up past the bar

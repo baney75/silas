@@ -27,6 +27,10 @@ pub struct AppState {
     model: Option<String>,
     hotkey: String,
     hotkey_label: String,
+    /// The retype key's label, or None when no retype key is set.
+    retype_hotkey_label: Option<String>,
+    /// The app the last dictation went to and its style (`style.rs`).
+    app: Option<crate::style::AppInfo>,
     permissions: permissions::Permissions,
 }
 
@@ -44,6 +48,7 @@ pub fn platform() -> &'static str {
 pub fn get_state(core: State<Shared>, app: AppHandle) -> AppState {
     let (status, detail) = core.status();
     let hotkey = core.settings.lock().hotkey.clone();
+    let retype = core.settings.lock().retype_hotkey.clone();
     AppState {
         status,
         detail,
@@ -52,6 +57,8 @@ pub fn get_state(core: State<Shared>, app: AppHandle) -> AppState {
         model: core.active_model(),
         hotkey_label: store::hotkey_label(&hotkey),
         hotkey,
+        retype_hotkey_label: retype.filter(|k| !k.trim().is_empty()).map(|k| store::hotkey_label(&k)),
+        app: core.last_app(),
         permissions: permissions::check(),
     }
 }
@@ -192,6 +199,22 @@ pub fn dismiss_pending(core: State<Shared>, from: String) -> Dictionary {
 }
 
 #[tauri::command]
+pub fn add_snippet(core: State<Shared>, trigger: String, text: String) -> R<Dictionary> {
+    let mut added = false;
+    let d = with_dict(&core, |d| added = d.add_snippet(&trigger, &text));
+    if added {
+        Ok(d)
+    } else {
+        Err("A snippet needs a phrase to say and the text to type.".into())
+    }
+}
+
+#[tauri::command]
+pub fn remove_snippet(core: State<Shared>, trigger: String) -> Dictionary {
+    with_dict(&core, |d| d.remove_snippet(&trigger))
+}
+
+#[tauri::command]
 pub fn import_dictionary(core: State<Shared>, json: String) -> R<Dictionary> {
     let mut d = core.dict.lock();
     d.import(&json)
@@ -226,6 +249,12 @@ pub fn get_stats(core: State<Shared>) -> Stats {
 pub fn toggle_recording(core: State<Shared>) {
     let out = core.machine.lock().toggle_from_ui();
     core.inner().act(out);
+}
+
+/// Types the last dictation again. Async: it returns at once and the typing runs on the core's thread.
+#[tauri::command]
+pub async fn type_again(core: State<'_, Shared>) -> R<()> {
+    core.inner().type_again(crate::core::Via::Command)
 }
 
 #[tauri::command]
@@ -332,14 +361,52 @@ pub async fn run_benchmark(core: State<'_, Shared>, all: bool) -> R<()> {
     .map_err(err)
 }
 
+/// The exact text "Share results" would send: the saved report without per-clip timings.
 #[tauri::command]
-pub async fn share_benchmark() -> R<()> {
+pub async fn share_preview() -> R<Option<String>> {
+    tauri::async_runtime::spawn_blocking(|| benchmark::load_report().map(|r| r.share_payload()))
+        .await
+        .map_err(err)
+}
+
+/// Send `payload` to the report service. It must be exactly what `share_preview` gives for the
+/// saved report now, so what the user saw is what leaves the computer.
+#[tauri::command]
+pub async fn share_benchmark(payload: String) -> R<benchmark::ShareReply> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let report = benchmark::load_report().ok_or("Run the benchmark first".to_string())?;
+        if report.share_payload() != payload {
+            return Err("The results changed. Look them over again before sharing.".to_string());
+        }
+        let reply = benchmark::send_report(&payload).map_err(err)?;
+        benchmark::fetch_community(&report.device.key);
+        Ok(reply)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// The older way to share: a prefilled GitHub issue the user reviews and submits.
+#[tauri::command]
+pub async fn share_benchmark_github() -> R<()> {
     tauri::async_runtime::spawn_blocking(|| {
         let report = benchmark::load_report().ok_or("Run the benchmark first".to_string())?;
         benchmark::open_url(&benchmark::report_url(&report)).map_err(err)
     })
     .await
     .map_err(err)?
+}
+
+/// What others with this kind of computer shared (3 s timeout, else the cached copy). For display:
+/// it moves the model only through the device pick's trust order.
+#[tauri::command]
+pub async fn get_community() -> R<Option<benchmark::CommunityDevice>> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let key = benchmark::device().key.clone();
+        benchmark::fetch_community(&key).devices.get(&key).cloned()
+    })
+    .await
+    .map_err(err)
 }
 
 /// Resolves once this run has asked the device registry (at most 6 s), for first-run setup.
@@ -369,6 +436,41 @@ pub async fn install_update(app: AppHandle) -> R<()> {
     updates::install(&app).await.map_err(err)
 }
 
+/// Transcribes an audio or video file into History; nothing is typed. With no `path` it asks for
+/// one with the system picker and returns `None` if the person cancels it. Progress, the result and
+/// any refusal also arrive as `file-progress` events.
+#[tauri::command]
+pub async fn transcribe_file(core: State<'_, Shared>, app: AppHandle, path: Option<String>) -> R<Option<HistoryItem>> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = match path {
+            Some(p) => std::path::PathBuf::from(p),
+            None => {
+                use tauri_plugin_dialog::DialogExt;
+                let picked = app
+                    .dialog()
+                    .file()
+                    .set_title("Transcribe a file")
+                    .add_filter("Audio or video", crate::file::EXTENSIONS)
+                    .blocking_pick_file();
+                match picked {
+                    Some(p) => p.into_path().map_err(err)?,
+                    None => return Ok(None),
+                }
+            }
+        };
+        core.transcribe_file(&path).map(Some).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Stops the file being transcribed. Returns whether one was running.
+#[tauri::command]
+pub async fn cancel_file(core: State<'_, Shared>) -> R<bool> {
+    Ok(core.cancel_file())
+}
+
 #[cfg(test)]
 mod tests {
     /// Tauri runs a command that isn't `async` on the main thread, where the window draws and takes
@@ -378,6 +480,7 @@ mod tests {
     const ON_MAIN_THREAD: &[&str] = &[
         "accept_pending",
         "add_correction",
+        "add_snippet",
         "add_term",
         "clear_history",
         "correct_history",
@@ -394,6 +497,7 @@ mod tests {
         "import_dictionary",
         "open_permission",
         "remove_correction",
+        "remove_snippet",
         "remove_term",
         "reset_accessibility",
         "save_dictionary",

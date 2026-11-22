@@ -18,6 +18,10 @@ use crate::models::{self, Engine};
 use crate::store::{self, HistoryItem, Settings, Stats};
 use crate::typer;
 
+mod again;
+mod shaping;
+pub use again::Via;
+
 /// What the interface around the engine provides. The engine never names a UI toolkit:
 /// the Tauri app (Windows, Linux, Android) and the native Mac app both implement this.
 ///
@@ -65,6 +69,19 @@ impl Host for NullHost {
     fn listener_returned(&self) {}
 }
 
+/// What `silas-ctl` asks of the running engine (see `control.rs`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Control {
+    /// The hotkey went down (a short press-and-release starts hands-free).
+    Press,
+    /// The hotkey came up.
+    Release,
+    /// The record button.
+    Toggle,
+    /// Escape while listening.
+    Cancel,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
@@ -102,10 +119,16 @@ pub struct Core {
     /// The global key listener is running. Without it the hotkey can't work, so Silas
     /// must never claim to be ready.
     pub listener_ok: AtomicBool,
+    /// A modifier key is down, as the key listener last saw it. Linux waits for it before typing.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    mods_held: AtomicBool,
     /// The user pressed keys while Silas was typing, so its copy of the text is off.
     typed_over: AtomicBool,
     /// The user pressed Escape while Silas was typing: stop, and leave the rest in History.
     stop_typing: AtomicBool,
+    /// How the key gesture ended while the mic was still opening: `END_*`. Set under the
+    /// recording lock, so `start_recording` sees it or the end sees the recording.
+    pending_end: std::sync::atomic::AtomicU8,
     /// When the last busy cue played (`busy_cue_due`).
     last_busy: Mutex<Option<Instant>>,
     /// Bumped per recording so the length limit only stops the one it was set for.
@@ -127,6 +150,10 @@ pub struct Core {
     /// False while the interface has paused dictation: keys are ignored, nothing records.
     /// The model stays loaded.
     enabled: AtomicBool,
+    /// Pauses what's playing while a dictation records (nowplaying.rs).
+    media: crate::nowplaying::MediaPause,
+    /// The id of the app the last dictation went to, for Settings (`shaping.rs`).
+    app: Mutex<Option<String>>,
 }
 
 pub type Shared = Arc<Core>;
@@ -141,6 +168,51 @@ pub enum Scope {
     /// The active model, then every other installed one (nothing is downloaded), so a better
     /// model already on disk is never passed over. Switches only to a pick that passes both bars.
     Auto,
+}
+
+/// Whether a registry or community pick for this device moves Silas to `model`. Only while the
+/// model is still the default one, and only to a model that is here: never strand someone who
+/// has a working model on one they haven't downloaded. With no model installed yet, the
+/// maintainer-approved registry may choose what first-run setup downloads; community results
+/// never may, since anyone can post them.
+fn remote_pick_applies(model_source: &str, source: &str, model_installed: bool, any_installed: bool) -> bool {
+    model_source == "default" && (model_installed || (source == "registry" && !any_installed))
+}
+
+/// What startup does about this computer's model.
+#[derive(Debug, PartialEq)]
+enum DevicePlan {
+    /// Nothing: this computer's own benchmark settles it, or a saved report says one already ran.
+    Keep,
+    /// Move to this model, if `remote_pick_applies`, from "registry" or "community".
+    Remote(String, &'static str),
+    /// Measure the active model once one loads.
+    Measure,
+}
+
+/// Decide from this computer's current report and the lookups, each called at most once. This
+/// computer's own passing pick comes first, as in `best_for_device_from`, and then no lookup runs:
+/// neither the registry nor the community overrides a measurement made here. Then the registry,
+/// then the community; with no answer, measure unless a report is already saved.
+fn plan_device_pick(
+    report: Option<&Report>,
+    registry: impl FnOnce() -> Option<String>,
+    community: impl FnOnce() -> Option<String>,
+) -> DevicePlan {
+    if report.is_some_and(|r| benchmark::best_for_device_from(Some(r)).is_some()) {
+        return DevicePlan::Keep;
+    }
+    if let Some(model) = registry() {
+        return DevicePlan::Remote(model, "registry");
+    }
+    if let Some(model) = community() {
+        return DevicePlan::Remote(model, "community");
+    }
+    if report.is_some() {
+        DevicePlan::Keep
+    } else {
+        DevicePlan::Measure
+    }
 }
 
 /// May a model change go ahead? A user's choice is never overridden by an automatic one,
@@ -344,10 +416,12 @@ pub enum Ending {
     Limit,
 }
 
-pub fn tail_for(ending: Ending) -> Duration {
+/// The tail a release records. None when the last moment before key up was already silence
+/// (`pieces::ends_quiet`): nobody is mid-word, and the quiet a tail would add is padded on instead.
+pub fn tail_for(ending: Ending, quiet: bool) -> Duration {
     match ending {
-        Ending::Key => TAIL,
-        Ending::Limit => Duration::ZERO,
+        Ending::Key if !quiet => TAIL,
+        Ending::Key | Ending::Limit => Duration::ZERO,
     }
 }
 
@@ -405,6 +479,12 @@ impl Core {
         let trigger = Trigger::parse(&settings.hotkey).expect("default hotkey parses");
         let mut machine = Machine::new(trigger, settings.tap_to_toggle);
         machine.fallback = settings.hotkey_fallback.as_deref().and_then(Trigger::parse);
+        // A saved retype key this build can't use, or one that is now the dictation key, is dropped.
+        let again = again::trigger(&settings).unwrap_or_else(|_| {
+            settings.retype_hotkey = None;
+            None
+        });
+        machine.again.set(again);
         let mut history: Vec<HistoryItem> = store::load("history.json");
         history.truncate(store::HISTORY_KEEP);
         Arc::new(Core {
@@ -423,8 +503,10 @@ impl Core {
             watch: Mutex::new(None),
             typing: AtomicBool::new(false),
             listener_ok: AtomicBool::new(false),
+            mods_held: AtomicBool::new(false),
             typed_over: AtomicBool::new(false),
             stop_typing: AtomicBool::new(false),
+            pending_end: std::sync::atomic::AtomicU8::new(END_NONE),
             last_busy: Mutex::new(None),
             recording_gen: std::sync::atomic::AtomicU64::new(0),
             recover_gen: std::sync::atomic::AtomicU64::new(0),
@@ -436,6 +518,8 @@ impl Core {
             dictations: AtomicU64::new(0),
             loading: Mutex::new(None),
             enabled: AtomicBool::new(true),
+            media: crate::nowplaying::MediaPause::system(),
+            app: Mutex::new(None),
             settings: Mutex::new(settings),
         })
     }
@@ -518,6 +602,7 @@ impl Core {
         self.typing.store(false, Ordering::Relaxed);
         if key {
             self.machine.lock().reset();
+            self.media.resume(Duration::ZERO);
             self.recording.lock().take();
             self.pieces.lock().take();
             self.target.lock().take();
@@ -703,8 +788,10 @@ impl Core {
 
     // ------------------------------------------------------------ device pick
 
-    /// At startup, in the background: look this computer up in the registry, and with no
-    /// answer there, measure the active model once.
+    /// At startup, in the background: keep this computer's own benchmark pick if it has a passing
+    /// one; else look this computer up in the registry, then in the community results (only a pick
+    /// at least `benchmark::MIN_AGREE` senders agree on), and with no answer from either, measure
+    /// the active model once.
     pub fn start_device_pick(self: &Shared) {
         let me = self.clone();
         std::thread::spawn(move || me.device_pick());
@@ -712,34 +799,38 @@ impl Core {
 
     fn device_pick(self: &Shared) {
         let key = benchmark::device().key.clone();
-        let entry = benchmark::fetch_registry().lookup(&key).cloned();
-        if let Some(entry) = entry {
-            // A device the registry knows needs no benchmark. Switch only if that model is
-            // here, or if no model is installed yet (onboarding downloads the recommended one);
-            // never strand someone who has a working model on one they haven't downloaded.
-            let usable = models::installed(&entry.model)
-                || !models::MODELS.iter().any(|m| models::installed(m.id));
+        let lookup = benchmark::LookupDone;
+        let report = benchmark::load_report();
+        let plan = plan_device_pick(
+            report.as_ref(),
+            || benchmark::fetch_registry().lookup(&key).map(|e| e.model.clone()),
+            || benchmark::fetch_community(&key).lookup(&key),
+        );
+        drop(lookup);
+        if let DevicePlan::Remote(model, source) = plan {
+            // A device the registry or community knows needs no benchmark.
+            let any_installed = models::MODELS.iter().any(|m| models::installed(m.id));
             // (applies, the model changed)
             let (apply, changed) = {
                 let mut s = self.settings.lock();
-                let apply = s.model_source == "default" && usable;
-                let changed = apply && s.model != entry.model;
+                let apply = remote_pick_applies(&s.model_source, source, models::installed(&model), any_installed);
+                let changed = apply && s.model != model;
                 if apply {
-                    s.model = entry.model.clone();
-                    s.model_source = "registry".into();
+                    s.model = model.clone();
+                    s.model_source = source.into();
                 }
                 (apply, changed)
             };
             if apply {
                 self.save_settings();
-                if changed && models::installed(&entry.model) {
+                if changed && models::installed(&model) {
                     self.wait_quiet();
                     self.load_model();
                 }
             }
             return;
         }
-        if benchmark::load_report().is_some() {
+        if plan == DevicePlan::Keep {
             return;
         }
         while self.active_model().is_none() {
@@ -770,6 +861,19 @@ impl Core {
             self.status().0,
             Status::Recording | Status::Transcribing | Status::Typing | Status::Loading
         ) || self.recording.lock().is_some()
+    }
+
+    /// A dictation is recording, being written or being typed: a file being transcribed waits (file.rs).
+    pub(crate) fn dictating(&self) -> bool {
+        matches!(self.status().0, Status::Recording | Status::Transcribing | Status::Typing) || self.recording.lock().is_some()
+    }
+
+    /// Run 16 kHz audio through the loaded model, holding it for this audio only (file.rs).
+    pub(crate) fn transcribe_audio(&self, audio: &[f32], language: &str) -> anyhow::Result<String> {
+        match self.engine.lock().as_mut() {
+            Some((_, engine)) => engine.transcribe(audio, language),
+            None => anyhow::bail!("No model is loaded"),
+        }
     }
 
     /// Hold until no dictation is happening, so a recording is never delayed by more than
@@ -899,9 +1003,9 @@ impl Core {
             }
         }
         // Keep earlier results for models this run skipped, but only from this version of Silas
-        // and this speech set: numbers from another build aren't comparable.
+        // (load_report already drops another speech set): numbers from another build aren't comparable.
         let mut results: Vec<ModelResult> = benchmark::load_report()
-            .filter(|r| r.silas == env!("CARGO_PKG_VERSION") && r.suite == benchmark::SUITE_ID)
+            .filter(|r| r.silas == env!("CARGO_PKG_VERSION"))
             .map(|r| r.results)
             .unwrap_or_default()
             .into_iter()
@@ -957,13 +1061,18 @@ impl Core {
         let mut settings = settings;
         let trigger = Trigger::parse(&settings.hotkey)
             .ok_or_else(|| format!("{} is not a key Silas can use", settings.hotkey))?;
+        // Choosing a key ends the second key. Otherwise it's the core's, like the model: the
+        // interface's copy may lag. The retype key is checked against this one.
+        settings.hotkey_fallback = {
+            let cur = self.settings.lock();
+            if settings.hotkey == cur.hotkey { cur.hotkey_fallback.clone() } else { None }
+        };
+        let again = again::trigger(&settings)?;
         settings.update_channel = settings.effective_channel().into();
         let old = {
             let mut cur = self.settings.lock();
             settings.model = cur.model.clone();
             settings.model_source = cur.model_source.clone();
-            // Choosing a key ends the second key. Otherwise it's the core's, like the model: the interface's copy may lag.
-            settings.hotkey_fallback = if settings.hotkey == cur.hotkey { cur.hotkey_fallback.clone() } else { None };
             std::mem::replace(&mut *cur, settings.clone())
         };
         {
@@ -971,6 +1080,7 @@ impl Core {
             m.trigger = trigger;
             m.fallback = settings.hotkey_fallback.as_deref().and_then(Trigger::parse);
             m.tap_to_toggle = settings.tap_to_toggle;
+            m.again.set(again);
         }
         self.sync_blocked();
         self.save_settings();
@@ -1030,6 +1140,8 @@ impl Core {
     }
 
     fn handle_key(self: &Shared, ev: &handy_keys::KeyEvent) {
+        use handy_keys::Modifiers as M;
+        self.mods_held.store(ev.modifiers.intersects(M::CMD | M::CTRL | M::OPT | M::SHIFT), Ordering::Relaxed);
         if !self.is_enabled() {
             // Paused: the hotkey does nothing, but picking a new one still works while a listener runs.
             self.capture_key(ev);
@@ -1065,6 +1177,7 @@ impl Core {
             self.feed_watch(ev, now);
         }
         self.act(out);
+        self.again_key(ev);
     }
 
     /// A pending "pick the hotkey" request takes this key event. True when it did. Escape
@@ -1094,6 +1207,32 @@ impl Core {
     pub fn cancel_capture(&self) -> bool {
         let capture = self.capture.lock().take();
         capture.is_some_and(|tx| tx.send(Err(CANCELLED.to_string())).is_ok())
+    }
+
+    /// A command from the control socket (`control.rs`), stamped when it arrived so a quick tap
+    /// still reads as one when the microphone was slow to open. Paused, it does nothing, like the
+    /// hotkey.
+    pub fn on_control(self: &Shared, command: Control, at: Instant) {
+        self.survive(true, || {
+            if !self.is_enabled() {
+                return;
+            }
+            // As with the physical key: nothing starts while the last dictation is being typed.
+            if self.typing.load(Ordering::Relaxed) && matches!(command, Control::Press | Control::Toggle) {
+                self.refuse(Notice::Busy, "Still typing your last dictation. Press Escape to stop it.");
+                return;
+            }
+            let out = {
+                let mut m = self.machine.lock();
+                match command {
+                    Control::Press => m.external(true, at),
+                    Control::Release => m.external(false, at),
+                    Control::Toggle => m.toggle_from_ui(),
+                    Control::Cancel => m.cancel(),
+                }
+            };
+            self.act(out);
+        });
     }
 
     pub fn act(self: &Shared, out: Out) {
@@ -1208,9 +1347,14 @@ impl Core {
             let thread = std::thread::spawn(crate::focus::Target::capture);
             move || thread.join().ok().flatten()
         };
+        // Music playing out loud would end up in the dictation. Only sends a message; never waits.
+        if self.settings.lock().pause_media {
+            self.media.pause();
+        }
         // The overlay comes up now, before the microphone is open (that can take a moment with
         // a Bluetooth headset); its dot fills in when the first sound arrives.
         self.set_status(Status::Recording, None);
+        self.pending_end.store(END_NONE, Ordering::Relaxed);
         let device = self.settings.lock().microphone.clone();
         let host = self.host.clone();
         match Recording::start(device.as_deref(), move |lvl| host.level(lvl)) {
@@ -1228,7 +1372,34 @@ impl Core {
                         None => anyhow::bail!("No model is loaded"),
                     }
                 }));
-                *self.recording.lock() = Some(Live { rec: r, started: Instant::now(), pressed });
+                {
+                    // Escape (or `silas-ctl cancel`) on another thread while the mic was opening
+                    // already reset the key machine and found no recording to stop. Checking
+                    // under the recording lock means a cancel either sees this recording or
+                    // happened before the check.
+                    let mut live = self.recording.lock();
+                    let active = self.machine.lock().is_active();
+                    match after_mic_opened(active, self.pending_end.load(Ordering::Relaxed)) {
+                        MicOpened::Keep => *live = Some(Live { rec: r, started: Instant::now(), pressed }),
+                        MicOpened::Drop => {
+                            drop(live);
+                            self.target.lock().take();
+                            self.pieces.lock().take();
+                            drop(r);
+                            self.set_status(Status::Ready, None);
+                            return;
+                        }
+                        // Released before the mic opened (a slow Bluetooth headset): the
+                        // release found nothing to finish, so finish what was heard now.
+                        MicOpened::Finish => {
+                            *live = Some(Live { rec: r, started: Instant::now(), pressed });
+                            drop(live);
+                            self.pending_end.store(END_NONE, Ordering::Relaxed);
+                            self.finish_recording(Ending::Key);
+                            return;
+                        }
+                    }
+                }
                 let gen = self.recording_gen.fetch_add(1, Ordering::Relaxed) + 1;
                 self.cue("start");
                 // Hands-free mode left on by mistake would grow without end; stop at 5 minutes.
@@ -1245,6 +1416,7 @@ impl Core {
             }
             Err(e) => {
                 let _ = capture();
+                self.media.resume(Duration::ZERO);
                 self.machine.lock().reset();
                 self.fail(format!("Microphone: {e}"));
             }
@@ -1271,9 +1443,16 @@ impl Core {
 
     fn cancel_recording(self: &Shared) {
         // Release the lock before set_status, which waits on the main thread for the tray.
-        let recording = self.recording.lock().take();
+        let recording = {
+            let mut live = self.recording.lock();
+            if live.is_none() {
+                self.pending_end.store(END_CANCEL, Ordering::Relaxed);
+            }
+            live.take()
+        };
         self.target.lock().take();
         self.pieces.lock().take();
+        self.media.resume(Duration::ZERO);
         if let Some(live) = recording {
             drop(live);
             self.set_status(Status::Ready, None);
@@ -1281,11 +1460,22 @@ impl Core {
     }
 
     fn finish_recording(self: &Shared, ending: Ending) {
-        let recording = self.recording.lock().take();
+        let recording = {
+            let mut live = self.recording.lock();
+            if live.is_none() {
+                // A release while the mic is still opening: start_recording finishes it.
+                self.pending_end.store(END_FINISH, Ordering::Relaxed);
+            }
+            live.take()
+        };
         let Some(live) = recording else {
             return;
         };
         self.cue("stop");
+        // Once the tail is recorded, what was playing plays again. Whether the tail is skipped is
+        // known only once write() reads the buffer, so wait out the longest one: media never
+        // resumes into a tail that is still recording.
+        self.media.resume(tail_for(ending, false));
         // Carried by value: a new dictation may start before this one finishes typing.
         let target = self.target.lock().take();
         let pieces = self.pieces.lock().take();
@@ -1307,9 +1497,17 @@ impl Core {
         let me = self;
         let Live { rec, started, pressed } = live;
         let released = Instant::now();
+        if let Some(p) = &pieces {
+            p.key_up();
+        }
         // A short tail first, so the last word isn't cut off; after that, what's said isn't
-        // dictation.
-        let tail = tail_for(ending);
+        // dictation. If the speaker had already stopped, there is no last word to wait for.
+        let quiet = ending == Ending::Key && {
+            let (raw, rate) = rec.tap();
+            let buffer = raw.lock();
+            crate::pieces::ends_quiet(&buffer, rate)
+        };
+        let tail = tail_for(ending, quiet);
         std::thread::sleep(tail);
         let mut rec = rec;
         rec.stop();
@@ -1327,7 +1525,10 @@ impl Core {
         }
         me.set_status(Status::Transcribing, None);
         let done = pieces.map(|p| p.finish()).unwrap_or_default();
-        let rest = rec.finish_from(done.raw_samples);
+        let mut rest = rec.finish_from(done.raw_samples);
+        if quiet {
+            crate::pieces::pad_quiet(&mut rest);
+        }
         let language = me.settings.lock().language.clone();
         let raw = match crate::pieces::transcript(done, &rest, |audio| {
             let mut engine = me.engine.lock();
@@ -1343,8 +1544,10 @@ impl Core {
             }
         };
         let s = me.settings.lock().clone();
-        let mut text = me.dict.lock().apply(&raw, s.remove_fillers);
-        if text.trim().is_empty() {
+        let text = me.dict.lock().apply(&raw, s.remove_fillers);
+        // The app's style, spoken code and snippets (`core/shaping.rs`).
+        let (mut text, s) = me.shape(target.as_ref(), &text, s);
+        if nothing_to_type(&text) {
             me.set_status(Status::Ready, None);
             return;
         }
@@ -1378,7 +1581,19 @@ impl Core {
                         .as_ref()
                         .is_none_or(|t| t.still_here(after_focus_key)))
         };
-        if !lost_focus {
+        // Keys typed while the user still holds Super or Ctrl from a keybinding would reach the
+        // compositor as shortcuts, so wait for the keys to come up, or don't type.
+        #[cfg(target_os = "linux")]
+        if !lost_focus && me.listener_ok.load(Ordering::Relaxed) {
+            let until = Instant::now() + Duration::from_secs(3);
+            while me.mods_held.load(Ordering::Relaxed) && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if me.mods_held.load(Ordering::Relaxed) {
+                typing_error = Some("Let go of Ctrl, Alt, Shift and Super so Silas can type".into());
+            }
+        }
+        if !lost_focus && typing_error.is_none() {
             me.set_status(Status::Typing, None);
             me.typed_over.store(false, Ordering::Relaxed);
             me.stop_typing.store(false, Ordering::Relaxed);
@@ -1425,6 +1640,7 @@ impl Core {
                 .max(secs),
             latency_ms: latency,
             corrected: None,
+            file: None,
         };
         {
             let mut h = me.history.lock();
@@ -1529,7 +1745,8 @@ impl Core {
         let today = Local::now().date_naive();
         let mut s = Stats::default();
         let mut speak_secs = 0f32;
-        for i in h.iter() {
+        // Text from a file wasn't dictated: it would swamp the speaking pace and time saved.
+        for i in h.iter().filter(|i| i.file.is_none()) {
             s.dictations += 1;
             s.words_total += i.words as u64;
             speak_secs += i.duration_s;
@@ -1571,12 +1788,77 @@ pub fn overlay_shown(status: Status, enabled: bool, notice_until: Option<Instant
     (enabled && overlay_status(status)) || notice_until.is_some_and(|until| now < until)
 }
 
+const END_NONE: u8 = 0;
+const END_FINISH: u8 = 1;
+const END_CANCEL: u8 = 2;
+
+#[derive(Debug, PartialEq)]
+enum MicOpened {
+    Keep,
+    Finish,
+    Drop,
+}
+
+/// What to do with a mic that just opened. `active`: the key gesture is still going. `pending`:
+/// how it ended if the end already ran and found no recording. An end that hasn't run yet will
+/// find the recording kept here.
+fn after_mic_opened(active: bool, pending: u8) -> MicOpened {
+    match (active, pending) {
+        (true, _) | (false, END_NONE) => MicOpened::Keep,
+        (false, END_FINISH) => MicOpened::Finish,
+        _ => MicOpened::Drop,
+    }
+}
+
+/// An empty or blank result types nothing, but a spoken "new line" alone is a line break to type.
+fn nothing_to_type(text: &str) -> bool {
+    text.trim().is_empty() && !text.contains('\n')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Review first-F2 on #56: a release before a slow mic opened threw the dictation away,
+    /// the same as a cancel.
+    #[test]
+    fn a_release_before_the_mic_opens_still_finishes_and_a_cancel_drops() {
+        assert_eq!(after_mic_opened(false, END_FINISH), MicOpened::Finish);
+        assert_eq!(after_mic_opened(false, END_CANCEL), MicOpened::Drop);
+        // The end hasn't run yet: keep it, and the end takes it.
+        assert_eq!(after_mic_opened(false, END_NONE), MicOpened::Keep);
+        assert_eq!(after_mic_opened(true, END_NONE), MicOpened::Keep);
+    }
+
+    /// Review first-F1 on #56: `silas-ctl press` while typing went on to start a recording
+    /// instead of saying why nothing starts, as the physical key does.
+    #[test]
+    fn a_control_press_while_typing_is_refused_as_busy() {
+        let _store = STORE_LOCK.lock();
+        let (core, seen, dir) = seen_core("ctl-typing");
+        core.typing.store(true, Ordering::Relaxed);
+        core.on_control(Control::Press, Instant::now());
+        assert_eq!(
+            seen.notices(),
+            vec![("busy".to_string(), "Still typing your last dictation. Press Escape to stop it.".to_string())]
+        );
+        assert!(!core.machine.lock().is_active());
+        assert!(core.recording.lock().is_none());
+        done(dir);
+    }
+
     /// Review sol-F2 on #23: an error's notice went out while its status hid the overlay, and
     /// with the main window hidden nothing showed it.
+    #[test]
+    fn a_spoken_line_break_alone_is_still_typed() {
+        let none: &[crate::snippets::Snippet] = &[];
+        let shaped = crate::style::render("new line", crate::style::Style::Code, none);
+        assert_eq!(shaped, "\n");
+        assert!(!nothing_to_type(&shaped));
+        assert!(nothing_to_type(""));
+        assert!(nothing_to_type("  "));
+    }
+
     #[test]
     fn a_notice_keeps_the_overlay_up_until_it_runs_out() {
         let now = Instant::now();
@@ -1966,9 +2248,15 @@ mod tests {
 
     #[test]
     fn the_last_word_gets_a_tail_and_the_time_limit_does_not() {
-        assert_eq!(tail_for(Ending::Key), TAIL);
+        assert_eq!(tail_for(Ending::Key, false), TAIL);
         assert!(TAIL >= Duration::from_millis(150) && TAIL <= Duration::from_millis(300), "{TAIL:?}");
-        assert_eq!(tail_for(Ending::Limit), Duration::ZERO);
+        assert_eq!(tail_for(Ending::Limit, false), Duration::ZERO);
+        assert_eq!(tail_for(Ending::Limit, true), Duration::ZERO);
+    }
+
+    #[test]
+    fn a_release_after_the_speaker_stopped_waits_no_tail() {
+        assert_eq!(tail_for(Ending::Key, true), Duration::ZERO);
     }
 
     #[test]
@@ -1996,13 +2284,61 @@ mod tests {
         assert!(!should_start_load(Some("parakeet-v3"), "parakeet-v3"));
     }
 
+    /// Review first-F2 and sol-F2 on #64: the registry and community lookups ran before the
+    /// local report, so a community pick overrode this computer's own benchmark.
+    #[test]
+    fn this_computers_own_benchmark_wins_over_any_lookup() {
+        let r = |m: &str, speed: f32, wer: f32| ModelResult { model: m.into(), speed, wer, ..Default::default() };
+        let device = benchmark::build_device("macos", "Apple M5", "macOS 27", 10, 32, None);
+        let local = Report::new(device.clone(), vec![r("parakeet-v3", 20.0, 0.05), r("cohere-int4", 12.0, 0.03)]);
+        assert_eq!(local.pick.as_deref(), Some("cohere-int4"));
+        let asked = std::cell::Cell::new(0);
+        let lookup = |m: &str| {
+            asked.set(asked.get() + 1);
+            Some(m.to_string())
+        };
+        // A passing local pick: no lookup is consulted, and nothing changes.
+        let plan = plan_device_pick(Some(&local), || lookup("parakeet-v3"), || lookup("parakeet-v3"));
+        assert_eq!((plan, asked.get()), (DevicePlan::Keep, 0));
+        // A local report with no passing pick still lets the registry, then the community, answer.
+        let failing = Report::new(device, vec![r("parakeet-v3", 4.0, 0.05)]);
+        assert_eq!(
+            plan_device_pick(Some(&failing), || None, || Some("parakeet-v3".into())),
+            DevicePlan::Remote("parakeet-v3".into(), "community")
+        );
+        assert_eq!(
+            plan_device_pick(Some(&failing), || Some("cohere-int4".into()), || panic!("the registry answered")),
+            DevicePlan::Remote("cohere-int4".into(), "registry")
+        );
+        assert_eq!(plan_device_pick(Some(&failing), || None, || None), DevicePlan::Keep);
+        // No report and no answer: measure.
+        assert_eq!(plan_device_pick(None, || None, || None), DevicePlan::Measure);
+    }
+
+    /// Review first-F1 on #64: a community pick, which anyone can post, chose the model first-run
+    /// setup downloads.
+    #[test]
+    fn a_community_pick_never_chooses_a_download() {
+        // Nothing installed yet: the registry may choose the download, the community may not.
+        assert!(remote_pick_applies("default", "registry", false, false));
+        assert!(!remote_pick_applies("default", "community", false, false));
+        // A model that is here may be switched to from either.
+        assert!(remote_pick_applies("default", "community", true, true));
+        assert!(remote_pick_applies("default", "registry", true, true));
+        // Never to one that isn't downloaded while another works, and never over a choice.
+        assert!(!remote_pick_applies("default", "registry", false, true));
+        assert!(!remote_pick_applies("default", "community", false, true));
+        assert!(!remote_pick_applies("user", "registry", true, true));
+        assert!(!remote_pick_applies("benchmark", "community", true, true));
+    }
+
     #[test]
     fn automatic_changes_never_override_the_user() {
         assert!(!allows_model_change("user", true, true));
         assert!(allows_model_change("user", false, true));
         // The user's model was deleted: setup may load its pick.
         assert!(allows_model_change("user", true, false));
-        for src in ["default", "registry", "benchmark"] {
+        for src in ["default", "registry", "community", "benchmark"] {
             assert!(allows_model_change(src, true, true));
             assert!(allows_model_change(src, false, true));
         }
