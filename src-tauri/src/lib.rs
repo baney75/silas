@@ -1,5 +1,7 @@
 pub mod commands;
 pub mod host;
+#[cfg(target_os = "linux")]
+pub mod layer;
 #[cfg(test)]
 mod settings_bench;
 pub mod tray;
@@ -8,6 +10,8 @@ pub mod updates;
 // The engine lives in core/voice (polycarp-voice). Re-exported so `crate::core::Shared`,
 // `silas_lib::models` and the other old paths keep working.
 pub use polycarp_voice::{audio, benchmark, core, dictionary, focus, keys, models, permissions, store, style, typer};
+#[cfg(unix)]
+pub use polycarp_voice::ctl;
 
 use tauri::{AppHandle, Manager};
 
@@ -31,8 +35,12 @@ pub fn run() {
     .init();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            show_main(app)
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _| {
+            // Login autostart (or a desktop's autostart line) launching Silas again must not
+            // pop the window open; opening it from the launcher should.
+            if !argv.iter().any(|a| a == "--background") {
+                show_main(app)
+            }
         }))
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -55,9 +63,15 @@ pub fn run() {
             }
 
             tray::build(&handle)?;
+            #[cfg(target_os = "linux")]
+            if let Some(w) = handle.get_webview_window("overlay") {
+                layer::setup(&w);
+            }
             core.load_model();
             core.start_device_pick();
             polycarp_voice::start_listener(core.clone());
+            #[cfg(unix)]
+            polycarp_voice::control::serve(core.clone());
             updates::schedule(handle.clone());
 
             let background = std::env::args().any(|a| a == "--background");

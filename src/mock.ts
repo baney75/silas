@@ -6,6 +6,7 @@
 //   ?update            an update is waiting
 //   ?unmeasured        this computer has not been benchmarked yet
 //   ?benchmarking      a benchmark is running when the page opens
+//   ?mixed             the last benchmark holds a pick and a model that misses both bars
 
 import { findSnippet, triggerKey } from "./appstyles";
 import type {
@@ -229,7 +230,10 @@ async function benchmark(all: boolean) {
 }
 
 if (!onboarding && !params.has("unmeasured")) {
-  report = { schema: 1, silas: "0.1.0", suite: SUITE, device, results: [mockScores["parakeet-v3"]], pick: "parakeet-v3", ran_at: iso(2 * HOUR) };
+  const results = params.has("mixed")
+    ? [mockScores["parakeet-v3"], { ...mockScores["parakeet-v3-onnx"], speed: 6.1, wer: 0.112 }, mockScores["cohere-int4"]]
+    : [mockScores["parakeet-v3"]];
+  report = { schema: 1, silas: "0.1.0", suite: SUITE, device, results, pick: pickModel(results), ran_at: iso(2 * HOUR) };
   applyReport(report);
 }
 if (params.has("benchmarking")) {

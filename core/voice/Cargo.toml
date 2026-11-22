@@ -42,6 +42,8 @@ enigo = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+wayland-client = "0.31"
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
 x11rb = { version = "0.13", features = ["xkb", "xtest"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]

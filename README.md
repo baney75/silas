@@ -30,6 +30,30 @@ irm https://raw.githubusercontent.com/baney75/silas/main/install.ps1 | iex
 installs the `.deb` on Debian and Ubuntu, the `.rpm` on Fedora and openSUSE Tumbleweed, and otherwise an
 AppImage with a launcher entry and a udev rule so Silas can read the hold-to-talk key.
 
+**Arch Linux and Omarchy**: the same line builds the native `silas-git` package from source (a few
+minutes), which installs `/usr/bin/silas` and `silas-ctl`, the udev rule for the hold-to-talk key, and
+Hyprland keybindings. By hand:
+
+```sh
+git clone https://github.com/baney75/silas && cd silas/packaging/arch && makepkg -si
+```
+
+Then put Silas on Omarchy's dictation keys (hold **F9** to talk, **Super + Ctrl + X** for
+hands-free) by adding this to `~/.config/hypr/bindings.lua`:
+
+```lua
+local silas = dofile("/usr/share/silas/hyprland.lua")
+silas.hold("SUPER + SHIFT + code:201") -- optional: the Copilot key
+```
+
+The bindings run `silas-ctl press` and `silas-ctl release`. Hyprland swallows the keys, so
+apps never see them. Silas types through Wayland's virtual-keyboard protocol, floats its
+overlay as a layer surface that never takes the keyboard, and on Hyprland puts the text back
+in the window where you started. The package is built on your machine and isn't in a repository,
+so `pacman -Syu` won't update it and Silas doesn't update itself: run the install line again to update.
+If you used voxtype, stop it so two apps don't share the keys:
+`systemctl --user disable --now voxtype`.
+
 Run the same line again to update by hand. Silas also updates itself. macOS installs the stable
 channel (`SILAS_CHANNEL=nightly` for nightly); Windows and Linux install nightly until a stable
 release carries them. Pick any channel later in Settings › Updates.
@@ -166,7 +190,7 @@ secrets. See [docs/channels.md](docs/channels.md) and [docs/signing.md](docs/sig
 | --- | --- |
 | Holding the key does nothing (macOS) | Click Fix Permission on the Silas home screen, then allow Silas when macOS asks. By hand: System Settings › Privacy & Security › Accessibility, select Silas, click the minus button, click plus and add Silas from Applications, then turn on its switch. Turning the switch off and on doesn't help. |
 | Words are typed into the wrong place | Silas types where the dictation started. Click into the field before you hold the key. |
-| Nothing is typed into a Wayland app (Linux) | Install `wtype`. |
+| Nothing is typed into a Wayland app (Linux) | Hyprland and Sway work as they are. On GNOME or KDE, install `ydotool`. |
 | The AppImage won't start (Linux) | Install your distro's FUSE 2 package (`libfuse2` or `fuse2`). |
 
 Still stuck? [Open an issue](https://github.com/baney75/silas/issues/new) with your OS and
@@ -203,7 +227,8 @@ uses it by path, so this repo builds on its own.
 The default speech engine, transcribe.cpp, builds from source, so every platform needs CMake and a C++
 compiler (Xcode's command line tools on macOS, Visual Studio's C++ tools on Windows).
 
-Linux needs `cmake g++ libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev libudev-dev libxdo-dev`.
+Linux needs `cmake g++ libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev libudev-dev libxdo-dev`,
+plus `libgtk-layer-shell0` at run time for the overlay on Wayland.
 
 ## Privacy
 

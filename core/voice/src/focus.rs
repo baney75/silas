@@ -143,8 +143,9 @@ pub fn exe_name(path: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_lowercase())
 }
 
-/// Hyprland's focused window, through `hyprctl activewindow -j`. Built everywhere so the parsing
-/// is tested on every platform; only Linux calls it.
+/// Hyprland's focused window, over the IPC socket `hyprctl` talks to (a read takes about 36 µs;
+/// starting `hyprctl` took milliseconds). Built everywhere so the parsing is tested on every
+/// platform; only Linux talks to Hyprland.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod hypr {
     pub const OVERLAY_TITLE: &str = "Silas Overlay";
@@ -154,46 +155,69 @@ mod hypr {
     pub struct Window {
         /// Address and class as one id (see `parse`).
         pub id: u64,
-        /// What `hyprctl dispatch focuswindow` needs to give it the keyboard back.
+        /// What a focus dispatch needs to give it the keyboard back.
         pub address: u64,
         /// Silas's recording overlay, which can take the keyboard as it opens even though it
         /// asks not to. Its other windows count as any app's: a click there is a choice.
         pub overlay: bool,
     }
 
-    /// Running under Hyprland, with `hyprctl` on the PATH.
-    fn available() -> bool {
-        std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some()
-            && std::env::var_os("PATH")
-                .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("hyprctl").is_file()))
+    /// The request socket: in the runtime dir since Hyprland 0.40, in /tmp before.
+    #[cfg(target_os = "linux")]
+    fn socket() -> Option<std::path::PathBuf> {
+        let sig = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE")?;
+        let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from);
+        runtime
+            .into_iter()
+            .chain([std::path::PathBuf::from("/tmp")])
+            .map(|dir| dir.join("hypr").join(&sig).join(".socket.sock"))
+            .find(|p| p.exists())
     }
 
+    /// Running under Hyprland.
+    #[cfg(target_os = "linux")]
+    pub fn running() -> bool {
+        socket().is_some()
+    }
+
+    /// Sends one request and reads the whole reply. None when Hyprland isn't there or didn't
+    /// answer.
+    #[cfg(target_os = "linux")]
+    fn ask(request: &str) -> Option<String> {
+        use std::io::{Read, Write};
+        let mut s = std::os::unix::net::UnixStream::connect(socket()?).ok()?;
+        // Hyprland answers from its main loop; a stalled compositor must not stall typing.
+        let wait = Some(std::time::Duration::from_millis(300));
+        s.set_read_timeout(wait).ok()?;
+        s.set_write_timeout(wait).ok()?;
+        s.write_all(request.as_bytes()).ok()?;
+        let mut out = String::new();
+        s.read_to_string(&mut out).ok()?;
+        Some(out)
+    }
+
+    /// Some(None) when Hyprland answered that no window has the keyboard (an empty workspace);
+    /// None when it didn't answer.
+    #[cfg(target_os = "linux")]
+    pub fn focused() -> Option<Option<Window>> {
+        answer(&ask("j/activewindow")?)
+    }
+
+    #[cfg(target_os = "linux")]
     pub fn active() -> Option<Window> {
-        parse(&query()?)
+        focused().flatten()
     }
 
     /// The focused window and its class, from one question to Hyprland.
+    #[cfg(target_os = "linux")]
     pub fn active_with_class() -> Option<(Window, Option<String>)> {
-        let json = query()?;
-        Some((parse(&json)?, class(&json)))
+        let json = ask("j/activewindow")?;
+        Some((answer(&json)??, class(&json)))
     }
 
+    #[cfg(target_os = "linux")]
     pub fn active_class() -> Option<String> {
-        class(&query()?)
-    }
-
-    fn query() -> Option<String> {
-        if !available() {
-            return None;
-        }
-        let out = std::process::Command::new("hyprctl")
-            .args(["activewindow", "-j"])
-            .output()
-            .ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        Some(String::from_utf8_lossy(&out.stdout).into_owned())
+        class(&ask("j/activewindow")?)
     }
 
     /// The window's class (`kitty`, `com.mitchellh.ghostty`), which names the app.
@@ -204,25 +228,63 @@ mod hypr {
     }
 
     /// Gives the keyboard to the window at `address`. False when Hyprland refused.
+    #[cfg(target_os = "linux")]
     pub fn focus(address: u64) -> bool {
-        available()
-            && std::process::Command::new("hyprctl")
-                .args(["dispatch", "focuswindow", &window_arg(address)])
-                .output()
-                .is_ok_and(|o| o.status.success())
+        focus_requests(address).iter().any(|r| ask(r).is_some_and(|reply| reply.trim() == "ok"))
     }
 
-    /// How `hyprctl dispatch` names a window: the address as `activewindow -j` prints it.
+    /// Hyprland 0.53 and later take Lua dispatches; older ones, and a Lua config that refuses
+    /// the call, take the classic dispatcher.
+    pub fn focus_requests(address: u64) -> [String; 2] {
+        let w = window_arg(address);
+        [format!("dispatch hl.dsp.focus({{ window = \"{w}\" }})"), format!("dispatch focuswindow {w}")]
+    }
+
+    /// How a dispatch names a window: the address as `activewindow` prints it.
     pub fn window_arg(address: u64) -> String {
         format!("address:0x{address:x}")
     }
 
-    /// The window's address and class as one id. An address alone can come back for a later
-    /// window once the first one closes; the class makes that much less likely to pass. None when
-    /// no window has the keyboard (`{}`) or the reply isn't JSON. The overlay is known by its
-    /// title (`tauri.conf.json`), which holds inside a Flatpak too, where pids don't match.
+    /// The main keyboard's active layout is plain US, or None when Hyprland can't say.
+    #[cfg(target_os = "linux")]
+    pub fn us_layout() -> Option<bool> {
+        layout_is_us(&ask("j/devices")?)
+    }
+
+    pub fn layout_is_us(devices: &str) -> Option<bool> {
+        let v: serde_json::Value = serde_json::from_str(devices).ok()?;
+        let keyboards = v.get("keyboards")?.as_array()?;
+        let main = keyboards.iter().find(|k| k.get("main").and_then(|m| m.as_bool()) == Some(true))?;
+        let active = main.get("active_layout_index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+        let field = |key: &str| main.get(key).and_then(|f| f.as_str()).unwrap_or("");
+        Some(is_plain_us(field("layout"), field("variant"), active))
+    }
+
+    /// "us" with no variant at the active index: dvorak, colemak and intl map keys differently.
+    pub fn is_plain_us(layouts: &str, variants: &str, active: usize) -> bool {
+        let layout = layouts.split(',').nth(active).map(str::trim);
+        let variant = variants.split(',').nth(active).map(str::trim).unwrap_or("");
+        layout == Some("us") && variant.is_empty()
+    }
+
+    /// An `activewindow` reply: Some(None) for `{}`, None when it isn't JSON.
+    pub fn answer(reply: &str) -> Option<Option<Window>> {
+        let v: serde_json::Value = serde_json::from_str(reply).ok()?;
+        Some(window(&v))
+    }
+
+    /// The window in a reply, or None when no window has the keyboard (`{}`) or the reply isn't
+    /// JSON.
+    #[cfg(test)]
     pub fn parse(json: &str) -> Option<Window> {
-        let v: serde_json::Value = serde_json::from_str(json).ok()?;
+        answer(json).flatten()
+    }
+
+    /// The window's address and class as one id. An address alone can come back for a later
+    /// window once the first one closes; the class makes that much less likely to pass. The
+    /// overlay is known by its title (`tauri.conf.json`), which holds inside a Flatpak too, where
+    /// pids don't match.
+    fn window(v: &serde_json::Value) -> Option<Window> {
         let addr = v.get("address")?.as_str()?.trim();
         let address = u64::from_str_radix(addr.trim_start_matches("0x"), 16).ok().filter(|a| *a != 0)?;
         let class = v.get("class").and_then(|c| c.as_str()).unwrap_or("");
@@ -237,6 +299,12 @@ mod hypr {
     }
 }
 
+/// Running under Hyprland, which tiles plain windows and hands them the keyboard.
+#[cfg(target_os = "linux")]
+pub fn hyprland() -> bool {
+    hypr::running()
+}
+
 /// Where a dictation's text goes: the text field that had the keyboard when the hotkey went
 /// down, or the one the user clicked into since. A window that opens mid-dictation steals
 /// focus without the user asking, so Silas puts the keyboard back here before it types and
@@ -245,14 +313,12 @@ mod hypr {
 pub struct Target {
     #[cfg(target_os = "macos")]
     mac: mac::Target,
-    /// Hyprland: the window that had the keyboard, and the last check of it (`linux_here`).
+    /// Hyprland: the window that had the keyboard.
     #[cfg(target_os = "linux")]
     window: hypr::Window,
     /// Its class, which names the app (`style.rs`).
     #[cfg(target_os = "linux")]
     class: Option<String>,
-    #[cfg(target_os = "linux")]
-    checked: parking_lot::Mutex<Option<(std::time::Instant, bool)>>,
 }
 
 /// Where the Linux target stands, from the window that had the keyboard and the one that has it
@@ -279,6 +345,24 @@ fn linux_restore(
     }
 }
 
+/// `linux_restore` from Hyprland's whole answer, where Some(None) means no window has the
+/// keyboard: the user went to an empty workspace. Nobody chose another window there, so the
+/// keyboard goes back to the target rather than the text going nowhere.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn linux_restore_from(
+    then: &hypr::Window,
+    now: Option<Option<hypr::Window>>,
+    refocus: impl FnOnce(u64) -> Option<hypr::Window>,
+) -> Restore {
+    match now {
+        Some(None) => match refocus(then.address) {
+            Some(w) if w.id == then.id => Restore::Restored,
+            _ => Restore::Failed,
+        },
+        now => linux_restore(then, now.flatten(), refocus),
+    }
+}
+
 /// Hands the keyboard back to the window at `address` and says which window has it now.
 #[cfg(target_os = "linux")]
 fn hypr_refocus(address: u64) -> Option<hypr::Window> {
@@ -296,7 +380,7 @@ impl Target {
 
     #[cfg(target_os = "linux")]
     pub fn capture() -> Option<Self> {
-        hypr::active_with_class().map(|(window, class)| Self { window, class, checked: parking_lot::Mutex::new(None) })
+        hypr::active_with_class().map(|(window, class)| Self { window, class })
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -321,24 +405,19 @@ impl Target {
         #[cfg(target_os = "macos")]
         return self.mac.restore();
         #[cfg(target_os = "linux")]
-        return linux_restore(&self.window, hypr::active(), hypr_refocus);
+        return linux_restore_from(&self.window, hypr::focused(), hypr_refocus);
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         Restore::Elsewhere
     }
 
-    /// Asking Hyprland starts a process, so while typing one answer stands for 100 ms.
+    /// While typing: the overlay taking the keyboard is handed back; a move to an empty
+    /// workspace stops the typing.
     #[cfg(target_os = "linux")]
     fn linux_here(&self) -> bool {
-        let now = std::time::Instant::now();
-        let mut checked = self.checked.lock();
-        if let Some((at, here)) = *checked {
-            if now.duration_since(at) < std::time::Duration::from_millis(100) {
-                return here;
-            }
+        match hypr::focused() {
+            Some(None) => false,
+            now => linux_restore(&self.window, now.flatten(), hypr_refocus) != Restore::Failed,
         }
-        let here = linux_restore(&self.window, hypr::active(), hypr_refocus) != Restore::Failed;
-        *checked = Some((now, here));
-        here
     }
 
     /// False once something else has clearly taken the keyboard from the captured window.
@@ -994,7 +1073,10 @@ pub fn us_layout() -> bool {
 
 #[cfg(target_os = "linux")]
 pub fn us_layout() -> bool {
-    // X11 reports the layout; Wayland compositors don't share it, so trust the locale.
+    if let Some(us) = hypr::us_layout() {
+        return us;
+    }
+    // X11 reports the layout; other Wayland compositors don't share it, so trust the locale.
     if let Ok(o) = std::process::Command::new("setxkbmap")
         .arg("-query")
         .output()
@@ -1127,6 +1209,73 @@ mod hypr_tests {
     fn the_hand_back_names_the_window_as_hyprland_printed_it() {
         let w = hypr::parse(RECORDED).expect("a window");
         assert_eq!(hypr::window_arg(w.address), "address:0x55ef19943100");
+        // Lua dispatch first (Hyprland 0.53+), then the classic dispatcher.
+        assert_eq!(
+            hypr::focus_requests(w.address),
+            [
+                r#"dispatch hl.dsp.focus({ window = "address:0x55ef19943100" })"#.to_string(),
+                "dispatch focuswindow address:0x55ef19943100".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_empty_workspace_is_an_answer_and_garbage_is_not() {
+        assert_eq!(hypr::answer("{}"), Some(None));
+        assert_eq!(hypr::answer(""), None);
+        assert_eq!(hypr::answer("Invalid"), None);
+        assert_eq!(hypr::answer(RECORDED).flatten(), hypr::parse(RECORDED));
+    }
+
+    /// Review r3 on #6: with no window focused, the text went nowhere.
+    #[test]
+    fn an_empty_workspace_brings_the_target_back() {
+        let target = window(7, false);
+        let got = linux_restore_from(&target, Some(None), |address| {
+            assert_eq!(address, target.address);
+            Some(target)
+        });
+        assert_eq!(got, Restore::Restored);
+        assert_eq!(linux_restore_from(&target, Some(None), |_| None), Restore::Failed);
+        // Otherwise the same as `linux_restore`.
+        let never = |_| -> Option<hypr::Window> { panic!("only the overlay is moved off") };
+        assert_eq!(linux_restore_from(&target, None, never), Restore::Elsewhere);
+        assert_eq!(linux_restore_from(&target, Some(Some(window(8, false))), never), Restore::Failed);
+        assert_eq!(linux_restore_from(&target, Some(Some(target)), never), Restore::InPlace);
+    }
+
+    /// Review r1 on #6: a US layout with a dvorak variant mapped keys differently.
+    #[test]
+    fn only_plain_us_counts() {
+        assert!(hypr::is_plain_us("us", "", 0));
+        assert!(hypr::is_plain_us("us,de", ",", 0));
+        assert!(!hypr::is_plain_us("us,de", "", 1));
+        assert!(!hypr::is_plain_us("us", "dvorak", 0));
+        assert!(!hypr::is_plain_us("us,us", ",colemak", 1));
+        assert!(!hypr::is_plain_us("gb", "", 0));
+        let devices = r#"{"keyboards": [
+            {"name": "virtual", "layout": "gb", "variant": "", "active_layout_index": 0, "main": false},
+            {"name": "at-translated-set-2-keyboard", "layout": "us,de", "variant": ",", "active_layout_index": 1, "main": true}
+        ]}"#;
+        assert_eq!(hypr::layout_is_us(devices), Some(false));
+        assert_eq!(hypr::layout_is_us(&devices.replace("\"active_layout_index\": 1", "\"active_layout_index\": 0")), Some(true));
+        assert_eq!(hypr::layout_is_us("{}"), None);
+    }
+
+    /// Reads only. `cargo test --lib focus -- --ignored` inside a Hyprland session.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore]
+    fn reads_focus_cheaply() {
+        let w = hypr::active().expect("a focused window");
+        let t = std::time::Instant::now();
+        for _ in 0..50 {
+            assert_eq!(hypr::active().map(|a| a.id), Some(w.id));
+        }
+        let each = t.elapsed() / 50;
+        eprintln!("active(): {each:?} per call");
+        assert!(each < std::time::Duration::from_millis(2), "{each:?}");
+        assert!(hypr::us_layout().is_some());
     }
 
     #[test]
