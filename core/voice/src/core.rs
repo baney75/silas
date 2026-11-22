@@ -191,6 +191,51 @@ pub enum Scope {
     Auto,
 }
 
+/// Whether a registry or community pick for this device moves Silas to `model`. Only while the
+/// model is still the default one, and only to a model that is here: never strand someone who
+/// has a working model on one they haven't downloaded. With no model installed yet, the
+/// maintainer-approved registry may choose what first-run setup downloads; community results
+/// never may, since anyone can post them.
+fn remote_pick_applies(model_source: &str, source: &str, model_installed: bool, any_installed: bool) -> bool {
+    model_source == "default" && (model_installed || (source == "registry" && !any_installed))
+}
+
+/// What startup does about this computer's model.
+#[derive(Debug, PartialEq)]
+enum DevicePlan {
+    /// Nothing: this computer's own benchmark settles it, or a saved report says one already ran.
+    Keep,
+    /// Move to this model, if `remote_pick_applies`, from "registry" or "community".
+    Remote(String, &'static str),
+    /// Measure the active model once one loads.
+    Measure,
+}
+
+/// Decide from this computer's current report and the lookups, each called at most once. This
+/// computer's own passing pick comes first, as in `best_for_device_from`, and then no lookup runs:
+/// neither the registry nor the community overrides a measurement made here. Then the registry,
+/// then the community; with no answer, measure unless a report is already saved.
+fn plan_device_pick(
+    report: Option<&Report>,
+    registry: impl FnOnce() -> Option<String>,
+    community: impl FnOnce() -> Option<String>,
+) -> DevicePlan {
+    if report.is_some_and(|r| benchmark::best_for_device_from(Some(r)).is_some()) {
+        return DevicePlan::Keep;
+    }
+    if let Some(model) = registry() {
+        return DevicePlan::Remote(model, "registry");
+    }
+    if let Some(model) = community() {
+        return DevicePlan::Remote(model, "community");
+    }
+    if report.is_some() {
+        DevicePlan::Keep
+    } else {
+        DevicePlan::Measure
+    }
+}
+
 /// May a model change go ahead? A user's choice is never overridden by an automatic one,
 /// unless the model they chose is no longer installed and so there is no choice left to keep.
 pub fn allows_model_change(source: &str, auto: bool, chosen_installed: bool) -> bool {
@@ -392,10 +437,12 @@ pub enum Ending {
     Limit,
 }
 
-pub fn tail_for(ending: Ending) -> Duration {
+/// The tail a release records. None when the last moment before key up was already silence
+/// (`pieces::ends_quiet`): nobody is mid-word, and the quiet a tail would add is padded on instead.
+pub fn tail_for(ending: Ending, quiet: bool) -> Duration {
     match ending {
-        Ending::Key => TAIL,
-        Ending::Limit => Duration::ZERO,
+        Ending::Key if !quiet => TAIL,
+        Ending::Key | Ending::Limit => Duration::ZERO,
     }
 }
 
@@ -763,8 +810,10 @@ impl Core {
 
     // ------------------------------------------------------------ device pick
 
-    /// At startup, in the background: look this computer up in the registry, and with no
-    /// answer there, measure the active model once.
+    /// At startup, in the background: keep this computer's own benchmark pick if it has a passing
+    /// one; else look this computer up in the registry, then in the community results (only a pick
+    /// at least `benchmark::MIN_AGREE` senders agree on), and with no answer from either, measure
+    /// the active model once.
     pub fn start_device_pick(self: &Shared) {
         let me = self.clone();
         std::thread::spawn(move || me.device_pick());
@@ -772,34 +821,38 @@ impl Core {
 
     fn device_pick(self: &Shared) {
         let key = benchmark::device().key.clone();
-        let entry = benchmark::fetch_registry().lookup(&key).cloned();
-        if let Some(entry) = entry {
-            // A device the registry knows needs no benchmark. Switch only if that model is
-            // here, or if no model is installed yet (onboarding downloads the recommended one);
-            // never strand someone who has a working model on one they haven't downloaded.
-            let usable = models::installed(&entry.model)
-                || !models::MODELS.iter().any(|m| models::installed(m.id));
+        let lookup = benchmark::LookupDone;
+        let report = benchmark::load_report();
+        let plan = plan_device_pick(
+            report.as_ref(),
+            || benchmark::fetch_registry().lookup(&key).map(|e| e.model.clone()),
+            || benchmark::fetch_community(&key).lookup(&key),
+        );
+        drop(lookup);
+        if let DevicePlan::Remote(model, source) = plan {
+            // A device the registry or community knows needs no benchmark.
+            let any_installed = models::MODELS.iter().any(|m| models::installed(m.id));
             // (applies, the model changed)
             let (apply, changed) = {
                 let mut s = self.settings.lock();
-                let apply = s.model_source == "default" && usable;
-                let changed = apply && s.model != entry.model;
+                let apply = remote_pick_applies(&s.model_source, source, models::installed(&model), any_installed);
+                let changed = apply && s.model != model;
                 if apply {
-                    s.model = entry.model.clone();
-                    s.model_source = "registry".into();
+                    s.model = model.clone();
+                    s.model_source = source.into();
                 }
                 (apply, changed)
             };
             if apply {
                 self.save_settings();
-                if changed && models::installed(&entry.model) {
+                if changed && models::installed(&model) {
                     self.wait_quiet();
                     self.load_model();
                 }
             }
             return;
         }
-        if benchmark::load_report().is_some() {
+        if plan == DevicePlan::Keep {
             return;
         }
         while self.active_model().is_none() {
@@ -972,9 +1025,9 @@ impl Core {
             }
         }
         // Keep earlier results for models this run skipped, but only from this version of Silas
-        // and this speech set: numbers from another build aren't comparable.
+        // (load_report already drops another speech set): numbers from another build aren't comparable.
         let mut results: Vec<ModelResult> = benchmark::load_report()
-            .filter(|r| r.silas == env!("CARGO_PKG_VERSION") && r.suite == benchmark::SUITE_ID)
+            .filter(|r| r.silas == env!("CARGO_PKG_VERSION"))
             .map(|r| r.results)
             .unwrap_or_default()
             .into_iter()
@@ -1441,8 +1494,10 @@ impl Core {
             return;
         };
         self.cue("stop");
-        // Once the tail is recorded, what was playing plays again.
-        self.media.resume(tail_for(ending));
+        // Once the tail is recorded, what was playing plays again. Whether the tail is skipped is
+        // known only once write() reads the buffer, so wait out the longest one: media never
+        // resumes into a tail that is still recording.
+        self.media.resume(tail_for(ending, false));
         // Carried by value: a new dictation may start before this one finishes typing.
         let target = self.target.lock().take();
         let pieces = self.pieces.lock().take();
@@ -1464,9 +1519,17 @@ impl Core {
         let me = self;
         let Live { rec, started, pressed } = live;
         let released = Instant::now();
+        if let Some(p) = &pieces {
+            p.key_up();
+        }
         // A short tail first, so the last word isn't cut off; after that, what's said isn't
-        // dictation.
-        let tail = tail_for(ending);
+        // dictation. If the speaker had already stopped, there is no last word to wait for.
+        let quiet = ending == Ending::Key && {
+            let (raw, rate) = rec.tap();
+            let buffer = raw.lock();
+            crate::pieces::ends_quiet(&buffer, rate)
+        };
+        let tail = tail_for(ending, quiet);
         std::thread::sleep(tail);
         let mut rec = rec;
         rec.stop();
@@ -1484,7 +1547,10 @@ impl Core {
         }
         me.set_status(Status::Transcribing, None);
         let done = pieces.map(|p| p.finish()).unwrap_or_default();
-        let rest = rec.finish_from(done.raw_samples);
+        let mut rest = rec.finish_from(done.raw_samples);
+        if quiet {
+            crate::pieces::pad_quiet(&mut rest);
+        }
         let language = me.settings.lock().language.clone();
         let raw = match crate::pieces::transcript(done, &rest, |audio| {
             let mut engine = me.engine.lock();
@@ -2264,9 +2330,15 @@ mod tests {
 
     #[test]
     fn the_last_word_gets_a_tail_and_the_time_limit_does_not() {
-        assert_eq!(tail_for(Ending::Key), TAIL);
+        assert_eq!(tail_for(Ending::Key, false), TAIL);
         assert!(TAIL >= Duration::from_millis(150) && TAIL <= Duration::from_millis(300), "{TAIL:?}");
-        assert_eq!(tail_for(Ending::Limit), Duration::ZERO);
+        assert_eq!(tail_for(Ending::Limit, false), Duration::ZERO);
+        assert_eq!(tail_for(Ending::Limit, true), Duration::ZERO);
+    }
+
+    #[test]
+    fn a_release_after_the_speaker_stopped_waits_no_tail() {
+        assert_eq!(tail_for(Ending::Key, true), Duration::ZERO);
     }
 
     #[test]
@@ -2294,13 +2366,61 @@ mod tests {
         assert!(!should_start_load(Some("parakeet-v3"), "parakeet-v3"));
     }
 
+    /// Review first-F2 and sol-F2 on #64: the registry and community lookups ran before the
+    /// local report, so a community pick overrode this computer's own benchmark.
+    #[test]
+    fn this_computers_own_benchmark_wins_over_any_lookup() {
+        let r = |m: &str, speed: f32, wer: f32| ModelResult { model: m.into(), speed, wer, ..Default::default() };
+        let device = benchmark::build_device("macos", "Apple M5", "macOS 27", 10, 32, None);
+        let local = Report::new(device.clone(), vec![r("parakeet-v3", 20.0, 0.05), r("cohere-int4", 12.0, 0.03)]);
+        assert_eq!(local.pick.as_deref(), Some("cohere-int4"));
+        let asked = std::cell::Cell::new(0);
+        let lookup = |m: &str| {
+            asked.set(asked.get() + 1);
+            Some(m.to_string())
+        };
+        // A passing local pick: no lookup is consulted, and nothing changes.
+        let plan = plan_device_pick(Some(&local), || lookup("parakeet-v3"), || lookup("parakeet-v3"));
+        assert_eq!((plan, asked.get()), (DevicePlan::Keep, 0));
+        // A local report with no passing pick still lets the registry, then the community, answer.
+        let failing = Report::new(device, vec![r("parakeet-v3", 4.0, 0.05)]);
+        assert_eq!(
+            plan_device_pick(Some(&failing), || None, || Some("parakeet-v3".into())),
+            DevicePlan::Remote("parakeet-v3".into(), "community")
+        );
+        assert_eq!(
+            plan_device_pick(Some(&failing), || Some("cohere-int4".into()), || panic!("the registry answered")),
+            DevicePlan::Remote("cohere-int4".into(), "registry")
+        );
+        assert_eq!(plan_device_pick(Some(&failing), || None, || None), DevicePlan::Keep);
+        // No report and no answer: measure.
+        assert_eq!(plan_device_pick(None, || None, || None), DevicePlan::Measure);
+    }
+
+    /// Review first-F1 on #64: a community pick, which anyone can post, chose the model first-run
+    /// setup downloads.
+    #[test]
+    fn a_community_pick_never_chooses_a_download() {
+        // Nothing installed yet: the registry may choose the download, the community may not.
+        assert!(remote_pick_applies("default", "registry", false, false));
+        assert!(!remote_pick_applies("default", "community", false, false));
+        // A model that is here may be switched to from either.
+        assert!(remote_pick_applies("default", "community", true, true));
+        assert!(remote_pick_applies("default", "registry", true, true));
+        // Never to one that isn't downloaded while another works, and never over a choice.
+        assert!(!remote_pick_applies("default", "registry", false, true));
+        assert!(!remote_pick_applies("default", "community", false, true));
+        assert!(!remote_pick_applies("user", "registry", true, true));
+        assert!(!remote_pick_applies("benchmark", "community", true, true));
+    }
+
     #[test]
     fn automatic_changes_never_override_the_user() {
         assert!(!allows_model_change("user", true, true));
         assert!(allows_model_change("user", false, true));
         // The user's model was deleted: setup may load its pick.
         assert!(allows_model_change("user", true, false));
-        for src in ["default", "registry", "benchmark"] {
+        for src in ["default", "registry", "community", "benchmark"] {
             assert!(allows_model_change(src, true, true));
             assert!(allows_model_change(src, false, true));
         }

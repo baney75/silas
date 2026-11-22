@@ -1,0 +1,10 @@
+{
+  "id": "silas-bench-mixed-14clips-v2",
+  "clips": 14,
+  "seconds": 84.1,
+  "wait_clip_min_seconds": 5.0,
+  "wait_clip_max_seconds": 10.0,
+  "legacy_ids": [
+    "librispeech-test-clean-9clips-v1"
+  ]
+}

@@ -1,6 +1,12 @@
 //! Transcribes a long dictation while it's being spoken, a piece at a time, cutting only at pauses. On release only the
 //! last few seconds are left, so the wait stays short however long someone talked: a 47-second dictation used to take
 //! 3.5 s after the key came up (2026-11-07). A dictation with no piece ready works as it always did.
+//!
+//! It also guesses: when the speaker stops for a moment, the audio not yet in a piece is transcribed then, while the
+//! key is still down. If nothing but silence follows before release, that guess is the text and release decodes
+//! nothing; if speech follows, the guess is thrown away and release works as it always did. Cutting a short dictation
+//! at such a pause instead would lose the words around the cut (the model ends each piece as a sentence), so a guess
+//! becomes a piece only where a piece would have been cut anyway.
 
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,8 +26,17 @@ const IMPATIENT_PAUSE_SECONDS: f32 = 0.3;
 /// Quieter than this is the absence of speech on any microphone. Room tone can read lower; it can't count as louder.
 const SILENCE_RMS: f32 = 0.003;
 const FRAME_SECONDS: f32 = 0.02;
+/// A pause this long after speech, still going, is worth a guess: the speaker may be done. Shorter starts the guess
+/// sooner after the last word, so less of it is left at key up, at the cost of more guesses thrown away. On chapel1's
+/// ratchet clips 120 ms cut the median wait by 120 ms more than 200 ms did, for 9% more CPU (2026-11-22).
+const GUESS_PAUSE_SECONDS: f32 = 0.12;
+/// The most unprocessed speech worth a guess while no piece has been cut: a dictation that never paused long enough
+/// for a piece has only its guess to shorten the wait. Once pieces are being cut, `MIN_PIECE_SECONDS` is the most.
+const GUESS_MAX_SECONDS: f32 = 10.0;
+/// Silence this long just before key up means nobody is mid-word, so release records no tail.
+const QUIET_BEFORE_KEY_UP_SECONDS: f32 = 0.25;
 /// How often the worker looks at the microphone's buffer.
-pub const POLL: Duration = Duration::from_millis(100);
+pub const POLL: Duration = Duration::from_millis(50);
 
 /// Where to cut this audio: the middle of its longest pause at least `MIN_PIECE_SECONDS` in, the latest of equals, or
 /// None to wait for more. Longest because people pause longer between sentences than inside them.
@@ -82,6 +97,71 @@ pub struct Done {
     pub raw_samples: usize,
     /// When the first piece's text was ready.
     pub first: Option<Instant>,
+    /// Pieces cut before release.
+    pub pieces: usize,
+    /// The latest guess at the audio after `raw_samples`, made in a pause.
+    pub guess: Option<Guess>,
+    /// Guesses transcribed before release, used or not.
+    pub guesses: usize,
+}
+
+/// The text of the audio after the pieces, transcribed in a pause before the key came up.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Guess {
+    /// Where the guessed audio starts in the microphone's buffer: what the pieces covered when it was made.
+    pub from: usize,
+    /// Where its speech ended and the pause began.
+    pub spoke: usize,
+    /// Where it ends in the buffer, inside the pause.
+    pub upto: usize,
+    /// How long the guessed audio is at 16 kHz, so release can find what came after it.
+    pub samples: usize,
+    pub text: String,
+}
+
+/// What the worker transcribes next.
+pub enum Job {
+    /// A piece, cut at a pause: 16 kHz audio and how many buffer samples it covers.
+    Piece { audio: Vec<f32>, covers: usize },
+    /// A guess at everything after the pieces, which ends in a pause.
+    Guess { audio: Vec<f32>, from: usize, spoke: usize, upto: usize, samples: usize },
+}
+
+impl Job {
+    pub fn audio(&self) -> &[f32] {
+        match self {
+            Job::Piece { audio, .. } | Job::Guess { audio, .. } => audio,
+        }
+    }
+
+    pub fn is_piece(&self) -> bool {
+        matches!(self, Job::Piece { .. })
+    }
+}
+
+/// Copies of the buffer the worker wants, taken while it holds the lock; the work happens after.
+#[derive(Default)]
+pub struct Want {
+    piece: Option<Vec<f32>>,
+    guess: Option<(usize, usize, usize, Vec<f32>)>,
+}
+
+fn rms(frame: &[f32]) -> f32 {
+    (frame.iter().map(|s| s * s).sum::<f32>() / frame.len().max(1) as f32).sqrt()
+}
+
+/// Whether the last quarter second before key up is silence: nobody is mid-word, so release needs no tail.
+/// `buffer` is the microphone's buffer at `rate` when the key came up.
+pub fn ends_quiet(buffer: &[f32], rate: u32) -> bool {
+    let n = (QUIET_BEFORE_KEY_UP_SECONDS * rate as f32) as usize;
+    n > 0 && buffer.len() >= n && is_silence(&resample(&buffer[buffer.len() - n..], rate, RATE))
+}
+
+/// The quiet a tail would have recorded, added to 16 kHz audio that stopped without one. The model's text shifts a
+/// little with how much silence trails the speech, so it sees the same as it would have after a tail.
+pub fn pad_quiet(audio: &mut Vec<f32>) {
+    let n = (crate::core::TAIL.as_secs_f64() * RATE as f64).round() as usize;
+    audio.resize(audio.len() + n, 0.0);
 }
 
 /// Whether audio holds nothing to transcribe.
@@ -89,7 +169,7 @@ pub fn is_silence(audio: &[f32]) -> bool {
     audio.is_empty()
         || audio
             .chunks((RATE as f32 * FRAME_SECONDS) as usize)
-            .all(|f| (f.iter().map(|s| s * s).sum::<f32>() / f.len() as f32).sqrt() < SILENCE_RMS)
+            .all(|f| rms(f) < SILENCE_RMS)
 }
 
 /// Words that carry a sentence on after a pause far more often than they name anything: the
@@ -155,6 +235,13 @@ pub struct Cutter {
     rate: u32,
     /// With no pause found, half a second of new audio before copying the buffer again.
     next_look: usize,
+    /// How much of the buffer has been listened to, in whole frames.
+    heard: usize,
+    /// Where the last frame louder than silence ended.
+    spoke_until: usize,
+    /// False after a guess fails, or once the key is up: release does the work the ordinary way. A guess made in the
+    /// tail would hear a different end of quiet than release does, and could change the last words.
+    guessing: bool,
     pub done: Done,
 }
 
@@ -163,7 +250,121 @@ impl Cutter {
         Self {
             rate,
             next_look: 0,
+            heard: 0,
+            spoke_until: 0,
+            guessing: true,
             done: Done::default(),
+        }
+    }
+
+    /// Listens to the audio not heard yet, a frame at a time, noting where speech last ended. Cheap enough to run
+    /// on every look while holding the buffer's lock.
+    fn hear(&mut self, buffer: &[f32]) {
+        let frame = ((self.rate as f32 * FRAME_SECONDS) as usize).max(1);
+        while self.heard + frame <= buffer.len() {
+            if rms(&buffer[self.heard..self.heard + frame]) >= SILENCE_RMS {
+                self.spoke_until = self.heard + frame;
+            }
+            self.heard += frame;
+        }
+    }
+
+    /// Where a guess would start and end now: speech after the pieces, a pause of `GUESS_PAUSE_SECONDS` since, and
+    /// no guess yet that covers that speech. In a long dictation, past `MIN_PIECE_SECONDS` of unprocessed speech it
+    /// doesn't guess: the cutter makes a piece at the next sentence's pause, and what follows the piece is short and
+    /// cheap to guess. Guessing there instead would transcribe the same long stretch again at every hesitation.
+    fn guess_due(&self) -> Option<(usize, usize, usize)> {
+        let from = self.done.raw_samples;
+        let pause = (GUESS_PAUSE_SECONDS * self.rate as f32) as usize;
+        let most = if self.done.pieces == 0 {
+            GUESS_MAX_SECONDS
+        } else {
+            MIN_PIECE_SECONDS
+        };
+        let cap = (most * self.rate as f32) as usize;
+        if !self.guessing
+            || self.spoke_until <= from
+            || self.spoke_until - from >= cap
+            || self.heard < self.spoke_until + pause
+        {
+            return None;
+        }
+        if self
+            .done
+            .guess
+            .as_ref()
+            .is_some_and(|g| g.from == from && g.upto >= self.spoke_until)
+        {
+            return None;
+        }
+        // The guess ends a fixed pause after the speech, however late the worker got to it, so the model hears the
+        // same audio on a busy machine as on an idle one.
+        Some((from, self.spoke_until, self.spoke_until + pause))
+    }
+
+    /// The key is up: no more guesses. Pieces still get cut during the tail, as they always were.
+    pub fn key_up(&mut self) {
+        self.guessing = false;
+    }
+
+    /// What to copy out of the buffer now. Call it holding the buffer's lock; `job` does the work after.
+    pub fn want(&mut self, buffer: &[f32]) -> Want {
+        self.hear(buffer);
+        Want {
+            piece: self.look_from(buffer.len()).map(|from| buffer[from..].to_vec()),
+            guess: self
+                .guess_due()
+                .map(|(from, spoke, upto)| (from, spoke, upto, buffer[from..upto].to_vec())),
+        }
+    }
+
+    /// The next thing to transcribe: a piece if the audio has a place to cut, else a guess if one is due.
+    pub fn job(&mut self, want: Want) -> Option<Job> {
+        if let Some((audio, covers)) = want.piece.and_then(|pending| self.piece(&pending)) {
+            // A guess made in the pause the cutter chose, with no speech since, is that piece already.
+            let cut = self.done.raw_samples + covers;
+            if let Some(g) = self.done.guess.take_if(|g| {
+                g.from == self.done.raw_samples && g.spoke <= cut && self.spoke_until <= g.upto
+            }) {
+                self.add(&g.text, g.upto - g.from);
+                return None;
+            }
+            return Some(Job::Piece { audio, covers });
+        }
+        let (from, spoke, upto, pending) = want.guess?;
+        let mut audio = resample(&pending, self.rate, RATE);
+        let samples = audio.len();
+        pad_quiet(&mut audio);
+        Some(Job::Guess { audio, from, spoke, upto, samples })
+    }
+
+    /// Takes in what the model made of a job. False when the worker should stop: a piece failed, and whatever's
+    /// left goes through at release, the ordinary way.
+    pub fn finished(&mut self, job: Job, text: anyhow::Result<String>) -> bool {
+        match (job, text) {
+            (Job::Piece { covers, .. }, Ok(text)) => {
+                self.add(&text, covers);
+                true
+            }
+            (Job::Piece { .. }, Err(e)) => {
+                log::warn!("transcribing a piece failed: {e}");
+                false
+            }
+            (Job::Guess { from, spoke, upto, samples, .. }, text) => {
+                self.done.guesses += 1;
+                match text {
+                    Ok(text) if from == self.done.raw_samples => {
+                        self.done.guess = Some(Guess { from, spoke, upto, samples, text });
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        log::warn!("guessing the end of a dictation failed: {e}");
+                        self.done.guess = None;
+                        self.guessing = false;
+                    }
+                }
+                true
+            }
         }
     }
 
@@ -191,33 +392,59 @@ impl Cutter {
     pub fn add(&mut self, text: &str, raw_samples: usize) {
         join(&mut self.done.text, text);
         self.done.raw_samples += raw_samples;
+        self.done.pieces += 1;
+        // A guess started where the pieces used to end.
+        self.done.guess = None;
         if !text.trim().is_empty() {
             self.done.first.get_or_insert_with(Instant::now);
         }
     }
 }
 
-/// The whole dictation's text: what the pieces got through, then `rest`, the audio after them. After a piece, a rest
-/// that is only the end of a pause isn't transcribed; if the rest fails, the pieces' text is still worth typing.
+/// Whether release can take the guess as the rest's text: it starts where the pieces end and nothing after it stands
+/// out from the guess's own pause. Judged against that pause as well as `SILENCE_RMS`, the way `find_cut` judges a
+/// pause against the room, so a soft last word in a quiet room still counts as speech and the whole rest is transcribed.
+pub fn guess_ends_it(done: &Done, rest: &[f32]) -> bool {
+    done.guess.as_ref().is_some_and(|g| {
+        let end = g.samples.min(rest.len());
+        let pause = (GUESS_PAUSE_SECONDS * RATE as f32) as usize;
+        let room = rms(&rest[end.saturating_sub(pause)..end]);
+        let quiet = (room.max(0.0005) * 3.0).min(SILENCE_RMS);
+        g.from == done.raw_samples
+            && rest[end..]
+                .chunks((RATE as f32 * FRAME_SECONDS) as usize)
+                .all(|f| rms(f) < quiet)
+    })
+}
+
+/// The whole dictation's text: what the pieces got through, then `rest`, the audio after them. If a guess covers the
+/// start of the rest and only silence follows it, the guess is the text and nothing is transcribed; a guess that speech
+/// came after is never typed, and the whole rest is transcribed instead. After a piece, a
+/// rest that is only the end of a pause isn't transcribed; if the rest fails, the pieces' text is still worth typing.
 pub fn transcript(
     done: Done,
     rest: &[f32],
     transcribe: impl FnOnce(&[f32]) -> anyhow::Result<String>,
 ) -> anyhow::Result<String> {
-    let tail = if !done.text.is_empty() && is_silence(rest) {
+    let ends_it = guess_ends_it(&done, rest);
+    let Done { mut text, guess, .. } = done;
+    if let Some(g) = guess.filter(|_| ends_it) {
+        join(&mut text, &g.text);
+        return Ok(text);
+    }
+    let tail = if !text.is_empty() && is_silence(rest) {
         Ok(String::new())
     } else {
         transcribe(rest)
     };
     match tail {
         Ok(t) => {
-            let mut all = done.text;
-            join(&mut all, &t);
-            Ok(all)
+            join(&mut text, &t);
+            Ok(text)
         }
-        Err(e) if !done.text.is_empty() => {
+        Err(e) if !text.is_empty() => {
             log::warn!("transcribing the end of a dictation failed: {e}");
-            Ok(done.text)
+            Ok(text)
         }
         Err(e) => Err(e),
     }
@@ -225,6 +452,7 @@ pub fn transcript(
 
 pub struct Pieces {
     stop: Arc<AtomicBool>,
+    released: Arc<AtomicBool>,
     thread: Option<JoinHandle<Done>>,
 }
 
@@ -237,6 +465,8 @@ impl Pieces {
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
+        let released = Arc::new(AtomicBool::new(false));
+        let key_up = released.clone();
         let thread = std::thread::spawn(move || {
             let mut cutter = Cutter::new(rate);
             while !stopping.load(Ordering::Relaxed) {
@@ -245,31 +475,30 @@ impl Pieces {
                 if stopping.load(Ordering::Relaxed) {
                     break;
                 }
-                let pending: Vec<f32> = {
-                    let buffer = raw.lock();
-                    let Some(from) = cutter.look_from(buffer.len()) else {
-                        continue;
-                    };
-                    buffer[from..].to_vec()
-                };
-                let Some((audio, covers)) = cutter.piece(&pending) else {
+                if key_up.load(Ordering::Relaxed) {
+                    cutter.key_up();
+                }
+                let want = cutter.want(&raw.lock());
+                let Some(job) = cutter.job(want) else {
                     continue;
                 };
-                match transcribe(&audio) {
-                    Ok(piece) => cutter.add(&piece, covers),
-                    // Whatever's left goes through at release, the ordinary way.
-                    Err(e) => {
-                        log::warn!("transcribing a piece failed: {e}");
-                        break;
-                    }
+                let text = transcribe(job.audio());
+                if !cutter.finished(job, text) {
+                    break;
                 }
             }
             cutter.done
         });
         Self {
             stop,
+            released,
             thread: Some(thread),
         }
+    }
+
+    /// The key came up: stop guessing, keep cutting pieces through the tail.
+    pub fn key_up(&self) {
+        self.released.store(true, Ordering::Relaxed);
     }
 
     /// Stops looking and returns what's done, waiting for a piece in progress.
@@ -463,6 +692,193 @@ mod tests {
         std::thread::sleep(Duration::from_millis(400));
         let done = pieces.finish();
         assert_eq!((done.text.as_str(), done.raw_samples), ("", 0));
+    }
+
+    #[test]
+    fn the_tail_is_skipped_only_after_a_quarter_second_of_silence() {
+        assert!(ends_quiet(&[speech(1.0), pause(0.3)].concat(), RATE));
+        assert!(!ends_quiet(&[speech(1.0), pause(0.2)].concat(), RATE));
+        assert!(!ends_quiet(&speech(1.0), RATE));
+        // Too little audio to tell: keep the tail.
+        assert!(!ends_quiet(&pause(0.2), RATE));
+        // A microphone at another rate.
+        let at_48k: Vec<f32> = [speech(1.0), pause(0.3)].concat().iter().flat_map(|&s| [s; 3]).collect();
+        assert!(ends_quiet(&at_48k, 48_000));
+        let at_48k: Vec<f32> = speech(1.0).iter().flat_map(|&s| [s; 3]).collect();
+        assert!(!ends_quiet(&at_48k, 48_000));
+    }
+
+    #[test]
+    fn padding_adds_a_tails_worth_of_quiet() {
+        let mut audio = speech(1.0);
+        pad_quiet(&mut audio);
+        let n = (crate::core::TAIL.as_secs_f64() * RATE as f64).round() as usize;
+        assert_eq!(audio.len(), RATE as usize + n);
+        assert!(is_silence(&audio[RATE as usize..]));
+    }
+
+    fn guessed(text: &str, from: usize, samples: usize) -> Done {
+        Done {
+            text: "Before.".into(),
+            raw_samples: from,
+            guess: Some(Guess { from, spoke: from + samples / 2, upto: from + samples, samples, text: text.into() }),
+            ..Done::default()
+        }
+    }
+
+    fn redo(audio: &[f32]) -> anyhow::Result<String> {
+        Ok(format!("redo {}", audio.len()))
+    }
+
+    /// A guess at two seconds of speech and a little of the pause after it.
+    const GUESSED: usize = 2 * RATE as usize + 4_800;
+
+    #[test]
+    fn a_guess_with_only_silence_after_it_is_the_text() {
+        let rest = [speech(2.0), pause(0.5)].concat();
+        let text = transcript(guessed("Guess.", 0, GUESSED), &rest, |_| anyhow::bail!("must not decode")).unwrap();
+        assert_eq!(text, "Before. Guess.");
+    }
+
+    #[test]
+    fn a_guess_that_speech_came_after_is_never_typed() {
+        let rest = [speech(2.0), pause(0.5), speech(0.5)].concat();
+        let text = transcript(guessed("Guess.", 0, GUESSED), &rest, redo).unwrap();
+        assert_eq!(text, format!("Before. redo {}", rest.len()));
+    }
+
+    #[test]
+    fn a_soft_word_after_a_guess_is_still_transcribed() {
+        // #69 r1 first-F1: "thanks" said softly, under SILENCE_RMS but well above the room, after a guessed pause.
+        let soft: Vec<f32> = (0..(0.4 * RATE as f32) as usize).map(|i| 0.0028 * (i as f32 * 0.05).sin()).collect();
+        assert!(is_silence(&soft), "the word is quieter than SILENCE_RMS");
+        let rest = [speech(2.0), pause(0.5), soft, pause(0.3)].concat();
+        let text = transcript(guessed("Guess.", 0, GUESSED), &rest, redo).unwrap();
+        assert_eq!(text, format!("Before. redo {}", rest.len()));
+    }
+
+    #[test]
+    fn a_guess_from_before_the_last_piece_is_ignored() {
+        let rest = pause(0.5);
+        let mut done = guessed("Stale.", 100, 10);
+        done.raw_samples = 500;
+        let text = transcript(done, &rest, |_| anyhow::bail!("must not decode")).unwrap();
+        assert_eq!(text, "Before.");
+    }
+
+    #[test]
+    fn a_failed_rest_after_a_dropped_guess_keeps_the_pieces_text() {
+        let rest = [speech(2.0), pause(0.5), speech(0.5)].concat();
+        let text = transcript(guessed("Guess.", 0, GUESSED), &rest, |_| anyhow::bail!("no model")).unwrap();
+        assert_eq!(text, "Before.");
+    }
+
+    /// Feeds `audio` to a cutter the way the worker sees the buffer grow, `POLL` at a time, running every job.
+    fn run(audio: &[f32]) -> (Cutter, Vec<(bool, usize)>) {
+        let mut cutter = Cutter::new(RATE);
+        let mut jobs = vec![];
+        let step = (POLL.as_secs_f64() * RATE as f64) as usize;
+        let mut len = 0;
+        while len < audio.len() {
+            len = (len + step).min(audio.len());
+            let want = cutter.want(&audio[..len]);
+            if let Some(job) = cutter.job(want) {
+                jobs.push((job.is_piece(), job.audio().len()));
+                let text = format!("{}.", job.audio().len());
+                cutter.finished(job, Ok(text));
+            }
+        }
+        (cutter, jobs)
+    }
+
+    #[test]
+    fn short_pauses_get_guesses_and_never_become_pieces() {
+        let audio = [speech(2.5), pause(0.5), speech(2.5), pause(0.5)].concat();
+        let (cutter, jobs) = run(&audio);
+        assert_eq!(jobs.len(), 2, "{jobs:?}");
+        assert!(jobs.iter().all(|(piece, _)| !piece), "{jobs:?}");
+        assert!(jobs[1].1 > 5 * RATE as usize, "the second guess covers it all: {jobs:?}");
+        assert_eq!(cutter.done.pieces, 0);
+        let rest = audio[cutter.done.raw_samples..].to_vec();
+        assert!(guess_ends_it(&cutter.done, &rest));
+    }
+
+    #[test]
+    fn after_a_piece_long_unprocessed_speech_is_left_to_the_cutter() {
+        let audio = [speech(7.0), pause(0.6), speech(6.5), pause(0.3), speech(0.5), pause(0.6), speech(2.0), pause(0.5)].concat();
+        let (cutter, jobs) = run(&audio);
+        // The first 7 s is guessed (no piece yet) and kept as the piece. The next 6.5 s gets no guess at its
+        // hesitation, only a piece at the sentence's pause, and then the short rest is guessed.
+        let kinds: Vec<bool> = jobs.iter().map(|(piece, _)| *piece).collect();
+        assert_eq!(kinds, [false, true, false], "{jobs:?}");
+        assert!(jobs[2].1 < 3 * RATE as usize, "the last guess starts at the piece: {jobs:?}");
+        assert_eq!(cutter.done.pieces, 2);
+        let rest = audio[cutter.done.raw_samples..].to_vec();
+        assert!(guess_ends_it(&cutter.done, &rest));
+    }
+
+    #[test]
+    fn a_short_dictation_is_guessed_up_to_its_limit() {
+        let under = [speech(9.5), pause(0.4)].concat();
+        let (cutter, jobs) = run(&under);
+        assert_eq!((jobs.len(), cutter.done.guesses), (1, 1), "{jobs:?}");
+        let over = [speech(10.5), pause(0.4)].concat();
+        let (cutter, jobs) = run(&over);
+        assert_eq!((jobs.len(), cutter.done.guesses), (0, 0), "{jobs:?}");
+    }
+
+    #[test]
+    fn a_guess_in_the_pause_the_cutter_chooses_becomes_the_piece() {
+        let audio = [speech(5.9), pause(0.8)].concat();
+        let (cutter, jobs) = run(&audio);
+        // Transcribed once, as a guess, then kept as the piece the cutter would have cut there.
+        assert_eq!(jobs.len(), 1, "{jobs:?}");
+        assert!(!jobs[0].0, "{jobs:?}");
+        assert_eq!((cutter.done.pieces, cutter.done.guess.is_none()), (1, true));
+        assert!(is_silence(&audio[cutter.done.raw_samples..]));
+    }
+
+    #[test]
+    fn the_worker_guesses_in_a_pause_once() {
+        let raw = Arc::new(Mutex::new([speech(2.0), pause(0.8)].concat()));
+        let calls = Arc::new(Mutex::new(0));
+        let counted = calls.clone();
+        let pieces = Pieces::start(raw, RATE, move |audio| {
+            *counted.lock() += 1;
+            Ok(format!("{} samples", audio.len()))
+        });
+        std::thread::sleep(Duration::from_millis(400));
+        let done = pieces.finish();
+        assert_eq!(*calls.lock(), 1, "the same pause is guessed once");
+        assert_eq!((done.pieces, done.guesses, done.raw_samples), (0, 1, 0));
+        let g = done.guess.expect("a guess");
+        let pause = (GUESS_PAUSE_SECONDS * RATE as f32) as usize;
+        assert!(g.upto == 2 * RATE as usize + pause && g.samples == g.upto, "{g:?}");
+    }
+
+    #[test]
+    fn nothing_is_guessed_after_key_up() {
+        let audio = [speech(2.0), pause(0.5)].concat();
+        let mut cutter = Cutter::new(RATE);
+        cutter.key_up();
+        let want = cutter.want(&audio);
+        assert!(cutter.job(want).is_none());
+
+        let raw = Arc::new(Mutex::new(audio));
+        let pieces = Pieces::start(raw, RATE, |_| Ok("x".into()));
+        pieces.key_up();
+        std::thread::sleep(Duration::from_millis(300));
+        let done = pieces.finish();
+        assert_eq!((done.guesses, done.guess), (0, None));
+    }
+
+    #[test]
+    fn noise_that_never_falls_silent_gets_no_guess() {
+        let raw = Arc::new(Mutex::new(speech(3.0)));
+        let pieces = Pieces::start(raw, RATE, |_| Ok("x".into()));
+        std::thread::sleep(Duration::from_millis(300));
+        let done = pieces.finish();
+        assert_eq!((done.guesses, done.guess), (0, None));
     }
 
     #[test]

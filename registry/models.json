@@ -1,0 +1,7 @@
+{
+  "models": [
+    "parakeet-v3",
+    "parakeet-v3-onnx",
+    "cohere-int4"
+  ]
+}

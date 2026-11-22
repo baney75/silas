@@ -1,5 +1,5 @@
-import { api, errorText, type ModelEntry, type ModelProgress, type ModelResult, type Tier } from "./api";
-import { downloadModel, notify, refreshModels, runBenchmark, selectModel, shareBenchmark, store, subscribe } from "./store";
+import { api, errorText, type CommunityDevice, type ModelEntry, type ModelProgress, type ModelResult, type Report, type Tier } from "./api";
+import { closeShare, downloadModel, notify, openShare, refreshModels, runBenchmark, selectModel, sendShare, shareOnGithub, store, subscribe } from "./store";
 import { clear, h, icon, megabytes, progressBar, toast } from "./ui";
 
 export const tierLabel: Record<Tier, string> = { fast: "Fast", balanced: "Balanced", best: "Best" };
@@ -113,10 +113,14 @@ export function modelCard(m: ModelEntry, opts: { compact?: boolean } = {}): HTML
 // The bars a model has to clear on this computer. Keep in step with benchmark.rs.
 const MIN_SPEED = 10;
 const MAX_WER = 0.08;
+// Shared results choose a model only when this many reports agree (benchmark::MIN_AGREE).
+const MIN_AGREE = 3;
 
 const speedText = (r: ModelResult) =>
   `${Math.round(r.speed)}× real time · a 10\u00a0s dictation in ${(10 / Math.max(r.speed, 0.01)).toFixed(1)}\u00a0s`;
 const accuracyText = (r: ModelResult) => `${(100 * Math.max(0, 1 - r.wer)).toFixed(1)}% of words right`;
+const waitText = (seconds: number) => `text ${seconds.toFixed(1)}\u00a0s after you stop talking`;
+const modelName = (id: string) => store.models.find((m) => m.id === id)?.name ?? id;
 
 function mark(ok: boolean, good: string, bad: string): HTMLElement {
   return h("span", { class: `mark ${ok ? "mark-ok" : "mark-miss"}` }, icon(ok ? "check" : "x", 14), ok ? good : bad);
@@ -129,8 +133,101 @@ function resultRow(r: ModelResult, isPick: boolean): HTMLElement {
     { class: `bench-row${isPick ? " is-pick" : ""}` },
     h("div", { class: "bench-name" }, h("span", { class: "bench-model" }, name), isPick ? h("span", { class: "badge badge-gold" }, "Best here") : null),
     h("div", { class: "bench-marks" }, mark(r.speed >= MIN_SPEED, "Fast enough", "Too slow"), mark(r.wer <= MAX_WER, "Accurate enough", "Too many misses")),
-    h("div", { class: "bench-nums" }, h("span", null, speedText(r)), h("span", null, accuracyText(r))),
+    h(
+      "div",
+      { class: "bench-nums" },
+      h("span", null, speedText(r)),
+      h("span", null, accuracyText(r)),
+      r.wait_seconds > 0 ? h("span", null, waitText(r.wait_seconds)) : null,
+    ),
   );
+}
+
+/** The share sheet: exactly what Send posts, then one tap. */
+function shareSheet(): HTMLElement {
+  const sheet = store.share!;
+  let sent: Report | null = null;
+  try {
+    sent = JSON.parse(sheet.payload) as Report;
+  } catch {
+    // The raw JSON below still shows what would be sent.
+  }
+  const facts: Array<HTMLElement | null> = [];
+  if (sent) {
+    const d = sent.device;
+    facts.push(
+      h("dt", null, "Device type"),
+      h("dd", null, h("code", null, d.key)),
+      h("dt", null, "Hardware"),
+      h("dd", null, `${d.cpu}, ${d.cores} cores, ${d.memory_gb}\u00a0GB${d.hw_model ? `, ${d.hw_model}` : ""}`),
+      h("dt", null, "OS"),
+      h("dd", null, d.os_version),
+      h("dt", null, "Silas"),
+      h("dd", null, sent.silas),
+      ...sent.results.flatMap((r) => [
+        h("dt", null, modelName(r.model)),
+        h("dd", null, `${r.speed.toFixed(1)}× real time, ${(100 * r.wer).toFixed(1)}% word errors, ${r.wait_seconds.toFixed(2)}\u00a0s wait`),
+      ]),
+    );
+  }
+  const reply = sheet.reply;
+  const done = reply
+    ? h(
+        "p",
+        { class: "bench-status share-done", role: "status" },
+        icon("check", 16),
+        reply.agree >= MIN_AGREE && reply.pick
+          ? `Sent. ${reply.reports} reports for this device; ${reply.agree} agree on ${modelName(reply.pick)}.`
+          : `Sent. ${reply.reports} ${reply.reports === 1 ? "report" : "reports"} for this device so far.`,
+      )
+    : null;
+  return h(
+    "div",
+    { class: "share-sheet", role: "region", "aria-labelledby": "share-title" },
+    h("h3", { id: "share-title", class: "share-title" }, "Share these results"),
+    h(
+      "p",
+      { class: "bench-meta" },
+      "This goes to Silas's open report service so people with the same device get the right model. No account, no audio, no text. The service keeps these numbers and the day, never your address.",
+    ),
+    sent ? h("dl", { class: "share-facts" }, ...facts) : null,
+    h("details", { class: "share-raw" }, h("summary", null, "Exact data sent"), h("pre", null, sheet.payload)),
+    done,
+    sheet.error ? h("p", { class: "error-text", role: "alert" }, sheet.error) : null,
+    h(
+      "div",
+      { class: "card-actions bench-actions" },
+      reply
+        ? h("button", { class: "btn btn-ghost", type: "button", onclick: () => closeShare() }, "Done")
+        : h(
+            "button",
+            { class: "btn btn-primary", type: "button", disabled: sheet.sending, onclick: () => void sendShare() },
+            sheet.sending ? h("span", { class: "spinner sm" }) : icon("upload", 16),
+            sheet.sending ? "Sending…" : "Send",
+          ),
+      reply ? null : h("button", { class: "btn btn-ghost", type: "button", disabled: sheet.sending, onclick: () => closeShare() }, "Cancel"),
+      h("button", { class: "link", type: "button", onclick: () => void shareOnGithub() }, "Share on GitHub instead"),
+    ),
+  );
+}
+
+/** Whether shared results are strong enough to choose a model: the same test as benchmark.rs. */
+function communityPick(c: CommunityDevice): string | null {
+  if (!c.pick || c.agree < MIN_AGREE) return null;
+  const m = c.models[c.pick];
+  return m && m.speed >= MIN_SPEED && m.wer <= MAX_WER ? c.pick : null;
+}
+
+/** One line on what others with this device shared. Fewer than three that agree is information only. */
+function communityLine(): HTMLElement | null {
+  const c = store.community;
+  if (!c || c.reports === 0) return null;
+  const pick = communityPick(c);
+  const people = `${c.reports} shared ${c.reports === 1 ? "result" : "results"} from this device type`;
+  const text = pick
+    ? `${people}: ${c.agree} agree on ${modelName(pick)}.`
+    : `${people} so far. Silas waits for ${MIN_AGREE} that agree before it uses them.`;
+  return h("p", { class: "bench-meta community-line" }, icon("users", 14), text);
 }
 
 function thisComputer(): HTMLElement {
@@ -158,18 +255,13 @@ function thisComputer(): HTMLElement {
       installed > 1
         ? h("button", { class: "btn btn-ghost", type: "button", onclick: () => void runBenchmark(true) }, "Include all installed models")
         : null,
-      h("button", { class: "btn btn-primary", type: "button", onclick: () => void shareBenchmark() }, icon("upload", 16), "Share results"),
+      h("button", { class: "btn btn-primary", type: "button", onclick: () => void openShare() }, icon("upload", 16), "Share results"),
     ];
     body = h(
       "div",
       { class: "bench-result" },
       h("ul", { class: "bench-list" }, ...report.results.map((r) => resultRow(r, r.model === report.pick && r.speed >= MIN_SPEED && r.wer <= MAX_WER))),
-      h("div", { class: "card-actions bench-actions" }, ...buttons),
-      h(
-        "p",
-        { class: "bench-meta" },
-        "Opens a GitHub issue with your device type, OS, Silas version and these numbers. No audio or text leaves this computer.",
-      ),
+      store.share ? shareSheet() : h("div", { class: "card-actions bench-actions" }, ...buttons),
     );
   } else {
     body = h(
@@ -190,6 +282,7 @@ function thisComputer(): HTMLElement {
     h("h2", { id: "device-title", class: "device-title" }, "This computer"),
     d ? h("p", { class: "device-line" }, `${d.cpu} · ${d.os_version}`) : null,
     body,
+    communityLine(),
     run?.error && !running ? h("p", { class: "error-text" }, `The benchmark didn't finish. ${run.error}`) : null,
   );
 }
