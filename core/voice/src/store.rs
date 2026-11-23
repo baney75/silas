@@ -119,6 +119,8 @@ pub struct Settings {
     /// Who chose `model`: default | registry | community | benchmark | user. A user choice is never overridden.
     pub model_source: String,
     pub language: String,
+    /// Which default `language` was last settled against. See `migrate_language`.
+    pub language_version: u32,
     pub remove_fillers: bool,
     pub trailing_space: bool,
     pub typing_speed: String,
@@ -163,7 +165,8 @@ impl Default for Settings {
             tap_to_toggle: true,
             model: "parakeet-v3".into(),
             model_source: "default".into(),
-            language: "en".into(),
+            language: "auto".into(),
+            language_version: LANGUAGE_VERSION,
             remove_fillers: true,
             trailing_space: true,
             typing_speed: "fast".into(),
@@ -229,6 +232,26 @@ pub fn migrate_hotkey(settings: &mut Settings, raw: &str) {
             settings.hotkey = default_hotkey().into();
         }
         settings.hotkey_version = HOTKEY_VERSION;
+    }
+}
+
+/// Bumped when the default language changes, so a saved old default can move once and a language
+/// picked afterwards stays picked.
+pub const LANGUAGE_VERSION: u32 = 2;
+
+/// Settings saved before version 2 hold "en" whether or not anyone chose it, since it was the
+/// default. On a model that detects the language (Whisper, Qwen3-ASR) "en" asks it to translate
+/// other speech into English, so the untouched default moves to "auto" once. Models that can't
+/// detect are still asked for English on "auto", so nothing changes for them.
+pub fn migrate_language(settings: &mut Settings, raw: &str) {
+    let has_version = serde_json::from_str::<serde_json::Value>(raw)
+        .map(|v| v.get("languageVersion").is_some())
+        .unwrap_or(true);
+    if !has_version {
+        if settings.language == "en" {
+            settings.language = "auto".into();
+        }
+        settings.language_version = LANGUAGE_VERSION;
     }
 }
 
@@ -356,6 +379,26 @@ mod migrate_tests {
         assert_eq!(s.hotkey, "F13");
         assert_eq!(s.hotkey_fallback, None, "Right ⌘ must not start working for someone who chose F13");
         assert_eq!(s.hotkey_version, HOTKEY_VERSION);
+    }
+
+    #[test]
+    fn the_old_english_default_moves_to_detect_once_and_a_pick_stays() {
+        let raw = r#"{"language":"en","onboarded":true}"#;
+        let mut s: Settings = serde_json::from_str(raw).unwrap();
+        migrate_language(&mut s, raw);
+        assert_eq!(s.language, "auto", "Whisper and Qwen3 would translate other speech into English");
+        assert_eq!(s.language_version, LANGUAGE_VERSION);
+
+        let raw = r#"{"language":"de","onboarded":true}"#;
+        let mut s: Settings = serde_json::from_str(raw).unwrap();
+        migrate_language(&mut s, raw);
+        assert_eq!(s.language, "de", "a language picked by hand stays");
+
+        let raw = r#"{"language":"en","languageVersion":2}"#;
+        let mut s: Settings = serde_json::from_str(raw).unwrap();
+        migrate_language(&mut s, raw);
+        assert_eq!(s.language, "en", "English picked after the move stays");
+        assert_eq!(Settings::default().language, "auto");
     }
 
     #[test]

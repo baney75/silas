@@ -76,7 +76,7 @@ const settings: Settings = {
   tapToToggle: true,
   model: "parakeet-v3",
   modelSource: "default",
-  language: "en",
+  language: "auto",
   removeFillers: true,
   trailingSpace: true,
   typingSpeed: "fast",

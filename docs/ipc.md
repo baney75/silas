@@ -57,7 +57,7 @@ interface Settings {
   tapToToggle: boolean;           // quick tap starts hands-free; tap again to stop
   model: string;                  // model id. Read-only through set_settings: use select_model
   modelSource: "default" | "registry" | "community" | "benchmark" | "user"; // who chose `model`. "user" is never overridden. Read-only through set_settings
-  language: string;               // "en" etc. (Cohere needs it; Parakeet auto-detects)
+  language: string;               // "auto" (default: models that detect do; others get "en") or "de" etc.
   removeFillers: boolean;
   trailingSpace: boolean;
   typingSpeed: "steady" | "fast" | "instant"; // chars/sec 250 | 700 | 2000
