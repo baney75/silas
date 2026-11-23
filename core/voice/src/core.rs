@@ -459,6 +459,7 @@ impl Core {
                 installed,
             );
             store::migrate_hotkey(&mut settings, &store::read_raw("settings.json"));
+            store::migrate_language(&mut settings, &store::read_raw("settings.json"));
         }
         // A fresh nightly or dev install stays on its channel instead of jumping to stable.
         if fresh {

@@ -57,7 +57,7 @@ interface Settings {
   tapToToggle: boolean;           // quick tap starts hands-free; tap again to stop
   model: string;                  // model id. Read-only through set_settings: use select_model
   modelSource: "default" | "registry" | "community" | "benchmark" | "user"; // who chose `model`. "user" is never overridden. Read-only through set_settings
-  language: string;               // "en" etc. (Cohere needs it; Parakeet auto-detects)
+  language: string;               // "auto" (default: models that detect do; others get "en") or "de" etc.
   removeFillers: boolean;
   trailingSpace: boolean;
   typingSpeed: "steady" | "fast" | "instant"; // chars/sec 250 | 700 | 2000
@@ -75,12 +75,18 @@ interface Settings {
 }
 
 interface ModelEntry {
-  id: string;                     // "parakeet-v3" | "parakeet-v3-onnx" | "cohere-int4"
+  id: string;                     // an id from core/voice/src/models.rs MODELS, e.g. "parakeet-v3"
   name: string;                   // "Parakeet v3"
   tier: "fast" | "balanced" | "best";
   tagline: string;
   sizeMb: number;
   languages: string;              // "25 European languages"
+  group: "english" | "manyLanguages" | "smallAndFast" | "mostAccurate"; // its picker section
+  lab: string;                    // "NVIDIA"
+  license: string;                // "CC-BY-4.0"
+  licenseUrl: string;
+  baseModel: string;              // "nvidia/parakeet-tdt-0.6b-v3"
+  cardUrl: string;                // the base model's Hugging Face card
   installed: boolean;
   active: boolean;
   recommended: boolean;           // this computer's own pick, else the registry's, else the static flag; never a community pick
@@ -185,6 +191,7 @@ interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string
 | `select_model` | `{ id, auto? }` | `null` (loads it; status events follow; sets `modelSource` to `"user"` unless `auto`, which setup uses for its own choice) |
 | `wait_device_pick` | | `null` once this run has asked the device registry (at most 6 s); setup awaits it before choosing a model |
 | `delete_model` | `{ id }` | `null` |
+| `open_model_card` | `{ id }` | `null` (opens that catalog model's card in the browser; the URL comes from the catalog, never the UI) |
 | `get_history` | `{ limit }` | `HistoryItem[]` newest first |
 | `correct_history` | `{ id, text }` | `LearnResult` (teach Silas from a fixed transcript) |
 | `delete_history` | `{ id }` | `null` |

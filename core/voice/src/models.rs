@@ -22,7 +22,33 @@ pub struct Spec {
     pub size_mb: u32,
     pub languages: &'static str,
     pub recommended: bool,
+    /// Where the model picker lists it when it isn't the one recommended for this computer.
+    pub group: Group,
+    /// The lab that trained it, for the picker and the README's credits.
+    pub lab: &'static str,
+    /// The weights' license as its model card names it, and the license text.
+    pub license: &'static str,
+    pub license_url: &'static str,
+    /// The original model on Hugging Face (`org/name`); its card is what the picker links to.
+    pub base_model: &'static str,
     pub source: Source,
+}
+
+/// The picker's sections, by what a model is best at (bench/models/catalog-2026-11.md).
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum Group {
+    English,
+    ManyLanguages,
+    SmallAndFast,
+    MostAccurate,
+}
+
+impl Spec {
+    /// The base model's card on Hugging Face.
+    pub fn card_url(&self) -> String {
+        format!("https://huggingface.co/{}", self.base_model)
+    }
 }
 
 pub enum Source {
@@ -65,6 +91,11 @@ pub const MODELS: &[Spec] = &[
         size_mb: 463,
         languages: "English + 24 European languages",
         recommended: true,
+        group: Group::ManyLanguages,
+        lab: "NVIDIA",
+        license: "CC-BY-4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        base_model: "nvidia/parakeet-tdt-0.6b-v3",
         // Q4_K_M GGUF on transcribe.cpp: the model study's pick (bench/models/accent-2026-11.md).
         // Pinned to one revision of the public repo; the hash is the Hub's Git LFS object id, and
         // bench/models/accent-2026-11.candidates.json records the same one.
@@ -84,6 +115,11 @@ pub const MODELS: &[Spec] = &[
         size_mb: 478,
         languages: "English + 24 European languages",
         recommended: false,
+        group: Group::ManyLanguages,
+        lab: "NVIDIA",
+        license: "CC-BY-4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        base_model: "nvidia/parakeet-tdt-0.6b-v3",
         source: Source::Archive {
             url: "https://github.com/baney75/silas/releases/download/models-v1/parakeet-v3-int8.tar.gz",
             folder: "parakeet-tdt-0.6b-v3-int8",
@@ -93,14 +129,148 @@ pub const MODELS: &[Spec] = &[
             sha256: Some("43d37191602727524a7d8c6da0eef11c4ba24320f5b4730f1a2497befc2efa77"),
         },
     },
+    // The study's other picks (bench/models/catalog-2026-11.md), each pinned like the default: one
+    // revision of the public GGUF repo and the Hub's Git LFS object id for the file, both recorded in
+    // bench/models/catalog-2026-11.candidates.json.
+    Spec {
+        id: "parakeet-v2",
+        name: "Parakeet v2",
+        tier: "balanced",
+        tagline: "English only. As accurate as Parakeet v3 overall and the best of the fast models with code and technical words, but weaker with accents.",
+        size_mb: 475,
+        languages: "English",
+        recommended: false,
+        group: Group::English,
+        lab: "NVIDIA",
+        license: "CC-BY-4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        base_model: "nvidia/parakeet-tdt-0.6b-v2",
+        source: Source::Files {
+            base: "https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v2-gguf/resolve/58239cf6d0ecb0af921e7936c1e5e0a8dba91dbb",
+            files: &[File {
+                name: "parakeet-tdt-0.6b-v2-Q4_K_M.gguf",
+                sha256: Some("4853f9653f641d376e6f7de65d73c7a34a73677704a606727bf51acc83f999f3"),
+            }],
+        },
+    },
+    Spec {
+        id: "canary-180m",
+        name: "Canary 180M Flash",
+        tier: "fast",
+        tagline: "Less than half the download of Parakeet with a shorter wait, for older laptops. Nearly as accurate with clear speech, weaker with accents. It can't detect a language, so choose yours in Settings.",
+        size_mb: 218,
+        languages: "English, German, French, Spanish",
+        recommended: false,
+        group: Group::SmallAndFast,
+        lab: "NVIDIA",
+        license: "CC-BY-4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        base_model: "nvidia/canary-180m-flash",
+        source: Source::Files {
+            base: "https://huggingface.co/handy-computer/canary-180m-flash-gguf/resolve/8b01fc77ac169a0a05c5c0332bbfe54acf65c26f",
+            files: &[File {
+                name: "canary-180m-flash-Q8_0.gguf",
+                sha256: Some("f942ab746040b531a29ab78ca3afc8dc9564efd8e4c942b5541e53644be9c408"),
+            }],
+        },
+    },
+    Spec {
+        id: "moonshine-tiny",
+        name: "Moonshine Tiny",
+        tier: "fast",
+        tagline: "The smallest and lightest: a 35 MB download that runs on almost any computer. Makes more than twice as many mistakes as Parakeet.",
+        size_mb: 35,
+        languages: "English",
+        recommended: false,
+        group: Group::SmallAndFast,
+        lab: "Moonshine AI",
+        license: "MIT",
+        license_url: "https://opensource.org/license/mit",
+        base_model: "UsefulSensors/moonshine-tiny",
+        source: Source::Files {
+            base: "https://huggingface.co/handy-computer/moonshine-tiny-gguf/resolve/c71a93b8f1cb2b7f7336f31bb54bc96960c16f41",
+            files: &[File {
+                name: "moonshine-tiny-Q8_0.gguf",
+                sha256: Some("2fd348d7b38f97d309cc3ec6848f3f57f537b80244950f07d2637e463f95a3a1"),
+            }],
+        },
+    },
+    Spec {
+        id: "qwen3-asr-0.6b",
+        name: "Qwen3-ASR 0.6B",
+        tier: "balanced",
+        tagline: "For languages Parakeet lacks, like Chinese, Japanese, Korean, Arabic and Hindi. Nearly as accurate in English, but text takes about 2 seconds to appear on a laptop.",
+        size_mb: 590,
+        languages: "30 languages + 22 Chinese dialects",
+        recommended: false,
+        group: Group::ManyLanguages,
+        lab: "Qwen (Alibaba)",
+        license: "Apache-2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        base_model: "Qwen/Qwen3-ASR-0.6B",
+        source: Source::Files {
+            base: "https://huggingface.co/handy-computer/Qwen3-ASR-0.6B-gguf/resolve/7e7c69a577fa2725dfedbe34b5e999336e30a19b",
+            files: &[File {
+                name: "Qwen3-ASR-0.6B-Q4_K_M.gguf",
+                sha256: Some("5b58f32a58ffa2c8783e0b0963485623e286e6272d953dfc9e28bc3447dee0c0"),
+            }],
+        },
+    },
+    Spec {
+        id: "whisper-turbo",
+        name: "Whisper Large v3 Turbo",
+        tier: "best",
+        tagline: "The most languages by far. Slow on a laptop, where text can take 10 seconds or more to appear; best on a fast computer or for transcribing files.",
+        size_mb: 536,
+        languages: "99 languages",
+        recommended: false,
+        group: Group::ManyLanguages,
+        lab: "OpenAI",
+        license: "MIT",
+        license_url: "https://opensource.org/license/mit",
+        base_model: "openai/whisper-large-v3-turbo",
+        source: Source::Files {
+            base: "https://huggingface.co/handy-computer/whisper-large-v3-turbo-gguf/resolve/18ada752005f5fddef499256f9a458d0b37a203a",
+            files: &[File {
+                name: "whisper-large-v3-turbo-Q4_K_M.gguf",
+                sha256: Some("c6e172d0074f0fa9440b88247854b50643cd4bb58b8515c797bbed16d858c7df"),
+            }],
+        },
+    },
+    Spec {
+        id: "canary-qwen",
+        name: "Canary-Qwen 2.5B",
+        tier: "best",
+        tagline: "English only. The fewest mistakes with code and dictation of any model here. Needs a fast computer: on a laptop your text takes about 4 seconds to appear.",
+        size_mb: 1738,
+        languages: "English",
+        recommended: false,
+        group: Group::MostAccurate,
+        lab: "NVIDIA",
+        license: "CC-BY-4.0",
+        license_url: "https://creativecommons.org/licenses/by/4.0/",
+        base_model: "nvidia/canary-qwen-2.5b",
+        source: Source::Files {
+            base: "https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/a4480da236b7d99d7a12186868de021ef4ff5ced",
+            files: &[File {
+                name: "canary-qwen-2.5b-Q4_K_M.gguf",
+                sha256: Some("db5162229d6fa22597d06a613bd9b543eddb3ee02e6afc5e759120fde02bebf7"),
+            }],
+        },
+    },
     Spec {
         id: "cohere-int4",
         name: "Cohere Transcribe",
         tier: "best",
-        tagline: "Cleanest punctuation, but 5x slower. Best for short notes on a fast machine.",
+        tagline: "Few mistakes with code, in 14 languages, but a 2 GB download that waits about 4.5 seconds on a laptop. It can't detect a language, so choose yours in Settings.",
         size_mb: 2000,
         languages: "English + 13 languages",
         recommended: false,
+        group: Group::MostAccurate,
+        lab: "Cohere",
+        license: "Apache-2.0",
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        base_model: "CohereLabs/cohere-transcribe-03-2026",
         // Pinned to one revision, so the files can't change under their hashes. The hashes are
         // the Hub's own: Git LFS object ids for the four model files; tokens.txt isn't in LFS, so
         // its SHA-256 is of the copy whose git blob id matched the Hub's (35dd2895).
@@ -158,11 +328,19 @@ pub fn installed(id: &str) -> bool {
         }
 }
 
+/// The one GGUF file of a model that runs on transcribe.cpp; None for the ONNX models.
+pub fn gguf_file(id: &str) -> Option<&'static str> {
+    match &spec(id)?.source {
+        Source::Files { files: [f], .. } if f.name.ends_with(".gguf") => Some(f.name),
+        _ => None,
+    }
+}
+
 /// Whether this computer can run the model. The GGUF engine is built for a CPU floor
 /// (`.cargo/config.toml`): on x86 that is AVX2, FMA and F16C (macOS x86: AVX and F16C). Loading it
 /// anywhere below that would crash on an illegal instruction instead of failing.
 pub fn runs_here(id: &str) -> bool {
-    id != "parakeet-v3" || cpu_runs_gguf()
+    gguf_file(id).is_none() || cpu_runs_gguf()
 }
 
 #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_os = "macos"))]
@@ -247,6 +425,12 @@ pub struct ModelEntry {
     pub tagline: String,
     pub size_mb: u32,
     pub languages: String,
+    pub group: Group,
+    pub lab: String,
+    pub license: String,
+    pub license_url: String,
+    pub base_model: String,
+    pub card_url: String,
     pub installed: bool,
     pub active: bool,
     pub recommended: bool,
@@ -271,6 +455,12 @@ pub fn list(active: Option<&str>) -> Vec<ModelEntry> {
             tagline: m.tagline.into(),
             size_mb: m.size_mb,
             languages: m.languages.into(),
+            group: m.group,
+            lab: m.lab.into(),
+            license: m.license.into(),
+            license_url: m.license_url.into(),
+            base_model: m.base_model.into(),
+            card_url: m.card_url(),
             installed: installed(m.id),
             active: active == Some(m.id) && installed(m.id),
             // Recommend what is known to suit this computer; the static flag otherwise.
@@ -500,10 +690,57 @@ pub fn remove(id: &str) -> anyhow::Result<()> {
 }
 
 pub enum Engine {
-    Gguf(transcribe_cpp::Session),
+    Gguf(GgufEngine),
     Parakeet(ParakeetModel),
     Cohere(CohereModel),
 }
+
+/// A model on transcribe.cpp, with what it says about languages.
+pub struct GgufEngine {
+    session: transcribe_cpp::Session,
+    languages: Vec<String>,
+    detects: bool,
+}
+
+/// The language to ask a transcribe.cpp model for. A model of one language (or none listed) is left to
+/// its default. A multilingual one gets the user's language when it has it; on "auto" it detects the
+/// language itself if it can, else it is asked for English, which every catalog model has.
+fn gguf_language(languages: &[String], detects: bool, wanted: &str) -> Option<String> {
+    if languages.len() <= 1 {
+        return None;
+    }
+    let has = |l: &str| languages.iter().any(|x| x.eq_ignore_ascii_case(l));
+    if !wanted.is_empty() && wanted != "auto" && has(wanted) {
+        return Some(wanted.to_ascii_lowercase());
+    }
+    if detects {
+        return None;
+    }
+    has("en").then(|| "en".to_string())
+}
+
+/// Canary 180M on transcribe.cpp writes German, French and Spanish with a space before each mark
+/// ("nur , wenn du mitkommst ."); English comes out right. Outside English, a `,` or `.` (and `?`, `!`,
+/// `;`, `:` except in French, which spaces them) that follows a word and ends one gets its space back.
+fn attach_punctuation(text: &str, language: &str) -> String {
+    let marks: &[char] = if language == "fr" { &[',', '.'] } else { &[',', '.', '?', '!', ';', ':'] };
+    let c: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    for (i, &ch) in c.iter().enumerate() {
+        let drop = ch == ' '
+            && i > 0
+            && c[i - 1].is_alphanumeric()
+            && c.get(i + 1).is_some_and(|m| marks.contains(m))
+            && c.get(i + 2).is_none_or(|n| n.is_whitespace());
+        if !drop {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// The 14 languages on Cohere Transcribe's model card.
+const COHERE_LANGUAGES: &[&str] = &["en", "fr", "de", "it", "es", "pt", "el", "nl", "pl", "zh", "ja", "ko", "vi", "ar"];
 
 static GGUF_THREADS: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
@@ -533,16 +770,18 @@ impl Engine {
             runs_here(id),
             "this computer's processor can't run it (it needs AVX2). Choose Parakeet v3 (ONNX) instead."
         );
+        if let Some(file) = gguf_file(id) {
+            use transcribe_cpp::{Backend, Model, ModelOptions, SessionOptions};
+            static LOGGING: std::sync::Once = std::sync::Once::new();
+            LOGGING.call_once(transcribe_cpp::init_logging);
+            let options = ModelOptions { backend: Backend::Cpu, ..Default::default() };
+            let model = Model::load_with(dir.join(file), &options)?;
+            let caps = model.capabilities()?;
+            // The session keeps the model alive.
+            let session = model.session_with(&SessionOptions { n_threads: gguf_threads(), ..Default::default() })?;
+            return Ok(Engine::Gguf(GgufEngine { session, languages: caps.languages, detects: caps.supports_language_detect }));
+        }
         Ok(match id {
-            "parakeet-v3" => {
-                use transcribe_cpp::{Backend, Model, ModelOptions, SessionOptions};
-                static LOGGING: std::sync::Once = std::sync::Once::new();
-                LOGGING.call_once(transcribe_cpp::init_logging);
-                let options = ModelOptions { backend: Backend::Cpu, ..Default::default() };
-                let model = Model::load_with(dir.join(PARAKEET_V3_GGUF), &options)?;
-                // The session keeps the model alive.
-                Engine::Gguf(model.session_with(&SessionOptions { n_threads: gguf_threads(), ..Default::default() })?)
-            }
             PARAKEET_V3_ONNX => Engine::Parakeet(ParakeetModel::load(&dir, &Quantization::Int8)?),
             "cohere-int4" => Engine::Cohere(CohereModel::load(&dir, &Quantization::Int4)?),
             other => anyhow::bail!("unknown model {other}"),
@@ -551,15 +790,18 @@ impl Engine {
 
     pub fn transcribe(&mut self, samples: &[f32], language: &str) -> anyhow::Result<String> {
         let text = match self {
-            // Parakeet v3 finds the language itself; transcribe.cpp takes none for it.
-            Engine::Gguf(s) => s.run(samples, &transcribe_cpp::RunOptions::default())?.text,
+            Engine::Gguf(g) => {
+                let language = gguf_language(&g.languages, g.detects, language);
+                let text = g.session.run(samples, &transcribe_cpp::RunOptions { language: language.clone(), ..Default::default() })?.text;
+                match language.as_deref() {
+                    Some(l) if l != "en" => attach_punctuation(&text, l),
+                    _ => text,
+                }
+            }
             Engine::Parakeet(m) => m.transcribe_with(samples, &ParakeetParams::default())?.text,
             Engine::Cohere(m) => {
-                let lang = if language.is_empty() || language == "auto" {
-                    "en"
-                } else {
-                    language
-                };
+                // Cohere can't detect a language, and one it lacks isn't asked of it.
+                let lang = if COHERE_LANGUAGES.contains(&language) { language } else { "en" };
                 let p = CohereParams {
                     language: Some(lang.into()),
                     ..Default::default()
@@ -576,18 +818,114 @@ mod tests {
     use super::*;
     use ureq::unversioned::transport::{time, NextTimeout};
 
+    /// Every download is pinned: a Hugging Face file to a full commit (a branch could move under its hash)
+    /// and every file to its SHA-256; an archive to Silas's own release and its SHA-256.
     #[test]
-    fn every_model_file_has_a_published_hash() {
+    fn every_catalog_entry_is_pinned_to_a_revision_and_hashes() {
+        let hex = |s: &str, n: usize| s.len() == n && s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase());
         for m in MODELS {
             match &m.source {
-                Source::Archive { sha256, .. } => assert!(sha256.is_some_and(|h| h.len() == 64), "{}", m.id),
-                Source::Files { files, .. } => {
+                Source::Archive { url, sha256, .. } => {
+                    assert!(url.starts_with("https://github.com/baney75/silas/releases/download/"), "{}: {url}", m.id);
+                    assert!(sha256.is_some_and(|h| hex(h, 64)), "{}", m.id);
+                }
+                Source::Files { base, files } => {
+                    let (repo, rev) = base.split_once("/resolve/").unwrap_or_else(|| panic!("{}: {base}", m.id));
+                    assert!(repo.starts_with("https://huggingface.co/") && repo.matches('/').count() == 4, "{}: {base}", m.id);
+                    assert!(hex(rev, 40), "{}: {base} is not pinned to a full commit", m.id);
+                    assert!(!files.is_empty(), "{}", m.id);
                     for f in files.iter() {
-                        assert!(f.sha256.is_some_and(|h| h.len() == 64), "{} {}", m.id, f.name)
+                        assert!(f.sha256.is_some_and(|h| hex(h, 64)), "{} {}", m.id, f.name);
                     }
                 }
             }
         }
+    }
+
+    /// The trust rules for the catalog (bench/models/catalog-2026-11.md): weights from a known lab, a license
+    /// that allows commercial use, GGUF data files only for transcribe.cpp models, and ids that are unique.
+    #[test]
+    fn every_catalog_entry_meets_the_trust_rules() {
+        let labs = [
+            ("NVIDIA", "nvidia/"),
+            ("OpenAI", "openai/"),
+            ("Mistral AI", "mistralai/"),
+            ("IBM", "ibm-granite/"),
+            ("Cohere", "CohereLabs/"),
+            ("Qwen (Alibaba)", "Qwen/"),
+            ("Moonshine AI", "UsefulSensors/"),
+        ];
+        let licenses = [
+            ("CC-BY-4.0", "https://creativecommons.org/licenses/by/4.0/"),
+            ("MIT", "https://opensource.org/license/mit"),
+            ("Apache-2.0", "https://www.apache.org/licenses/LICENSE-2.0"),
+            ("NVIDIA Open Model License", "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/"),
+            ("OpenMDW-1.1", "https://openmdw.ai/license/1-1/"),
+        ];
+        let mut ids = std::collections::HashSet::new();
+        for m in MODELS {
+            assert!(ids.insert(m.id), "{} twice", m.id);
+            let (_, org) = labs.iter().find(|(l, _)| *l == m.lab).unwrap_or_else(|| panic!("{}: unknown lab {}", m.id, m.lab));
+            assert!(m.base_model.starts_with(org), "{}: {} is not from {}", m.id, m.base_model, m.lab);
+            assert!(licenses.contains(&(m.license, m.license_url)), "{}: {} {}", m.id, m.license, m.license_url);
+            if let Source::Files { files, .. } = &m.source {
+                if files.iter().any(|f| f.name.ends_with(".gguf")) {
+                    assert_eq!(files.len(), 1, "{}: a transcribe.cpp model is one GGUF file", m.id);
+                    assert_eq!(gguf_file(m.id), Some(files[0].name));
+                }
+                for f in files.iter() {
+                    let ext = f.name.rsplit('.').next().unwrap();
+                    assert!(["gguf", "onnx", "data", "txt"].contains(&ext), "{} {}: no pickled or code files", m.id, f.name);
+                }
+            }
+            assert!(m.card_url().starts_with("https://huggingface.co/"));
+        }
+        assert_eq!(MODELS.iter().filter(|m| m.recommended).count(), 1, "one static default");
+    }
+
+    /// The device registry takes at most 10 results per report (registry/ingest.py), one per model.
+    #[test]
+    fn the_catalog_fits_a_device_report() {
+        assert!(MODELS.len() <= 10, "{} models", MODELS.len());
+    }
+
+    /// Each transcribe.cpp entry is the exact build the catalog study scored: same repo, file, revision, hash.
+    #[test]
+    fn every_gguf_model_is_the_build_the_study_scored() {
+        let study: serde_json::Value = serde_json::from_str(include_str!("../../../bench/models/catalog-2026-11.candidates.json")).unwrap();
+        let scored = study["candidates"].as_array().unwrap();
+        for m in MODELS {
+            let Some(file) = gguf_file(m.id) else { continue };
+            let Source::Files { base, files } = &m.source else { unreachable!() };
+            let (repo, rev) = base.trim_start_matches("https://huggingface.co/").split_once("/resolve/").unwrap();
+            let c = scored
+                .iter()
+                .find(|c| c["model"].as_str() == Some(&format!("{repo} {file}")))
+                .unwrap_or_else(|| panic!("{}: {repo} {file} was not in the study", m.id));
+            assert_eq!(c["revision"].as_str(), Some(rev), "{}", m.id);
+            assert_eq!(c["sha256"].as_str(), files[0].sha256, "{}", m.id);
+            assert_eq!((c["license"].as_str(), c["base_model"].as_str(), c["lab"].as_str()), (Some(m.license), Some(m.base_model), Some(m.lab)), "{}", m.id);
+        }
+    }
+
+    #[test]
+    fn punctuation_spaced_off_its_word_is_attached_outside_english() {
+        assert_eq!(attach_punctuation("Ich gehe nur , wenn du mitkommst .", "de"), "Ich gehe nur, wenn du mitkommst.");
+        assert_eq!(attach_punctuation("¿ Vienes ? Sí , ya voy !", "es"), "¿ Vienes? Sí, ya voy!");
+        assert_eq!(attach_punctuation("Vraiment ? Oui , bien sûr .", "fr"), "Vraiment ? Oui, bien sûr.");
+        assert_eq!(attach_punctuation("cd .. und dann ~/ . und x , y", "de"), "cd .. und dann ~/ . und x, y", "a mark after a symbol or before a word stays");
+    }
+
+    #[test]
+    fn multilingual_models_get_the_users_language_and_english_only_ones_none() {
+        let many: Vec<String> = ["en", "de", "fr"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(gguf_language(&many, false, "de"), Some("de".into()));
+        assert_eq!(gguf_language(&many, true, "DE"), Some("de".into()));
+        assert_eq!(gguf_language(&many, true, "auto"), None, "it detects the language itself");
+        assert_eq!(gguf_language(&many, false, "auto"), Some("en".into()));
+        assert_eq!(gguf_language(&many, false, "ja"), Some("en".into()), "a language it lacks falls back to English");
+        assert_eq!(gguf_language(&["en".into()], false, "de"), None);
+        assert_eq!(gguf_language(&[], true, "en"), None);
     }
 
     #[test]
@@ -848,6 +1186,14 @@ mod tests {
         assert_eq!(settled.as_deref(), Some("cohere-int4"), "the community does settle this device");
         let rec: Vec<_> = entries.iter().filter(|m| m.recommended).map(|m| m.id.as_str()).collect();
         assert!(!rec.is_empty() && !rec.contains(&"cohere-int4"), "{rec:?}");
+    }
+
+    /// Every other catalog model, through the same download, load and transcribe path (SILAS_TEST_MODELS).
+    #[test]
+    fn every_catalog_model_transcribes_a_clip() {
+        for m in MODELS.iter().filter(|m| m.id != "parakeet-v3" && m.id != PARAKEET_V3_ONNX) {
+            engine_on_a_bundled_clip(m.id);
+        }
     }
 
     #[test]

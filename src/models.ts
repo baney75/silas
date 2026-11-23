@@ -1,4 +1,4 @@
-import { api, errorText, type CommunityDevice, type ModelEntry, type ModelProgress, type ModelResult, type Report, type Tier } from "./api";
+import { api, errorText, type CommunityDevice, type ModelEntry, type ModelGroup, type ModelProgress, type ModelResult, type Report, type Tier } from "./api";
 import { closeShare, downloadModel, notify, openShare, refreshModels, runBenchmark, selectModel, sendShare, shareOnGithub, store, subscribe } from "./store";
 import { clear, h, icon, megabytes, progressBar, toast } from "./ui";
 
@@ -104,7 +104,29 @@ export function modelCard(m: ModelEntry, opts: { compact?: boolean } = {}): HTML
     ),
     h("h3", { class: "model-name" }, m.name),
     h("p", { class: "model-tagline" }, m.tagline),
-    h("dl", { class: "model-facts" }, h("dt", null, "Size"), h("dd", null, megabytes(m.sizeMb)), h("dt", null, "Languages"), h("dd", null, m.languages)),
+    h(
+      "dl",
+      { class: "model-facts" },
+      h("dt", null, "Size"),
+      h("dd", null, megabytes(m.sizeMb)),
+      h("dt", null, "Languages"),
+      h("dd", null, m.languages),
+      h("dt", null, "Made by"),
+      h("dd", null, m.lab),
+      h("dt", null, "License"),
+      h("dd", null, m.license),
+    ),
+    h(
+      "button",
+      {
+        class: "model-link",
+        type: "button",
+        title: m.cardUrl,
+        onclick: () => void api.openModelCard(m.id).catch((e) => toast(errorText(e), "error")),
+      },
+      "Model card",
+      icon("external", 14),
+    ),
     actions,
     p?.stage === "error" ? h("p", { class: "error-text" }, p.message ?? "Download failed. Try again.") : null,
   );
@@ -287,9 +309,29 @@ function thisComputer(): HTMLElement {
   );
 }
 
+/** The picker's sections, in order. A model recommended for this computer is listed only at the top. */
+const groups: { id: ModelGroup; title: string; blurb: string }[] = [
+  { id: "english", title: "English", blurb: "Trained for English only, and better at it for that." },
+  { id: "manyLanguages", title: "Many languages", blurb: "For speaking languages other than English, or more than one." },
+  { id: "smallAndFast", title: "Small and fast", blurb: "For older laptops and small computers: quick to download, light on memory and battery." },
+  { id: "mostAccurate", title: "Most accurate", blurb: "Fewer mistakes on hard audio, for a fast computer. They wait longer before your text appears." },
+];
+
+const isRecommended = (m: ModelEntry) => m.bestForDevice || m.recommended;
+
+/** The models in picker order: one section per use, empty sections left out. */
+export function modelSections(models: ModelEntry[]): { title: string; blurb: string; models: ModelEntry[] }[] {
+  const top = models.filter(isRecommended);
+  const rest = models.filter((m) => !isRecommended(m));
+  return [
+    { title: "Recommended for this computer", blurb: "The best fit for this computer's speed, from your benchmark or computers like it.", models: top },
+    ...groups.map((g) => ({ title: g.title, blurb: g.blurb, models: rest.filter((m) => m.group === g.id) })),
+  ].filter((s) => s.models.length > 0);
+}
+
 export function mountModels(root: HTMLElement): () => void {
   const device = h("div");
-  const grid = h("div", { class: "model-grid" });
+  const grid = h("div", { class: "model-sections" });
   root.append(
     h(
       "div",
@@ -305,7 +347,19 @@ export function mountModels(root: HTMLElement): () => void {
     grid,
     h("p", { class: "footnote" }, icon("lock", 14), "Audio never leaves this computer. Models download once, then work offline."),
   );
-  const draw = () => clear(grid, ...store.models.map((m) => modelCard(m)));
+  const draw = () =>
+    clear(
+      grid,
+      ...modelSections(store.models).map((s, i) =>
+        h(
+          "section",
+          { class: "model-section", "aria-labelledby": `model-section-${i}` },
+          h("h2", { id: `model-section-${i}`, class: "model-section-title" }, s.title),
+          h("p", { class: "model-section-blurb" }, s.blurb),
+          h("div", { class: "model-grid" }, ...s.models.map((m) => modelCard(m))),
+        ),
+      ),
+    );
   const drawDevice = () => clear(device, thisComputer());
   draw();
   drawDevice();

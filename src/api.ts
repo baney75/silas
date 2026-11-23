@@ -97,6 +97,9 @@ export interface UpdateProgress {
 
 export type Tier = "fast" | "balanced" | "best";
 
+/** The picker section a model belongs to when it isn't the one recommended for this computer. */
+export type ModelGroup = "english" | "manyLanguages" | "smallAndFast" | "mostAccurate";
+
 export interface ModelEntry {
   id: string;
   name: string;
@@ -104,6 +107,14 @@ export interface ModelEntry {
   tagline: string;
   sizeMb: number;
   languages: string;
+  group: ModelGroup;
+  /** The lab that trained it. */
+  lab: string;
+  license: string;
+  licenseUrl: string;
+  /** The original model on Hugging Face, `org/name`. */
+  baseModel: string;
+  cardUrl: string;
   installed: boolean;
   active: boolean;
   recommended: boolean;
@@ -318,6 +329,8 @@ export const api = {
   selectModel: (id: string, auto = false) => call<null>("select_model", { id, auto }),
   waitDevicePick: () => call<null>("wait_device_pick"),
   deleteModel: (id: string) => call<null>("delete_model", { id }),
+  /** Opens the model's card on Hugging Face in the browser. The core looks the address up by id. */
+  openModelCard: (id: string) => call<null>("open_model_card", { id }),
 
   getHistory: (limit: number) => call<HistoryItem[]>("get_history", { limit }),
   correctHistory: (id: string, text: string) => call<LearnResult>("correct_history", { id, text }),
