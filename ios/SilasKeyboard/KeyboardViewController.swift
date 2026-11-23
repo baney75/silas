@@ -144,7 +144,7 @@ final class KeyboardViewController: UIInputViewController {
         case .armed:
             handoff.send(.start, document: textDocumentProxy.documentIdentifier)
         case .listening:
-            handoff.send(.stop)
+            handoff.send(.stop, document: textDocumentProxy.documentIdentifier)
         case .writing:
             break
         }

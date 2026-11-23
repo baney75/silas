@@ -161,8 +161,10 @@ public struct Handoff {
             r.dictation = r.id
             r.document = document
         } else if let on = request {
+            // A stop names the field it was pressed in: iOS may give the field a new id after the
+            // trip to Silas and back. Without one, keep the start's field.
             r.dictation = on.dictation
-            r.document = on.document
+            r.document = document ?? on.document
         }
         write(r, "request.json")
         if notify { DarwinNotify.post(Self.requested) }
