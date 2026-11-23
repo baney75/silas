@@ -284,6 +284,41 @@ final class SyncTransportTests: XCTestCase {
         XCTAssertEqual(files.filter { $0.hasSuffix(".silas") }.count, 2)
     }
 
+    /// review-r2 sol-sol-F6: the read merges a word, the write fails (a read-only folder). The
+    /// word must not come back as a delete on the next sync, here or on the device that sent it.
+    func testFolderWriteFailureKeepsTheWord() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("silas-sync-\(UUID())")
+        let fm = FileManager.default
+        let key = SyncKey.generate()
+        let folder = SyncFolder(root: dir)
+        defer {
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.directory.path)
+            try? fm.removeItem(at: dir)
+        }
+        let mac = SyncPeer(ledger: SyncLedger(), keys: MemoryKeyStore(key), name: "Mac", platform: "macos")
+        let phone = SyncPeer(ledger: SyncLedger(), keys: MemoryKeyStore(key), name: "iPhone", platform: "ios")
+        var onMac = PersonalDictionary()
+        onMac.addTerm("Rectory1", source: "user")
+        _ = try await mac.syncFolder(folder, dict: onMac)
+
+        var onPhone = PersonalDictionary()
+        onPhone.addTerm("Parish1", source: "user")
+        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.directory.path)
+        do {
+            _ = try await phone.syncFolder(folder, dict: onPhone)
+            XCTFail("the write to a read-only folder should fail")
+        } catch {}
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.directory.path)
+
+        // The caller applied nothing, so onPhone is unchanged.
+        let again = try await phone.syncFolder(folder, dict: onPhone)
+        let phoneNow = again.last?.dictionary ?? onPhone
+        XCTAssertEqual(Set(phoneNow.terms.map(\.text)), ["Parish1", "Rectory1"])
+        let back = try await mac.syncFolder(folder, dict: onMac)
+        let macNow = back.last?.dictionary ?? onMac
+        XCTAssertEqual(Set(macNow.terms.map(\.text)), ["Parish1", "Rectory1"])
+    }
+
     func testFolderSkipsAnotherGroup() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("silas-sync-\(UUID())")
         defer { try? FileManager.default.removeItem(at: dir) }
