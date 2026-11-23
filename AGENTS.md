@@ -10,9 +10,15 @@ vanilla TypeScript UI in `src/`; contract in `docs/ipc.md`. Keep `core/voice` fr
 bun install --frozen-lockfile && bun run build && bun run check:theme && bun test && (cd core/voice && cargo test) && (cd src-tauri && cargo test --lib && cargo clippy --lib -- -D warnings)
 ```
 
+iOS app (SwiftUI, FluidAudio; iPhone, iPad and the Silas Keyboard) in `ios/`; see `ios/README.md`.
+On a Mac, also run `swift test` at the repo root (SilasCore, the Swift package the Apple apps pin;
+macOS CI runs it).
+
 ## Rules
 
-- Never paste. Text goes out as keystrokes (`core/voice/src/typer.rs`); the clipboard is never touched.
+- Desktop: never paste. Text goes out as keystrokes (`core/voice/src/typer.rs`); the clipboard is never touched.
+- iOS: Copy writes the pasteboard only when the user taps it; nothing else touches it. The keyboard
+  inserts through `textDocumentProxy`, never the pasteboard.
 - Never auto-unload the model. Reload latency is the bug Silas exists to avoid.
 - Fuzzy matching must not touch common English words (`core/voice/src/dictionary.rs` guards with
   `core/voice/data/common-en.txt`). Add a test to `common_words_are_never_bent_into_jargon` for any
