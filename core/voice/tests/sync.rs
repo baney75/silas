@@ -113,6 +113,47 @@ fn engines_with_different_keys_never_merge() {
 }
 
 #[test]
+fn folder_passes_running_side_by_side_never_lose_a_word() {
+    // macOS CI on silas#61: a background pass built A's frame before a word was added, the explicit
+    // pass wrote the frame with the word, then the background pass wrote its stale frame over it.
+    // Here other threads run folder passes on both devices the whole time, as background rounds do.
+    let key = SyncKey::generate();
+    let folder = std::env::temp_dir().join(format!("silas-sync-race-{}", new_device_id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let a = device("Alpha", &key, Some(&folder));
+    let b = device("Beta", &key, Some(&folder));
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let beside: Vec<_> = [&a, &b]
+        .into_iter()
+        .map(|d| {
+            let (engine, stop) = (d.engine.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                    let _ = engine.sync_folder();
+                }
+            })
+        })
+        .collect();
+    for i in 0..100 {
+        let word = format!("Word{i}");
+        a.dict.edit(|d| {
+            d.add_term(&word, "user");
+        });
+        a.engine.sync_folder().unwrap();
+        b.engine.sync_folder().unwrap();
+        if !has_term(&b.dict.get(), &word) {
+            stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            panic!("pass {i}: {word} was written to the folder but B's pass did not merge it");
+        }
+    }
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    for t in beside {
+        t.join().unwrap();
+    }
+    let _ = std::fs::remove_dir_all(folder);
+}
+
+#[test]
 fn two_engines_sync_through_a_folder() {
     let key = SyncKey::generate();
     let folder = std::env::temp_dir().join(format!("silas-sync-folder-{}", new_device_id()));
