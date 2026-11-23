@@ -315,6 +315,10 @@ pub struct SyncEngine {
     gen: AtomicU64,
     last: Mutex<Option<LastSync>>,
     inbound: AtomicUsize,
+    /// Held across a whole folder pass. Two passes side by side (a background round and Sync now)
+    /// could otherwise lose a word: one marks a file seen before merging it, so the other skips it
+    /// and returns early, or one writes a frame built before an edit over the newer frame.
+    folder_pass: Mutex<()>,
     /// mtime and length of each folder file already merged.
     folder_seen: Mutex<HashMap<PathBuf, (SystemTime, u64)>>,
     /// Hash of what this device last wrote to the folder.
@@ -342,6 +346,7 @@ impl SyncEngine {
             gen: AtomicU64::new(0),
             last: Mutex::new(None),
             inbound: AtomicUsize::new(0),
+            folder_pass: Mutex::new(()),
             folder_seen: Mutex::new(HashMap::new()),
             folder_written: Mutex::new(None),
             stranger_logged: Mutex::new(None),
@@ -917,6 +922,7 @@ impl SyncEngine {
     }
 
     fn folder_with(&self, ep: &Epoch) -> Result<()> {
+        let _pass = self.folder_pass.lock();
         let Some(folder) = self.st.lock().folder.clone() else { return Ok(()) };
         // Anyone who can write to a shared folder could swap it, or `Silas Sync`, for a link to
         // somewhere this device would then write. Refuse both.
