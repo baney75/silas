@@ -465,7 +465,17 @@ public actor SyncPeer {
     }
 
     /// Folder transport: read and merge every other device's file, then write this device's own.
+    /// A failed write puts the ledger back as it was, so it never holds merges the caller did not
+    /// apply (a word it holds and the dictionary lacks reads as a delete on the next sync).
     public func syncFolder(_ folder: SyncFolder, dict: PersonalDictionary) throws -> [Outcome] {
+        let before = ledger
+        do { return try mergeFolder(folder, dict: dict) } catch {
+            ledger = before
+            throw error
+        }
+    }
+
+    private func mergeFolder(_ folder: SyncFolder, dict: PersonalDictionary) throws -> [Outcome] {
         var current = dict
         var outcomes: [Outcome] = []
         for (_, frame) in folder.readOthers(excluding: ledger.deviceID) {
