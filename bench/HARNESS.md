@@ -16,7 +16,7 @@ SUB="--subset bench/subsets/ratchet.txt"  # the 40 ratchet clips; leave it off f
 # parakeet-v3 is the default model (GGUF on transcribe.cpp); parakeet-v3-onnx is its ONNX fallback.
 (cd core/voice && cargo build --release --features bench --bin silas-bench)
 core/voice/target/release/silas-bench run --manifest bench/manifest.jsonl --set $SET $SUB --model parakeet-v3 --out bench/out/silas.jsonl
-# add --fast to skip the real-time pacing: model time stays real, the waiting is simulated
+# add --fast to skip the real-time pacing: the waiting and the worker's model time are simulated (see below)
 
 # rivals
 bench/engines/build-whisper-cpp.sh
@@ -50,6 +50,13 @@ with `core.rs`), then the dictionary runs (fillers removed, as the app's default
 saved dictionary, `--keep-fillers` turns removal off). Typing is not included. The guesses run on the same
 worker thread and the same model as the pieces, so their CPU is in `cpu_seconds`, and a guess still running at
 key up is waited for inside `t_final_ms`.
+
+`--fast` (`replay::simulated`) makes the same decisions on a simulated clock. The worker looks every 50 ms of clip
+time, and a piece or a guess holds it for `SIM_RTF` (0.123, chapel1's median `--fast` rtf at a load near 1) times
+the audio the model hears, not for the model's real time. So where pieces are cut and which guesses run, and with
+them the text, are the same on every machine at any load. Under `--fast`, `t_first_ms` is on that simulated clock;
+`t_final_ms` is the simulated wait for a piece or guess still running at key up (or the tail), plus the real time the
+rest and the dictionary took. `compute_seconds`, `rtf`, `cpu_seconds` and memory are always real.
 
 One row per clip in `results.jsonl`:
 
@@ -135,12 +142,11 @@ Intel one. GitHub's runners are not all one CPU, so `ratchet.json` keeps baselin
   already passed on another CPU. To do that for a runner, download the `bench-ratchet` artifact of its CI run
   and pass `--results <file> --baseline ci --cpu "<CPU from the run's log>" --new-cpu`.
 
-One limit remains: under `--fast` the pieces worker still waits on the model's real speed, so on a much slower or
-faster machine a long clip can be cut at different pauses and its text can change by a word or two. Only the one
-longform clip in the ratchet subset is long enough to be cut. A guess always ends 120 ms after the last speech,
-however late the worker gets to it, so its text does not depend on the machine's speed; two `--fast` runs at
-different loads matched on all 40 clips (2026-11-22). Whether a short pause gets a guess at all can, when the
-worker is still busy and speech comes back first, but such a guess would have been thrown away.
+Machine speed and load no longer change the text: the `--fast` worker holds for a modeled time, not the model's
+real one (above). Before that, which pauses got a guess and where a long clip was cut followed how fast the model
+ran at that moment, and CI's ratchet gave longform WER 0.26% on one commit and 0.78% on the next with no engine
+change. On parish1 (2026-11-22) two `--fast` runs and a third pinned to 2 cores, where the model ran 2.6 times
+slower, gave the same text, pieces and guesses on all 40 clips.
 
 ## Rivals
 

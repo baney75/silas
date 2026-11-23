@@ -44,6 +44,48 @@
       "mc donald's"
     ]
   ],
+  "snippet_key": [
+    [
+      "My Address.",
+      "s:my address"
+    ],
+    [
+      "my address",
+      "s:my address"
+    ],
+    [
+      "e-mail",
+      "s:e mail"
+    ],
+    [
+      "e mail",
+      "s:e mail"
+    ],
+    [
+      "Donovan's phone",
+      "s:donovans phone"
+    ],
+    [
+      "Donovan’s phone",
+      "s:donovans phone"
+    ],
+    [
+      "Café order",
+      "s:café order"
+    ],
+    [
+      "ÄRGER!",
+      "s:ärger"
+    ],
+    [
+      "...",
+      null
+    ],
+    [
+      "  ",
+      null
+    ]
+  ],
   "hlc_order": [
     {
       "a": {
