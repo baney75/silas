@@ -53,6 +53,21 @@
         "peak_rss_mb": 976.3,
         "timing": "fast",
         "updated": "2026-11-18"
+      },
+      "INTEL(R) XEON(R) PLATINUM 8573C": {
+        "wer": {
+          "accent": 0.106557,
+          "clean": 0.022222,
+          "code": 0.280702,
+          "dictation": 0.048387,
+          "longform": 0.002591,
+          "noise": 0.047945
+        },
+        "formatted_error": 0.176887,
+        "t_final_ms_median": 641.7,
+        "peak_rss_mb": 970.4,
+        "timing": "fast",
+        "updated": "2026-11-22"
       }
     }
   }
