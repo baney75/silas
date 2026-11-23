@@ -3,8 +3,8 @@
 //! Usage: silas-bench run --manifest <file> --model <id> --out <results.jsonl> [--set <dir>]
 //!                        [--subset <ids.txt>] [--fast] [--dict <dictionary.json>] [--keep-fillers]
 //! Replays each clip of the manifest through the dictation path, pieces cut at pauses and all,
-//! and writes one JSON line per clip. Real time by default; `--fast` keeps the model's time real
-//! and simulates the waiting. Models live under $SILAS_BENCH_DATA (default
+//! and writes one JSON line per clip. Real time by default; `--fast` simulates the waiting and the
+//! worker's model time (`replay::SIM_RTF`), so its text is the same at any speed. Models live under $SILAS_BENCH_DATA (default
 //! ~/.cache/silas-bench/silas-data) and are downloaded if missing. Lives here rather than in
 //! src-tauri so it builds without a UI toolkit.
 //!
