@@ -15,27 +15,31 @@
     "gpu": "none used (Hex fell back to its CPU engine; Silas runs on CPU)"
   },
   "subset": "bench/subsets/ratchet.txt",
-  "recorded": "2026-11-18",
+  "recorded": "2026-11-22",
   "runs": {
     "silas_fast": {
       "rows": "bench/rivals/opencode-chapel1/silas-fast.jsonl.gz",
-      "how": "silas-bench run --fast (accuracy; what CI compares)"
+      "how": "silas-bench run --fast, 2026-11-22 main (accuracy; what CI compares)"
     },
     "silas_real_time": {
       "rows": "bench/rivals/opencode-chapel1/silas-real-time.jsonl.gz",
-      "how": "silas-bench run, paced in real time (times)"
+      "how": "silas-bench run, paced in real time, 2026-11-18 on a quiet chapel1 (times, memory, CPU)"
     },
     "silas_typing": {
       "rows": "bench/rivals/opencode-chapel1/silas-typing.jsonl.gz",
       "how": "xvfb-run -a -s \"-screen 0 1280x1024x24 -noreset\" silas-bench type --results <real-time rows> (typing)"
     },
-    "rival_service": {
-      "rows": "bench/rivals/opencode-chapel1/hex-service.jsonl.gz",
-      "how": "bench/engines/hex_engine.py: a warm `hex service`, one `hex transcribe` per clip (times and accuracy)"
+    "rival_api": {
+      "rows": "bench/rivals/opencode-chapel1/under-load/hex-api.jsonl.gz",
+      "how": "bench/engines/hex_engine.py: a warm `hex service`; each clip played in real time, then after the 200 ms tail sent whole to POST /transcriptions, timed from key up. 2026-11-22, paired clip by clip with under-load/silas-real-time.jsonl.gz on a busy chapel1, so its times are not recorded (accuracy only)"
+    },
+    "rival_cli": {
+      "rows": "bench/rivals/opencode-chapel1/hex-cli.jsonl.gz",
+      "how": "bench/engines/hex_engine.py --cli: one `hex transcribe` per clip against the warm service, 2026-11-18 on a quiet chapel1 (memory, CPU, and a ceiling on Hex's quiet wait; its times come in ~612 ms poll steps, so the check reads them as unmeasured)"
     },
     "rival_one_shot": {
       "rows": "bench/rivals/opencode-chapel1/hex-one-shot.jsonl.gz",
-      "how": "bench/engines/hex_engine.py --one-shot: no service (accuracy only; Hex keeps its better run per metric)"
+      "how": "bench/engines/hex_engine.py --one-shot: no service, 2026-11-22 (accuracy only; Hex keeps its better run per metric)"
     },
     "report": "bench/rivals/opencode-chapel1/report.json"
   },
@@ -53,7 +57,15 @@
       "margin": null,
       "opencode_voice": null,
       "opencode_voice_note": "not measured: needs a paid key. A GPT-Live call streams, but its words go to a voice agent, not to a text field.",
-      "note": "Hex's service-mode times come in whole ~612 ms steps (the hex transcribe CLI's poll interval), so they don't measure decoding. Unmeasured until Hex is timed through its local API."
+      "note": "Hex is now timed poll free through its local API, but chapel1 stayed busy all day (load average about 10 from fleet CI and a model catalog run that skips the bench lock), and busy times are refused by --record. Not scored: undecided. Hex's quiet ceiling (6571.0 ms) is above Silas's 6476.3 ms, so either could lead.",
+      "rival_quiet_ceiling": 6571.0,
+      "rival_quiet_ceiling_note": "2026-11-18, quiet: the 200 ms tail plus each clip's polled `hex transcribe` time, which can only be later than the model's answer (hex-cli.jsonl.gz)",
+      "under_load": {
+        "silas": 7111.7,
+        "rival": 9795.1,
+        "rows": "bench/rivals/opencode-chapel1/under-load/",
+        "how": "2026-11-22, paired clip by clip on a busy chapel1 (load average about 10); Silas finished first on all 40 clips"
+      }
     },
     "wait_after_key_up_ms": {
       "what": "median, key up to the final text: the wait users feel",
@@ -68,7 +80,15 @@
       "margin": null,
       "opencode_voice": null,
       "opencode_voice_note": "not measured: needs a paid key",
-      "note": "Hex's service-mode times come in whole ~612 ms steps (the hex transcribe CLI's poll interval), so they don't measure decoding. Unmeasured until Hex is timed through its local API."
+      "note": "Hex is now timed poll free through its local API, but chapel1 stayed busy all day (load average about 10 from fleet CI and a model catalog run that skips the bench lock), and busy times are refused by --record. Not scored by the check, but Hex leads on a quiet machine: its ceiling (815.9 ms) is under Silas's 867.1 ms, so Hex is ahead by at least 51 ms.",
+      "rival_quiet_ceiling": 815.9,
+      "rival_quiet_ceiling_note": "2026-11-18, quiet: the 200 ms tail plus each clip's polled `hex transcribe` time, which can only be later than the model's answer (hex-cli.jsonl.gz)",
+      "under_load": {
+        "silas": 1214.3,
+        "rival": 3565.3,
+        "rows": "bench/rivals/opencode-chapel1/under-load/",
+        "how": "2026-11-22, paired clip by clip on a busy chapel1 (load average about 10); Silas finished first on all 40 clips"
+      }
     },
     "wait_after_key_up_p95_ms": {
       "what": "95th percentile of the same wait; the long clips",
@@ -83,7 +103,15 @@
       "margin": null,
       "opencode_voice": null,
       "opencode_voice_note": "not measured: needs a paid key",
-      "note": "Hex's service-mode times come in whole ~612 ms steps (the hex transcribe CLI's poll interval), so they don't measure decoding. Unmeasured until Hex is timed through its local API."
+      "note": "Hex is now timed poll free through its local API, but chapel1 stayed busy all day (load average about 10 from fleet CI and a model catalog run that skips the bench lock), and busy times are refused by --record. Not scored: undecided. Hex's quiet ceiling (1428.7 ms) is above Silas's 1145.8 ms, so either could lead.",
+      "rival_quiet_ceiling": 1428.7,
+      "rival_quiet_ceiling_note": "2026-11-18, quiet: the 200 ms tail plus each clip's polled `hex transcribe` time, which can only be later than the model's answer (hex-cli.jsonl.gz)",
+      "under_load": {
+        "silas": 2574.3,
+        "rival": 6461.5,
+        "rows": "bench/rivals/opencode-chapel1/under-load/",
+        "how": "2026-11-22, paired clip by clip on a busy chapel1 (load average about 10); Silas finished first on all 40 clips"
+      }
     },
     "wer": {
       "what": "word error rate on ref_verbatim, pooled over the subset's speech clips (score.py's default normalization)",
@@ -91,11 +119,11 @@
       "gate": "accuracy",
       "slack": 0.01,
       "tie": 0.0,
-      "silas": 0.054054,
+      "silas": 0.051892,
       "rival": 0.052973,
       "rival_source": "measured",
-      "winner": "rival",
-      "margin": -0.001081,
+      "winner": "silas",
+      "margin": 0.001081,
       "opencode_voice": null,
       "opencode_voice_note": "not measured: gpt-live-1 is a paid cloud model with no free tier in the source"
     },
@@ -119,27 +147,75 @@
       "gate": "accuracy",
       "slack": 0.01,
       "tie": 0.0,
-      "silas": 0.174528,
+      "silas": 0.17217,
       "rival": 0.180425,
       "rival_source": "measured",
       "winner": "silas",
-      "margin": 0.005897,
+      "margin": 0.008255,
       "opencode_voice": null,
       "opencode_voice_note": "not measured"
     },
     "typing_ms": {
-      "what": "median time to put each clip's final text into the focused app on X11 (Xvfb). Silas: measured, its typer at the default \"fast\" pace. Hex: modeled from its source, one Ctrl+V after a clipboard write, timed as one key event by the typer before XTest (2026-11-18).",
+      "what": "median time from the final text to the text in the focused field on X11 (Xvfb). Silas: measured, its typer at the default \"fast\" pace. Hex: modeled from its X11 paste code, since Hex's paste can't run without its desktop app: the 60 ms sleep between taking the clipboard and pressing Ctrl+V, then four XTest events (Ctrl and V, down and up) at the rate Silas's typer sends keys with no wait. Waits that run after the text is in, Silas's 60 ms drain and Hex's 100 ms settle, are not counted on either side.",
       "better": "lower",
       "gate": "typing",
       "slack": 30,
       "tie": 5,
       "silas": 110.6,
-      "rival": 2.0,
+      "rival": 62.5,
       "rival_source": "modeled",
       "winner": "rival",
-      "margin": -108.6,
+      "margin": -48.1,
       "opencode_voice": null,
-      "opencode_voice_note": "none: a call never puts text in another app; its delegate sends messages to OpenCode sessions only"
+      "opencode_voice_note": "none: a call never puts text in another app; its delegate sends messages to OpenCode sessions only",
+      "rival_model": [
+        {
+          "step": "save the old clipboard (instant when it is empty or still holds Hex's last paste; an X11 read of up to 1 s otherwise, not counted)",
+          "ms": 0,
+          "source": "anomalyco/hex@536cffef8d5e508b92e50a31a562edd43803ab22 src/linux/paste.rs:615-631, src/linux/clipboard.rs:27,864-871"
+        },
+        {
+          "step": "wait for modifier keys no Hex shortcut holds (none held after key up)",
+          "ms": 0,
+          "source": "anomalyco/hex@536cffef8d5e508b92e50a31a562edd43803ab22 src/linux/paste.rs:45,772"
+        },
+        {
+          "step": "take the X11 clipboard",
+          "ms": 0,
+          "source": "anomalyco/hex@536cffef8d5e508b92e50a31a562edd43803ab22 src/linux/paste.rs:782-784"
+        },
+        {
+          "step": "sleep before the paste chord",
+          "ms": 60,
+          "source": "anomalyco/hex@536cffef8d5e508b92e50a31a562edd43803ab22 src/linux/paste.rs:785"
+        },
+        {
+          "step": "Ctrl+V: four XTest events, each checked, about two keys at Silas's measured 803 keys a second with no wait",
+          "ms": 2.5,
+          "source": "anomalyco/hex@536cffef8d5e508b92e50a31a562edd43803ab22 src/linux/paste.rs:786-817"
+        }
+      ],
+      "rival_after_text": [
+        {
+          "step": "settle before the next paste may replace the clipboard (runs after Ctrl+V)",
+          "ms": 100,
+          "source": "anomalyco/hex@536cffef8d5e508b92e50a31a562edd43803ab22 src/linux/paste.rs:32,644-646"
+        },
+        {
+          "step": "put the old clipboard back, on its own thread",
+          "ms": 500,
+          "source": "anomalyco/hex@536cffef8d5e508b92e50a31a562edd43803ab22 src/linux/paste.rs:41-43,676-678"
+        }
+      ],
+      "silas_after_text": [
+        {
+          "step": "let the last synthetic events drain before reading the keyboard again (runs after the last key)",
+          "ms": 60,
+          "source": "core/voice/src/core.rs:1393"
+        }
+      ],
+      "rival_before": 2.0,
+      "rival_before_note": "2026-11-18 figure: one Ctrl+V timed as one key event by the typer before XTest, leaving out the 60 ms sleep before it. Kept for comparison; the scored figure is the model above."
     },
     "setup_steps": {
       "what": "user actions on Linux from nothing to the first dictation (setup.steps lists each, with its source)",

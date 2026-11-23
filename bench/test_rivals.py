@@ -20,6 +20,7 @@ import score  # noqa: E402
 RESULTS = json.loads((ROOT / "bench/rivals/opencode.json").read_text())
 ROWS = ROOT / "bench/rivals/opencode-chapel1"
 CPU = RESULTS["machine"]["cpu"]
+MANIFEST = score.load_manifest(ROOT / "bench/manifest.jsonl")
 
 
 def quiet(f, *args, **kwargs):
@@ -98,11 +99,30 @@ class Check(unittest.TestCase):
         self.assertTrue(any("wer" in f for f in fails))
 
     def test_cli_polled_rival_times_are_unmeasured(self):
-        self.assertTrue(rivals.polled(score.read_rows(ROWS / "hex-service.jsonl.gz")))
+        cli = score.read_rows(ROWS / "hex-cli.jsonl.gz")
+        self.assertTrue(rivals.polled(cli))
+        self.assertTrue(all(rivals.measure(cli, MANIFEST)[k] is None for k in rivals.POLLED))
         self.assertFalse(rivals.polled(score.read_rows(ROWS / "silas-real-time.jsonl.gz")))
+
+    def test_hex_timed_through_its_api_is_not_polled(self):
+        api = score.read_rows(ROWS / "under-load/hex-api.jsonl.gz")
+        self.assertTrue(all(r["mode"] == "api" and r["paced"] for r in api))
+        self.assertFalse(rivals.polled(api))
+        got = rivals.measure(api, MANIFEST)
+        self.assertTrue(all(got[k] is not None for k in rivals.POLLED))
+
+    def test_times_unmeasured_on_a_quiet_machine_stay_unscored_with_a_reason(self):
         for k in rivals.POLLED:
-            self.assertIsNone(RESULTS["metrics"][k]["rival"], k)
-            self.assertEqual(RESULTS["metrics"][k]["winner"], "not scored", k)
+            m = RESULTS["metrics"][k]
+            self.assertIsNone(m["rival"], k)
+            self.assertEqual(m["winner"], "not scored", k)
+            self.assertIn("busy", m["note"], k)
+
+    def test_the_typing_model_counts_hexs_sleep_before_the_paste(self):
+        m = RESULTS["metrics"]["typing_ms"]
+        self.assertEqual(m["rival"], round(sum(s["ms"] for s in m["rival_model"]), 1))
+        self.assertTrue(any(s["ms"] == 60 and "paste.rs:785" in s["source"] for s in m["rival_model"]))
+        self.assertEqual(m["rival_before"], 2.0)
 
     def test_the_workflow_runs_when_the_readme_changes(self):
         self.assertIn("- README.md", (ROOT / ".github/workflows/bench-ratchet.yml").read_text())
@@ -150,6 +170,31 @@ class EndToEnd(unittest.TestCase):
         for key, m in RESULTS["metrics"].items():
             if m["rival"] is not None:
                 self.assertIn(f"ok   {key}:", out)
+
+    def test_times_from_a_busy_machine_are_not_recorded(self):
+        busy = ROWS / "under-load/silas-real-time.jsonl.gz"
+        self.assertGreater(rivals.machine_load(score.read_rows(busy)), rivals.BUSY_LOAD)
+        self.assertLess(rivals.machine_load(score.read_rows(ROWS / "silas-real-time.jsonl.gz")), rivals.BUSY_LOAD)
+        path = ROOT / "bench/rivals/opencode.json"
+        before = path.read_text()
+        with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+            rivals.main(["opencode", "--silas", str(busy), "--rival", str(ROWS / "under-load/hex-api.jsonl.gz"),
+                         "--gate", "latency", "--cpu", CPU, "--record"])
+        self.assertIn("busy machine", err.getvalue())
+        self.assertEqual(path.read_text(), before)
+
+    def test_a_rivals_busy_times_are_not_recorded_beside_quiet_silas_rows(self):
+        # #71 r1 first-F1: quiet Silas rows let Hex's busy times through, flattering Silas.
+        busy = ROWS / "under-load/hex-api.jsonl.gz"
+        self.assertGreater(rivals.machine_load(score.read_rows(busy), silas=False), rivals.RIVAL_BUSY_LOAD)
+        path = ROOT / "bench/rivals/opencode.json"
+        before = path.read_text()
+        with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+            rivals.main(["opencode", "--silas", str(ROWS / "silas-real-time.jsonl.gz"), "--rival", str(busy),
+                         "--gate", "latency", "--cpu", CPU, "--record"])
+        self.assertIn("busy machine", err.getvalue())
+        self.assertIn(busy.name, err.getvalue())
+        self.assertEqual(path.read_text(), before)
 
     def test_rows_that_skip_clips_fail(self):
         rows = score.read_rows(ROWS / "silas-fast.jsonl.gz")
