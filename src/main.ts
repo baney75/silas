@@ -16,6 +16,9 @@ import {
   refreshModels,
   refreshState,
   refreshStats,
+  refreshSync,
+  setDict,
+  setSync,
   statusText,
   store,
   subscribe,
@@ -58,6 +61,7 @@ async function boot() {
   if (!inTauri) document.documentElement.dataset.preview = "true";
   wireEvents();
   void refreshMicrophones();
+  void refreshSync();
   void refreshCommunity();
   if (!store.settings.onboarded) onboarding();
   else if (needsAccess()) onboarding("permissions");
@@ -158,6 +162,9 @@ function wireEvents() {
     store.updateCheck = "found";
     notify("update");
   });
+  // Sync merged another device's words in: the dictionary is new already, in the core too.
+  void on("dictionary", (d) => setDict(d));
+  void on("sync", (s) => setSync(s));
   void on("update-progress", (p) => {
     store.updateProgress = p;
     notify("update");

@@ -2,6 +2,7 @@ import { api, errorText, type AppStyle, type Settings, type TypingSpeed } from "
 import { assignStyle, assignments, STYLES, styleFor, styleHelp, unassign } from "./appstyles";
 import { checkForUpdate, hotkeyLabel, installUpdate, store, subscribe, updateSettings } from "./store";
 import type { UpdateChannel } from "./api";
+import { forgetPairingCode, syncGroup } from "./sync";
 import { clear, h, icon, keycap, logo, segmented, switchEl, toast } from "./ui";
 
 /** The language you speak, for the models that take one. "auto" lets a model that can detect it do so. */
@@ -286,6 +287,7 @@ export function mountSettings(root: HTMLElement): () => void {
         toggle("pauseMedia", "Pause media while dictating", "Music and videos that were playing pause while you speak, then play again."),
         toggle("showOverlay", "Show the recording pill", "A small floating pill while Silas listens."),
       ),
+      syncSection(),
       group("System", toggle("launchAtLogin", isMac ? "Open at login" : "Start with your computer", isMac ? "Silas waits quietly in the menu bar." : "Silas waits quietly in the system tray.")),
       group(
         "Updates",
@@ -315,7 +317,16 @@ export function mountSettings(root: HTMLElement): () => void {
     );
   }
 
+  function syncSection(): HTMLElement {
+    return syncGroup(() => body.querySelector(".sync-group")?.replaceWith(syncSection()));
+  }
+
   draw();
+  // A sync event redraws only the Sync group, and not while someone is typing in it.
+  const unsubSync = subscribe(["sync"], () => {
+    const old = body.querySelector(".sync-group");
+    if (old && !old.contains(document.activeElement)) old.replaceWith(syncSection());
+  });
   // The list is read at launch and on focus (`refreshMicrophones`); a newer one replaces only this control.
   const unsubMics = subscribe(["microphones"], () => {
     const old = body.querySelector("#set-mic");
@@ -339,6 +350,8 @@ export function mountSettings(root: HTMLElement): () => void {
     unsub();
     unsubUpdate();
     unsubMics();
+    unsubSync();
+    forgetPairingCode();
   };
 }
 

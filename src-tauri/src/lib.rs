@@ -104,6 +104,7 @@ pub fn run() {
             }
             core.load_model();
             core.start_device_pick();
+            core.start_sync();
             polycarp_voice::start_listener(core.clone());
             #[cfg(unix)]
             polycarp_voice::control::serve(core.clone());
@@ -185,6 +186,17 @@ pub fn run() {
             commands::wait_device_pick,
             commands::check_update,
             commands::install_update,
+            commands::get_sync,
+            commands::set_sync_enabled,
+            commands::sync_pairing_code,
+            commands::join_sync,
+            commands::new_sync_key,
+            commands::leave_sync,
+            commands::set_sync_name,
+            commands::add_sync_peer,
+            commands::remove_sync_peer,
+            commands::set_sync_folder,
+            commands::sync_now,
             commands::transcribe_file,
             commands::cancel_file,
         ])

@@ -22,12 +22,14 @@ import type {
   LearnResult,
   ModelEntry,
   ModelResult,
+  PairingCode,
   Pending,
   Platform,
   Report,
   Settings,
   Stats,
   Status,
+  SyncStatus,
 } from "./api";
 
 type Listener = (payload: unknown) => void;
@@ -614,6 +616,34 @@ function captureKey(): Promise<string> {
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
+// Sync (docs/sync.md). The mock pretends to be paired with a phone when `?sync` is in the URL.
+const syncPaired = params.has("sync");
+const sync: SyncStatus = {
+  enabled: syncPaired,
+  paired: syncPaired,
+  deviceId: "3f9c2a7be1d04c55a8e6f1b2c3d4e5f6",
+  name: "Donovan's MacBook Pro",
+  platform,
+  port: syncPaired ? 47823 : null,
+  peers: syncPaired ? ["rectory1:47823"] : [],
+  folder: null,
+  devices: syncPaired ? [{ id: "a1b2c3d4e5f60718293a4b5c6d7e8f90", name: "Donovan's iPhone", platform: "ios", lastSynced: now - 2 * MIN, via: "network" }] : [],
+  last: syncPaired ? { with: "Donovan's iPhone", at: now - 2 * MIN, added: 3, changed: 0, removed: 0 } : null,
+};
+
+/** A made-up code in the real shape: 52 base32 letters in groups of 4. */
+function mockCode(): PairingCode {
+  const abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const raw = Array.from({ length: 52 }, () => abc[Math.floor(Math.random() * 32)]).join("");
+  return { code: raw.match(/.{1,4}/g)!.join("-"), url: `silas://pair?k=${raw}` };
+}
+
+function syncChanged() {
+  sync.port = sync.enabled ? 47823 : null;
+  emit("sync", clone(sync));
+  return clone(sync);
+}
+
 export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
   await delay(60);
   const out = (v: unknown) => clone(v) as T;
@@ -809,6 +839,54 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
       }
       return null as T;
     }
+    case "get_sync":
+      return out(sync);
+    case "set_sync_enabled":
+      sync.enabled = Boolean(args.on);
+      if (sync.enabled) sync.paired = true;
+      return syncChanged() as T;
+    case "sync_pairing_code":
+      sync.paired = true;
+      sync.enabled = true;
+      syncChanged();
+      return out(mockCode());
+    case "join_sync": {
+      const code = String(args.code ?? "").replace(/^silas:\/\/pair\?k=/i, "").replace(/[\s-]/g, "");
+      if (code.length !== 52) throw "That code isn't right. Check it and try again.";
+      sync.paired = true;
+      sync.enabled = true;
+      return syncChanged() as T;
+    }
+    case "new_sync_key":
+      sync.paired = true;
+      sync.devices = [];
+      sync.last = null;
+      return syncChanged() as T;
+    case "leave_sync":
+      Object.assign(sync, { enabled: false, paired: false, devices: [], last: null });
+      return syncChanged() as T;
+    case "set_sync_name":
+      sync.name = String(args.name ?? "").trim() || sync.name;
+      return syncChanged() as T;
+    case "add_sync_peer": {
+      const addr = String(args.addr ?? "").trim();
+      if (!addr || /\s/.test(addr)) throw "Type a name or address, like rectory1 or 100.64.0.7:47823.";
+      if (!sync.peers.includes(addr)) sync.peers.push(addr);
+      return syncChanged() as T;
+    }
+    case "remove_sync_peer":
+      sync.peers = sync.peers.filter((p) => p !== args.addr);
+      return syncChanged() as T;
+    case "set_sync_folder":
+      sync.folder = (args.folder as string | null) || null;
+      return syncChanged() as T;
+    case "sync_now":
+      if (sync.devices[0]) {
+        sync.devices[0].lastSynced = Date.now();
+        sync.last = { with: sync.devices[0].name, at: Date.now(), added: 0, changed: 0, removed: 0 };
+        window.setTimeout(syncChanged, 400);
+      }
+      return null as T;
     default:
       throw `Unknown command: ${cmd}`;
   }

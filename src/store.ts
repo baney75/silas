@@ -18,12 +18,13 @@ import {
   type ShareReply,
   type Stats,
   type Status,
+  type SyncStatus,
   type UpdateInfo,
   type UpdateProgress,
 } from "./api";
 import { toast } from "./ui";
 
-export type Topic = "state" | "settings" | "models" | "history" | "dict" | "stats" | "progress" | "update" | "benchmark" | "microphones" | "file";
+export type Topic = "state" | "settings" | "models" | "history" | "dict" | "stats" | "progress" | "update" | "benchmark" | "microphones" | "sync" | "file";
 
 export const store = {
   state: null as unknown as AppState,
@@ -47,6 +48,8 @@ export const store = {
   /** Result of the last manual check: "none" means up to date. */
   updateCheck: "idle" as "idle" | "checking" | "none" | "found" | "error",
   updateProgress: null as UpdateProgress | null,
+  /** Dictionary sync; `null` until read at launch, or when this build has none. */
+  sync: null as SyncStatus | null,
   /** The file being transcribed, or the last one for a moment after it ends. */
   file: null as FileProgress | null,
   /** Files are being dragged over the window. */
@@ -118,6 +121,21 @@ export async function refreshMicrophones() {
 export async function refreshBenchmark() {
   store.benchmark = await api.getBenchmark();
   notify("benchmark");
+}
+
+/** Read at launch so Settings opens with it ready; `sync` events keep it current. */
+export async function refreshSync() {
+  try {
+    store.sync = await api.getSync();
+  } catch {
+    store.sync = null;
+  }
+  notify("sync");
+}
+
+export function setSync(s: SyncStatus) {
+  store.sync = s;
+  notify("sync");
 }
 
 export function setDict(d: Dictionary) {

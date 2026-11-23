@@ -177,6 +177,23 @@ interface Stats {
 }
 
 interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string[] }
+
+// Sync (docs/sync.md). Never carries the key or the pairing code, except PairingCode.
+interface SyncStatus {
+  enabled: boolean;
+  paired: boolean;                // a sync key is on this device
+  deviceId: string;               // 32 hex, made once, kept in sync.json
+  name: string;                   // this device's name as the others see it
+  platform: Platform;
+  port: number | null;            // the listener's port while sync runs (47823, or any free port if that is taken)
+  peers: string[];                // "host:port" for networks where multicast doesn't reach
+  folder: string | null;          // the synced folder, if one is set
+  devices: SyncDevice[];          // devices seen with this key, newest first
+  last: LastSync | null;          // the last sync this run, even one that changed nothing
+}
+interface SyncDevice { id: string; name: string; platform: string; lastSynced: number; via: "network" | "folder" } // lastSynced: Unix ms
+interface LastSync   { with: string; at: number; added: number; changed: number; removed: number }           // at: Unix ms
+interface PairingCode { code: string; url: string } // "ABCD-EFGH-...", "silas://pair?k=ABCDEFGH..."
 ```
 
 ## Commands
@@ -221,6 +238,16 @@ interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string
 | `share_benchmark_github` | | `null` opens a prefilled GitHub issue (`report_url`) in the default browser; the user reviews and submits it |
 | `get_community` | | `CommunityDevice \| null`: shared results for this device (3 s timeout, then the cached `community.json`; null offline with no copy) |
 | `get_device` | | `Device` |
+| `get_sync` | | `SyncStatus`. Read once at launch; `sync` events keep it current, so Settings asks for nothing |
+| `set_sync_enabled` | `{ on }` | `SyncStatus`. On makes a key the first time and starts the listener, discovery and the folder watcher; off stops them |
+| `sync_pairing_code` | | `PairingCode`. Only when the person presses Pair; makes a key and turns sync on the first time. The code is never logged or sent in an event |
+| `join_sync` | `{ code }` | `SyncStatus`. Takes the code typed in any case, with or without dashes or spaces, or a `silas://pair?k=` URL. A bad code errors with "That code isn't right. Check it and try again." Replaces any key this device had |
+| `new_sync_key` | | `SyncStatus`. A fresh key; every other device must pair again |
+| `leave_sync` | | `SyncStatus`. Deletes the key from the keychain (and the Linux fallback file), forgets seen devices, turns sync off. The dictionary stays |
+| `set_sync_name` | `{ name }` | `SyncStatus` (trimmed, at most 63 bytes, control characters dropped) |
+| `add_sync_peer` / `remove_sync_peer` | `{ addr }` | `SyncStatus`. `host`, `host:port`, `ip` or `[ipv6]:port`; the default port is 47823. Adding one syncs with it at once |
+| `set_sync_folder` | `{ folder: string \| null }` | `SyncStatus`. `~` expands; it must be an existing folder. Silas writes `Silas Sync/<deviceId>.silas` inside it. `null` stops using it |
+| `sync_now` | | `null`. Syncs with every peer, discovered device and the folder now, without waiting for the 10-minute resync |
 | `transcribe_file` | `{ path?: string }` | `HistoryItem \| null`. Transcribes an audio or video file into History; nothing is typed and the clipboard is untouched. With no `path` it opens the system picker and returns `null` if the person cancels. Errors (and emits `file-progress` `refused`) while a dictation is under way, before a model is loaded, or while another file runs. Progress and the result arrive as `file-progress` events too |
 | `cancel_file` | | `boolean` whether a file was being transcribed; it stops after the current piece |
 
@@ -240,6 +267,16 @@ interface LearnResult { learned: Correction[]; pending: Pending[]; terms: string
 | `file-progress` | `FileProgress`. `decoding` first, then `transcribing` after each piece, `waiting` while a dictation has the model, and one of `done`, `error`, `cancelled`. `refused` alone means it never started (also sent for dropped files, which have no caller) |
 | `file-drag` | `{ active }` files are being dragged over the main window (`true`), or left or were dropped (`false`). Dropped files are transcribed one after another, as `transcribe_file` |
 | `model-progress` | `{ id, downloaded, total, stage: "downloading" \| "unpacking" \| "loading" \| "done" \| "error", message? }` |
+| `sync` | `SyncStatus` whenever it changes (a sync, a device seen, a setting) |
+| `dictionary` | `Dictionary` after a sync merged a change from another device. The running app already uses it; the UI replaces its copy |
+
+## Sync files
+
+Sync keeps `sync.json` next to `dictionary.json`: the device id, the clock, the last-writer-wins
+entries (tombstones included), the on/off switch, the name, peers, folder and seen devices. It never
+holds the key. The key lives in the OS keychain (service `Silas Sync`), or on Linux without a
+Secret Service in `sync-key`, mode 0600, in the data folder. Every write to `dictionary.json` (an
+edit, an import, learning) tells the sync engine, which sends the change after a 2 s pause.
 
 ## Control socket (Linux, macOS)
 

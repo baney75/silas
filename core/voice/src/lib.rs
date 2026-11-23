@@ -23,6 +23,9 @@ pub mod snippets;
 pub mod spoken;
 pub mod store;
 pub mod style;
+pub mod sync;
+pub mod sync_engine;
+pub mod sync_key;
 pub mod typer;
 #[cfg(target_os = "linux")]
 pub mod wayland;
