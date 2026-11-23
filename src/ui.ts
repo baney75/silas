@@ -55,6 +55,7 @@ const paths: Record<string, string> = {
   x: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
   download: '<path d="M12 4.5v11M7.5 11 12 15.5l4.5-4.5M5 19.5h14"/>',
   upload: '<path d="M12 15.5v-11M7.5 9 12 4.5 16.5 9M5 19.5h14"/>',
+  external: '<path d="M13.5 5.5h5v5M18.5 5.5l-7.5 7.5M16 13.5v4a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 5 17.5v-8A1.5 1.5 0 0 1 6.5 8h4"/>',
   mic: '<rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/>',
   shield: '<path d="M12 3.5 19 6v5.5c0 4.2-2.9 7.6-7 9-4.1-1.4-7-4.8-7-9V6z"/><path d="m9 12 2.2 2.2L15.5 10"/>',
   keyboard: '<rect x="3" y="6" width="18" height="12" rx="2.5"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/>',

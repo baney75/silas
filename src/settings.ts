@@ -5,15 +5,36 @@ import type { UpdateChannel } from "./api";
 import { forgetPairingCode, syncGroup } from "./sync";
 import { clear, h, icon, keycap, logo, segmented, switchEl, toast } from "./ui";
 
+/** The language you speak, for the models that take one. "auto" lets a model that can detect it do so. */
 export const languages: Array<[string, string]> = [
   ["en", "English"],
-  ["es", "Spanish"],
+  ["auto", "Detect automatically"],
+  ["ar", "Arabic"],
+  ["yue", "Cantonese"],
+  ["zh", "Chinese (Mandarin)"],
+  ["cs", "Czech"],
+  ["da", "Danish"],
+  ["nl", "Dutch"],
+  ["fi", "Finnish"],
   ["fr", "French"],
   ["de", "German"],
+  ["el", "Greek"],
+  ["hi", "Hindi"],
+  ["hu", "Hungarian"],
+  ["id", "Indonesian"],
   ["it", "Italian"],
-  ["pt", "Portuguese"],
-  ["nl", "Dutch"],
+  ["ja", "Japanese"],
+  ["ko", "Korean"],
   ["pl", "Polish"],
+  ["pt", "Portuguese"],
+  ["ro", "Romanian"],
+  ["ru", "Russian"],
+  ["es", "Spanish"],
+  ["sv", "Swedish"],
+  ["th", "Thai"],
+  ["tr", "Turkish"],
+  ["uk", "Ukrainian"],
+  ["vi", "Vietnamese"],
 ];
 
 type BoolKey = { [K in keyof Settings]: Settings[K] extends boolean ? K : never }[keyof Settings];
@@ -261,7 +282,7 @@ export function mountSettings(root: HTMLElement): () => void {
       group(
         "Audio",
         row("Microphone", null, micSelect(), "set-mic"),
-        row("Language", "Parakeet detects the language on its own. Cohere uses this one.", langSelect(), "set-lang"),
+        row("Language", "The language you speak. Parakeet v3 works it out itself; other models that take a language use this one, and Detect lets those that can work it out.", langSelect(), "set-lang"),
         toggle("sounds", "Sounds", "A soft click when Silas starts and stops listening."),
         toggle("pauseMedia", "Pause media while dictating", "Music and videos that were playing pause while you speak, then play again."),
         toggle("showOverlay", "Show the recording pill", "A small floating pill while Silas listens."),

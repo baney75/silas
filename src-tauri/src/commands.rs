@@ -120,6 +120,14 @@ pub fn delete_model(core: State<Shared>, id: String) -> R<()> {
     models::remove(&id).map_err(err)
 }
 
+/// Opens a catalog model's card on Hugging Face. Only ids from the catalog: the UI never hands over a URL.
+#[tauri::command]
+pub async fn open_model_card(id: String) -> R<()> {
+    let spec = models::spec(&id).ok_or_else(|| format!("unknown model {id}"))?;
+    let url = spec.card_url();
+    tauri::async_runtime::spawn_blocking(move || benchmark::open_url(&url).map_err(err)).await.map_err(err)?
+}
+
 #[tauri::command]
 pub fn get_history(core: State<Shared>, limit: Option<usize>) -> Vec<HistoryItem> {
     let h = core.history.lock();

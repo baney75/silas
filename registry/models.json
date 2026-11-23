@@ -2,6 +2,12 @@
   "models": [
     "parakeet-v3",
     "parakeet-v3-onnx",
+    "parakeet-v2",
+    "canary-180m",
+    "moonshine-tiny",
+    "qwen3-asr-0.6b",
+    "whisper-turbo",
+    "canary-qwen",
     "cohere-int4"
   ]
 }

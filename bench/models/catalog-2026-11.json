@@ -1,0 +1,1801 @@
+{
+  "run": "catalog-2026-11",
+  "date": "2026-11-22",
+  "machine": "chapel1: Intel Core i5-10210U (4 cores, 8 threads), 23 GB RAM, Linux, no GPU used",
+  "set": "bench-set-v1, all 250 clips (62.2 min)",
+  "method": "silas-bench run --fast --threads 3 under `nice -n 10 taskset -c 1,2,3` (bench/models/run.sh, defaults): the reference laptop, as in accent-2026-11. Every model goes through Silas's dictation path (pieces cut at pauses while the clip plays, the 200 ms tail, the rest at key up, the default dictionary); --fast keeps model time real and simulates the waiting. English is passed to models that take a language.",
+  "candidates": [
+    {
+      "id": "parakeet-v3-q4km",
+      "label": "Parakeet TDT 0.6B v3, Q4_K_M (Silas's default)",
+      "model": "handy-computer/parakeet-tdt-0.6b-v3-gguf parakeet-tdt-0.6b-v3-Q4_K_M.gguf",
+      "revision": "d8d8c32cb2017c57e5307767343e97870f8a7f53",
+      "sha256": "b68557be1e3c40207fd7c4bd9d63f1d3316b963f15325bfb0cc16a8bb0ffd181",
+      "size_mb": 485,
+      "download_mb": 485,
+      "lab": "NVIDIA",
+      "license": "CC-BY-4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "base_model": "nvidia/parakeet-tdt-0.6b-v3",
+      "languages": "English + 24 European",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend",
+      "rows": "catalog-2026-11/parakeet-v3-q4km.jsonl.gz",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0437,
+      "wer_ci": [
+        0.0352,
+        0.0553
+      ],
+      "wer_by_category": {
+        "clean": 0.0192,
+        "noise": 0.0234,
+        "accent": 0.1203,
+        "dictation": 0.0734,
+        "code": 0.2069,
+        "longform": 0.0248,
+        "command": 0.0189
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0114,
+          0.0281
+        ],
+        "noise": [
+          0.0149,
+          0.033
+        ],
+        "accent": [
+          0.0958,
+          0.1507
+        ],
+        "dictation": [
+          0.0429,
+          0.1133
+        ],
+        "code": [
+          0.1111,
+          0.3208
+        ],
+        "longform": [
+          0.0159,
+          0.0335
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0192,
+        "noise": 0.0234,
+        "accent": 0.1148,
+        "dictation": 0.0742,
+        "code": 0.2069,
+        "command": 0.0189,
+        "longform": 0.0248,
+        "all": 0.0428
+      },
+      "formatted_error": 0.1358,
+      "punctuation_f1": 0.7542,
+      "wait_after_key_up_ms": {
+        "median": 1049.3,
+        "p95": 1681.7
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 959.6,
+          "p95": 1613.5
+        },
+        "clean": {
+          "median": 968.5,
+          "p95": 1617.9
+        },
+        "code": {
+          "median": 883.2,
+          "p95": 1008.5
+        },
+        "command": {
+          "median": 451.8,
+          "p95": 635.3
+        },
+        "dictation": {
+          "median": 1075.8,
+          "p95": 1468.9
+        },
+        "longform": {
+          "median": 722.8,
+          "p95": 1366.3
+        },
+        "noise": {
+          "median": 1429.4,
+          "p95": 1783.4
+        }
+      },
+      "time_to_first_text_ms_median": 8914.6,
+      "rtf_median": 0.1155,
+      "peak_rss_mb": 1060.4,
+      "cpu_s_per_audio_min": 20.09,
+      "load_ms": 571,
+      "paced": false,
+      "load1_median": 3.19,
+      "load1_max": 3.94
+    },
+    {
+      "id": "parakeet-v2-q4km",
+      "label": "Parakeet TDT 0.6B v2, Q4_K_M",
+      "model": "handy-computer/parakeet-tdt-0.6b-v2-gguf parakeet-tdt-0.6b-v2-Q4_K_M.gguf",
+      "revision": "58239cf6d0ecb0af921e7936c1e5e0a8dba91dbb",
+      "sha256": "4853f9653f641d376e6f7de65d73c7a34a73677704a606727bf51acc83f999f3",
+      "size_mb": 475,
+      "download_mb": 475,
+      "lab": "NVIDIA",
+      "license": "CC-BY-4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "base_model": "nvidia/parakeet-tdt-0.6b-v2",
+      "languages": "English",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend",
+      "rows": "catalog-2026-11/parakeet-v2-q4km.jsonl.gz",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0439,
+      "wer_ci": [
+        0.0343,
+        0.057
+      ],
+      "wer_by_category": {
+        "clean": 0.0152,
+        "noise": 0.0257,
+        "accent": 0.1649,
+        "dictation": 0.0609,
+        "code": 0.1473,
+        "longform": 0.0207,
+        "command": 0.0189
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0076,
+          0.0238
+        ],
+        "noise": [
+          0.0154,
+          0.0372
+        ],
+        "accent": [
+          0.1371,
+          0.1959
+        ],
+        "dictation": [
+          0.0299,
+          0.1008
+        ],
+        "code": [
+          0.0934,
+          0.2117
+        ],
+        "longform": [
+          0.0132,
+          0.0301
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0152,
+        "noise": 0.0257,
+        "accent": 0.1491,
+        "dictation": 0.0616,
+        "code": 0.1473,
+        "command": 0.0189,
+        "longform": 0.0207,
+        "all": 0.0417
+      },
+      "formatted_error": 0.1392,
+      "punctuation_f1": 0.7628,
+      "wait_after_key_up_ms": {
+        "median": 1023.7,
+        "p95": 1640.5
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 928.8,
+          "p95": 1587.4
+        },
+        "clean": {
+          "median": 945.6,
+          "p95": 1561.7
+        },
+        "code": {
+          "median": 857.8,
+          "p95": 972.8
+        },
+        "command": {
+          "median": 447.5,
+          "p95": 635.2
+        },
+        "dictation": {
+          "median": 1055.2,
+          "p95": 1432.0
+        },
+        "longform": {
+          "median": 722.4,
+          "p95": 1320.0
+        },
+        "noise": {
+          "median": 1402.1,
+          "p95": 1746.7
+        }
+      },
+      "time_to_first_text_ms_median": 8875.0,
+      "rtf_median": 0.1122,
+      "peak_rss_mb": 1019.6,
+      "cpu_s_per_audio_min": 19.45,
+      "load_ms": 377,
+      "paced": false,
+      "load1_median": 3.05,
+      "load1_max": 3.44
+    },
+    {
+      "id": "parakeet-unified-en-q4km",
+      "label": "Parakeet Unified English 0.6B, Q4_K_M",
+      "model": "handy-computer/parakeet-unified-en-0.6b-gguf parakeet-unified-en-0.6b-Q4_K_M.gguf",
+      "revision": "843b1b175ace04f5a89d379c79e2518c0d065b25",
+      "sha256": "a8bf3de2b393bd14ead5a858c3748d5e3b07a20fdeabdd3b498fba4f463fa929",
+      "size_mb": 477,
+      "download_mb": 477,
+      "lab": "NVIDIA",
+      "license": "NVIDIA Open Model License",
+      "license_url": "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/",
+      "base_model": "nvidia/parakeet-unified-en-0.6b",
+      "languages": "English",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend",
+      "rows": "catalog-2026-11/parakeet-unified-en-q4km.jsonl.gz",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0473,
+      "wer_ci": [
+        0.0374,
+        0.0621
+      ],
+      "wer_by_category": {
+        "clean": 0.0168,
+        "noise": 0.0222,
+        "accent": 0.1863,
+        "dictation": 0.0563,
+        "code": 0.232,
+        "longform": 0.0184,
+        "command": 0.0189
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0097,
+          0.0243
+        ],
+        "noise": [
+          0.0143,
+          0.0305
+        ],
+        "accent": [
+          0.1609,
+          0.2186
+        ],
+        "dictation": [
+          0.0241,
+          0.0932
+        ],
+        "code": [
+          0.1385,
+          0.339
+        ],
+        "longform": [
+          0.0121,
+          0.0242
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0168,
+        "noise": 0.0222,
+        "accent": 0.1593,
+        "dictation": 0.0553,
+        "code": 0.232,
+        "command": 0.0189,
+        "longform": 0.0182,
+        "all": 0.0436
+      },
+      "formatted_error": 0.1569,
+      "punctuation_f1": 0.6499,
+      "wait_after_key_up_ms": {
+        "median": 1142.2,
+        "p95": 1850.3
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 986.2,
+          "p95": 1700.7
+        },
+        "clean": {
+          "median": 1168.7,
+          "p95": 1928.7
+        },
+        "code": {
+          "median": 890.2,
+          "p95": 1093.5
+        },
+        "command": {
+          "median": 487.5,
+          "p95": 652.2
+        },
+        "dictation": {
+          "median": 1147.0,
+          "p95": 1572.6
+        },
+        "longform": {
+          "median": 833.7,
+          "p95": 1414.2
+        },
+        "noise": {
+          "median": 1468.0,
+          "p95": 1965.7
+        }
+      },
+      "time_to_first_text_ms_median": 9012.2,
+      "rtf_median": 0.125,
+      "peak_rss_mb": 1003.6,
+      "cpu_s_per_audio_min": 21.79,
+      "load_ms": 595,
+      "paced": false,
+      "load1_median": 4.37,
+      "load1_max": 6.26
+    },
+    {
+      "id": "nemotron-streaming-q4km",
+      "label": "Nemotron 3.5 ASR Streaming 0.6B, Q4_K_M",
+      "model": "handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf",
+      "revision": "53ce288f69326b415aeef030cfcb02a08a8096dd",
+      "sha256": "41c99fa5fb6f3d35f68e79adc3e755eca2232a8d921178bd647b71194792b8fd",
+      "size_mb": 496,
+      "download_mb": 496,
+      "lab": "NVIDIA",
+      "license": "OpenMDW-1.1",
+      "license_url": "https://openmdw.ai/license/1-1/",
+      "base_model": "nvidia/nemotron-3.5-asr-streaming-0.6b",
+      "languages": "40 language-locales (32 ready to use)",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend",
+      "rows": "catalog-2026-11/nemotron-streaming-q4km.jsonl.gz",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0788,
+      "wer_ci": [
+        0.0653,
+        0.0968
+      ],
+      "wer_by_category": {
+        "clean": 0.0351,
+        "noise": 0.066,
+        "accent": 0.2299,
+        "dictation": 0.0781,
+        "code": 0.3009,
+        "longform": 0.0449,
+        "command": 0.0189
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0239,
+          0.0478
+        ],
+        "noise": [
+          0.049,
+          0.084
+        ],
+        "accent": [
+          0.1991,
+          0.2684
+        ],
+        "dictation": [
+          0.0462,
+          0.114
+        ],
+        "code": [
+          0.1807,
+          0.4387
+        ],
+        "longform": [
+          0.0311,
+          0.0584
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0351,
+        "noise": 0.066,
+        "accent": 0.2083,
+        "dictation": 0.079,
+        "code": 0.3009,
+        "command": 0.0189,
+        "longform": 0.0449,
+        "all": 0.0758
+      },
+      "formatted_error": 0.2011,
+      "punctuation_f1": 0.5875,
+      "wait_after_key_up_ms": {
+        "median": 1319.0,
+        "p95": 2525.1
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 1149.4,
+          "p95": 1892.0
+        },
+        "clean": {
+          "median": 1323.9,
+          "p95": 2365.8
+        },
+        "code": {
+          "median": 1003.9,
+          "p95": 1157.2
+        },
+        "command": {
+          "median": 486.7,
+          "p95": 723.4
+        },
+        "dictation": {
+          "median": 1281.0,
+          "p95": 1708.4
+        },
+        "longform": {
+          "median": 1502.2,
+          "p95": 2933.3
+        },
+        "noise": {
+          "median": 1908.6,
+          "p95": 2727.1
+        }
+      },
+      "time_to_first_text_ms_median": 9217.0,
+      "rtf_median": 0.1502,
+      "peak_rss_mb": 1081.6,
+      "cpu_s_per_audio_min": 29.05,
+      "load_ms": 455,
+      "paced": false,
+      "load1_median": 5.01,
+      "load1_max": 11.8
+    },
+    {
+      "id": "canary-1b-v2-q4km",
+      "label": "Canary 1B v2, Q4_K_M",
+      "model": "handy-computer/canary-1b-v2-gguf canary-1b-v2-Q4_K_M.gguf",
+      "revision": "692af661b140183b60e44f55ad03c59e1e77d078",
+      "sha256": "49e0a67e219bec95a254c2348460b6350e75a7ac6f93a131e48244b4c7cb53b9",
+      "size_mb": 735,
+      "download_mb": 735,
+      "lab": "NVIDIA",
+      "license": "CC-BY-4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "base_model": "nvidia/canary-1b-v2",
+      "languages": "25 European",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend",
+      "rows": "catalog-2026-11/canary-1b-v2-q4km.jsonl.gz",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0541,
+      "wer_ci": [
+        0.0435,
+        0.0702
+      ],
+      "wer_by_category": {
+        "clean": 0.0216,
+        "noise": 0.0269,
+        "accent": 0.1961,
+        "dictation": 0.0859,
+        "code": 0.2194,
+        "longform": 0.024,
+        "command": 0.0
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0146,
+          0.0287
+        ],
+        "noise": [
+          0.0188,
+          0.0358
+        ],
+        "accent": [
+          0.1674,
+          0.2306
+        ],
+        "dictation": [
+          0.0518,
+          0.1246
+        ],
+        "code": [
+          0.1238,
+          0.3201
+        ],
+        "longform": [
+          0.0186,
+          0.0308
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0216,
+        "noise": 0.0269,
+        "accent": 0.1704,
+        "dictation": 0.0853,
+        "code": 0.2194,
+        "command": 0.0,
+        "longform": 0.024,
+        "all": 0.0506
+      },
+      "formatted_error": 0.1377,
+      "punctuation_f1": 0.7579,
+      "wait_after_key_up_ms": {
+        "median": 1553.4,
+        "p95": 2477.0
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 1383.1,
+          "p95": 2296.5
+        },
+        "clean": {
+          "median": 1378.4,
+          "p95": 2367.2
+        },
+        "code": {
+          "median": 1253.4,
+          "p95": 1450.1
+        },
+        "command": {
+          "median": 598.8,
+          "p95": 887.2
+        },
+        "dictation": {
+          "median": 1590.7,
+          "p95": 2151.0
+        },
+        "longform": {
+          "median": 1142.1,
+          "p95": 2101.9
+        },
+        "noise": {
+          "median": 2120.6,
+          "p95": 2682.0
+        }
+      },
+      "time_to_first_text_ms_median": 9337.8,
+      "rtf_median": 0.1772,
+      "peak_rss_mb": 1565.3,
+      "cpu_s_per_audio_min": 30.83,
+      "load_ms": 709,
+      "paced": false,
+      "load1_median": 3.07,
+      "load1_max": 3.73
+    },
+    {
+      "id": "canary-180m-flash-q8",
+      "label": "Canary 180M Flash, Q8_0",
+      "model": "handy-computer/canary-180m-flash-gguf canary-180m-flash-Q8_0.gguf",
+      "revision": "8b01fc77ac169a0a05c5c0332bbfe54acf65c26f",
+      "sha256": "f942ab746040b531a29ab78ca3afc8dc9564efd8e4c942b5541e53644be9c408",
+      "size_mb": 218,
+      "download_mb": 218,
+      "lab": "NVIDIA",
+      "license": "CC-BY-4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "base_model": "nvidia/canary-180m-flash",
+      "languages": "English, German, French, Spanish",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend",
+      "rows": "catalog-2026-11/canary-180m-flash-q8.jsonl.gz",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0546,
+      "wer_ci": [
+        0.0421,
+        0.0734
+      ],
+      "wer_by_category": {
+        "clean": 0.0208,
+        "noise": 0.0321,
+        "accent": 0.2237,
+        "dictation": 0.0531,
+        "code": 0.2665,
+        "longform": 0.0182,
+        "command": 0.0566
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0127,
+          0.0298
+        ],
+        "noise": [
+          0.0227,
+          0.0424
+        ],
+        "accent": [
+          0.1757,
+          0.2786
+        ],
+        "dictation": [
+          0.0258,
+          0.088
+        ],
+        "code": [
+          0.1586,
+          0.394
+        ],
+        "longform": [
+          0.0108,
+          0.0255
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0208,
+        "noise": 0.0321,
+        "accent": 0.1963,
+        "dictation": 0.0521,
+        "code": 0.2665,
+        "command": 0.0566,
+        "longform": 0.0182,
+        "all": 0.0508
+      },
+      "formatted_error": 0.1532,
+      "punctuation_f1": 0.7467,
+      "wait_after_key_up_ms": {
+        "median": 888.1,
+        "p95": 1689.1
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 931.2,
+          "p95": 1615.2
+        },
+        "clean": {
+          "median": 640.4,
+          "p95": 1084.2
+        },
+        "code": {
+          "median": 767.8,
+          "p95": 1132.5
+        },
+        "command": {
+          "median": 378.8,
+          "p95": 598.1
+        },
+        "dictation": {
+          "median": 1002.9,
+          "p95": 1847.8
+        },
+        "longform": {
+          "median": 524.9,
+          "p95": 972.1
+        },
+        "noise": {
+          "median": 1156.5,
+          "p95": 1858.3
+        }
+      },
+      "time_to_first_text_ms_median": 8589.5,
+      "rtf_median": 0.0948,
+      "peak_rss_mb": 719.7,
+      "cpu_s_per_audio_min": 14.9,
+      "load_ms": 139,
+      "paced": false,
+      "load1_median": 5.57,
+      "load1_max": 6.99
+    },
+    {
+      "id": "canary-qwen-2.5b-q4km",
+      "label": "Canary-Qwen 2.5B, Q4_K_M",
+      "model": "handy-computer/canary-qwen-2.5b-gguf canary-qwen-2.5b-Q4_K_M.gguf",
+      "revision": "a4480da236b7d99d7a12186868de021ef4ff5ced",
+      "sha256": "db5162229d6fa22597d06a613bd9b543eddb3ee02e6afc5e759120fde02bebf7",
+      "size_mb": 1738,
+      "download_mb": 1738,
+      "lab": "NVIDIA",
+      "license": "CC-BY-4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "base_model": "nvidia/canary-qwen-2.5b",
+      "languages": "English",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend",
+      "rows": "catalog-2026-11/canary-qwen-2.5b-q4km.jsonl.gz",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0438,
+      "wer_ci": [
+        0.0351,
+        0.0567
+      ],
+      "wer_by_category": {
+        "clean": 0.02,
+        "noise": 0.0327,
+        "accent": 0.1595,
+        "dictation": 0.0531,
+        "code": 0.1379,
+        "longform": 0.0197,
+        "command": 0.0
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.012,
+          0.0287
+        ],
+        "noise": [
+          0.0212,
+          0.0451
+        ],
+        "accent": [
+          0.1318,
+          0.1922
+        ],
+        "dictation": [
+          0.0217,
+          0.0931
+        ],
+        "code": [
+          0.0791,
+          0.2018
+        ],
+        "longform": [
+          0.013,
+          0.0262
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.02,
+        "noise": 0.0327,
+        "accent": 0.1389,
+        "dictation": 0.0521,
+        "code": 0.1379,
+        "command": 0.0,
+        "longform": 0.0195,
+        "all": 0.0409
+      },
+      "formatted_error": 0.1528,
+      "punctuation_f1": 0.6771,
+      "wait_after_key_up_ms": {
+        "median": 4127.9,
+        "p95": 7043.9
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 3689.8,
+          "p95": 6496.1
+        },
+        "clean": {
+          "median": 3736.2,
+          "p95": 6987.8
+        },
+        "code": {
+          "median": 3204.9,
+          "p95": 4349.1
+        },
+        "command": {
+          "median": 1363.1,
+          "p95": 2180.3
+        },
+        "dictation": {
+          "median": 4287.6,
+          "p95": 6020.1
+        },
+        "longform": {
+          "median": 5322.5,
+          "p95": 9992.0
+        },
+        "noise": {
+          "median": 5496.2,
+          "p95": 7409.3
+        }
+      },
+      "time_to_first_text_ms_median": 11802.7,
+      "rtf_median": 0.5144,
+      "peak_rss_mb": 2748.3,
+      "cpu_s_per_audio_min": 92.8,
+      "load_ms": 777,
+      "paced": false,
+      "load1_median": 3.09,
+      "load1_max": 5.15
+    },
+    {
+      "id": "whisper-turbo-q4km",
+      "label": "Whisper large-v3-turbo, Q4_K_M",
+      "model": "handy-computer/whisper-large-v3-turbo-gguf whisper-large-v3-turbo-Q4_K_M.gguf",
+      "revision": "18ada752005f5fddef499256f9a458d0b37a203a",
+      "sha256": "c6e172d0074f0fa9440b88247854b50643cd4bb58b8515c797bbed16d858c7df",
+      "size_mb": 536,
+      "download_mb": 536,
+      "lab": "OpenAI",
+      "license": "MIT",
+      "license_url": "https://opensource.org/license/mit",
+      "base_model": "openai/whisper-large-v3-turbo",
+      "languages": "99",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend",
+      "rows": "catalog-2026-11/whisper-turbo-q4km.jsonl.gz",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0553,
+      "wer_ci": [
+        0.0431,
+        0.074
+      ],
+      "wer_by_category": {
+        "clean": 0.0248,
+        "noise": 0.0298,
+        "accent": 0.1988,
+        "dictation": 0.0969,
+        "code": 0.2382,
+        "longform": 0.0213,
+        "command": 0.0377
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0143,
+          0.0371
+        ],
+        "noise": [
+          0.0185,
+          0.0418
+        ],
+        "accent": [
+          0.1669,
+          0.2357
+        ],
+        "dictation": [
+          0.0588,
+          0.1422
+        ],
+        "code": [
+          0.1162,
+          0.3719
+        ],
+        "longform": [
+          0.0145,
+          0.0297
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0248,
+        "noise": 0.0298,
+        "accent": 0.1722,
+        "dictation": 0.0964,
+        "code": 0.2382,
+        "command": 0.0377,
+        "longform": 0.0211,
+        "all": 0.0516
+      },
+      "formatted_error": 0.1927,
+      "punctuation_f1": 0.5437,
+      "wait_after_key_up_ms": {
+        "median": 13148.4,
+        "p95": 21664.7
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 13223.1,
+          "p95": 24130.8
+        },
+        "clean": {
+          "median": 13068.0,
+          "p95": 14138.7
+        },
+        "code": {
+          "median": 13276.0,
+          "p95": 14697.4
+        },
+        "command": {
+          "median": 13691.3,
+          "p95": 15733.3
+        },
+        "dictation": {
+          "median": 13039.4,
+          "p95": 17953.7
+        },
+        "longform": {
+          "median": 21339.1,
+          "p95": 25136.8
+        },
+        "noise": {
+          "median": 13186.5,
+          "p95": 14114.8
+        }
+      },
+      "time_to_first_text_ms_median": 20874.9,
+      "rtf_median": 1.6805,
+      "peak_rss_mb": 721.5,
+      "cpu_s_per_audio_min": 248.35,
+      "load_ms": 49,
+      "paced": false,
+      "load1_median": 3.14,
+      "load1_max": 5.86
+    },
+    {
+      "id": "whisper-small-q8",
+      "label": "Whisper small, Q8_0",
+      "model": "handy-computer/whisper-small-gguf whisper-small-Q8_0.gguf",
+      "revision": "4afdc7942ecf1997f359deae48a63506b062eac4",
+      "sha256": "9b9c8811bbcc82a7766f0fb0925614bdacb0923b2cc630daeac17108b655b860",
+      "size_mb": 270,
+      "download_mb": 270,
+      "lab": "OpenAI",
+      "license": "Apache-2.0",
+      "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "base_model": "openai/whisper-small",
+      "languages": "99",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend",
+      "rows": "catalog-2026-11/whisper-small-q8.jsonl.gz",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0754,
+      "wer_ci": [
+        0.0619,
+        0.095
+      ],
+      "wer_by_category": {
+        "clean": 0.0343,
+        "noise": 0.0561,
+        "accent": 0.246,
+        "dictation": 0.0969,
+        "code": 0.2602,
+        "longform": 0.0383,
+        "command": 0.0189
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0224,
+          0.0474
+        ],
+        "noise": [
+          0.0416,
+          0.0716
+        ],
+        "accent": [
+          0.2058,
+          0.2939
+        ],
+        "dictation": [
+          0.0598,
+          0.1398
+        ],
+        "code": [
+          0.1633,
+          0.3716
+        ],
+        "longform": [
+          0.0243,
+          0.0508
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0343,
+        "noise": 0.0561,
+        "accent": 0.2204,
+        "dictation": 0.0964,
+        "code": 0.2602,
+        "command": 0.0189,
+        "longform": 0.0383,
+        "all": 0.0719
+      },
+      "formatted_error": 0.1644,
+      "punctuation_f1": 0.707,
+      "wait_after_key_up_ms": {
+        "median": 5391.2,
+        "p95": 17098.7
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 5775.9,
+          "p95": 12401.0
+        },
+        "clean": {
+          "median": 3772.9,
+          "p95": 4852.5
+        },
+        "code": {
+          "median": 4838.6,
+          "p95": 9048.6
+        },
+        "command": {
+          "median": 3206.4,
+          "p95": 6079.1
+        },
+        "dictation": {
+          "median": 5649.2,
+          "p95": 9130.5
+        },
+        "longform": {
+          "median": 5011.6,
+          "p95": 20512.3
+        },
+        "noise": {
+          "median": 12554.8,
+          "p95": 20344.0
+        }
+      },
+      "time_to_first_text_ms_median": 13620.6,
+      "rtf_median": 0.7706,
+      "peak_rss_mb": 492.6,
+      "cpu_s_per_audio_min": 103.07,
+      "load_ms": 49,
+      "paced": false,
+      "load1_median": 8.92,
+      "load1_max": 28.47
+    },
+    {
+      "id": "whisper-base-q8",
+      "label": "Whisper base, Q8_0",
+      "model": "handy-computer/whisper-base-gguf whisper-base-Q8_0.gguf",
+      "revision": "42fcd2077de47c36d779309e0e91b76ec620f56d",
+      "sha256": "81c069428bc8a24551a8169cf31cf09bcfd9d4cf50389ae281323c9aa9648c81",
+      "size_mb": 85,
+      "download_mb": 85,
+      "lab": "OpenAI",
+      "license": "Apache-2.0",
+      "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "base_model": "openai/whisper-base",
+      "languages": "99",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend",
+      "rows": "catalog-2026-11/whisper-base-q8.jsonl.gz",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.1045,
+      "wer_ci": [
+        0.0876,
+        0.1265
+      ],
+      "wer_by_category": {
+        "clean": 0.0567,
+        "noise": 0.1069,
+        "accent": 0.2825,
+        "dictation": 0.0938,
+        "code": 0.3166,
+        "longform": 0.0621,
+        "command": 0.0377
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0399,
+          0.0755
+        ],
+        "noise": [
+          0.0828,
+          0.1323
+        ],
+        "accent": [
+          0.2453,
+          0.3273
+        ],
+        "dictation": [
+          0.06,
+          0.1337
+        ],
+        "code": [
+          0.2107,
+          0.4252
+        ],
+        "longform": [
+          0.0376,
+          0.0811
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0567,
+        "noise": 0.1069,
+        "accent": 0.2602,
+        "dictation": 0.0932,
+        "code": 0.3166,
+        "command": 0.0377,
+        "longform": 0.0621,
+        "all": 0.1013
+      },
+      "formatted_error": 0.1979,
+      "punctuation_f1": 0.6712,
+      "wait_after_key_up_ms": {
+        "median": 1418.5,
+        "p95": 2008.9
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 1114.0,
+          "p95": 1348.9
+        },
+        "clean": {
+          "median": 1740.6,
+          "p95": 2565.7
+        },
+        "code": {
+          "median": 1697.0,
+          "p95": 1880.4
+        },
+        "command": {
+          "median": 1580.7,
+          "p95": 1737.6
+        },
+        "dictation": {
+          "median": 1748.5,
+          "p95": 2431.7
+        },
+        "longform": {
+          "median": 1181.8,
+          "p95": 1700.0
+        },
+        "noise": {
+          "median": 1169.8,
+          "p95": 1277.9
+        }
+      },
+      "time_to_first_text_ms_median": 9170.7,
+      "rtf_median": 0.1755,
+      "peak_rss_mb": 236.3,
+      "cpu_s_per_audio_min": 26.43,
+      "load_ms": 76,
+      "paced": false,
+      "load1_median": 5.79,
+      "load1_max": 7.01
+    },
+    {
+      "id": "moonshine-tiny-q8",
+      "label": "Moonshine Tiny, Q8_0",
+      "model": "handy-computer/moonshine-tiny-gguf moonshine-tiny-Q8_0.gguf",
+      "revision": "c71a93b8f1cb2b7f7336f31bb54bc96960c16f41",
+      "sha256": "2fd348d7b38f97d309cc3ec6848f3f57f537b80244950f07d2637e463f95a3a1",
+      "size_mb": 35,
+      "download_mb": 35,
+      "lab": "Moonshine AI",
+      "license": "MIT",
+      "license_url": "https://opensource.org/license/mit",
+      "base_model": "UsefulSensors/moonshine-tiny",
+      "languages": "English",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend",
+      "rows": "catalog-2026-11/moonshine-tiny-q8.jsonl.gz",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.1068,
+      "wer_ci": [
+        0.0871,
+        0.1308
+      ],
+      "wer_by_category": {
+        "clean": 0.0503,
+        "noise": 0.1338,
+        "accent": 0.3057,
+        "dictation": 0.0703,
+        "code": 0.3417,
+        "longform": 0.055,
+        "command": 0.1132
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0335,
+          0.0686
+        ],
+        "noise": [
+          0.1041,
+          0.1668
+        ],
+        "accent": [
+          0.2629,
+          0.3537
+        ],
+        "dictation": [
+          0.0415,
+          0.1079
+        ],
+        "code": [
+          0.2429,
+          0.4371
+        ],
+        "longform": [
+          0.0325,
+          0.0765
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0503,
+        "noise": 0.1338,
+        "accent": 0.2991,
+        "dictation": 0.0679,
+        "code": 0.3417,
+        "command": 0.1132,
+        "longform": 0.0549,
+        "all": 0.105
+      },
+      "formatted_error": 0.2183,
+      "punctuation_f1": 0.6694,
+      "wait_after_key_up_ms": {
+        "median": 520.4,
+        "p95": 1165.7
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 462.3,
+          "p95": 1009.4
+        },
+        "clean": {
+          "median": 590.1,
+          "p95": 1288.6
+        },
+        "code": {
+          "median": 391.9,
+          "p95": 555.8
+        },
+        "command": {
+          "median": 247.3,
+          "p95": 319.0
+        },
+        "dictation": {
+          "median": 517.6,
+          "p95": 1212.7
+        },
+        "longform": {
+          "median": 351.5,
+          "p95": 663.6
+        },
+        "noise": {
+          "median": 696.1,
+          "p95": 1418.0
+        }
+      },
+      "time_to_first_text_ms_median": 8315.0,
+      "rtf_median": 0.0427,
+      "peak_rss_mb": 194.2,
+      "cpu_s_per_audio_min": 8.43,
+      "load_ms": 62,
+      "paced": false,
+      "load1_median": 6.51,
+      "load1_max": 6.93
+    },
+    {
+      "id": "moonshine-streaming-small-q8",
+      "label": "Moonshine Streaming Small, Q8_0",
+      "model": "handy-computer/moonshine-streaming-small-gguf moonshine-streaming-small-Q8_0.gguf",
+      "revision": "e53f28b0cb90308390c852068b950a1aadd238b0",
+      "sha256": "d03670f69629b649085d0f44a63d97668b4119117cc9611a4e4ad94341713dfc",
+      "size_mb": 199,
+      "download_mb": 199,
+      "lab": "Moonshine AI",
+      "license": "MIT",
+      "license_url": "https://opensource.org/license/mit",
+      "base_model": "UsefulSensors/moonshine-streaming-small",
+      "languages": "English",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend",
+      "rows": "catalog-2026-11/moonshine-streaming-small-q8.jsonl.gz",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0731,
+      "wer_ci": [
+        0.0593,
+        0.0928
+      ],
+      "wer_by_category": {
+        "clean": 0.0224,
+        "noise": 0.0718,
+        "accent": 0.2433,
+        "dictation": 0.0656,
+        "code": 0.2665,
+        "longform": 0.0354,
+        "command": 0.0189
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0128,
+          0.0329
+        ],
+        "noise": [
+          0.0516,
+          0.0946
+        ],
+        "accent": [
+          0.2093,
+          0.2784
+        ],
+        "dictation": [
+          0.0319,
+          0.1059
+        ],
+        "code": [
+          0.1722,
+          0.375
+        ],
+        "longform": [
+          0.0221,
+          0.0476
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0224,
+        "noise": 0.0718,
+        "accent": 0.2194,
+        "dictation": 0.0632,
+        "code": 0.2665,
+        "command": 0.0189,
+        "longform": 0.0352,
+        "all": 0.0695
+      },
+      "formatted_error": 0.2027,
+      "punctuation_f1": 0.6183,
+      "wait_after_key_up_ms": {
+        "median": 749.7,
+        "p95": 1515.1
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 700.2,
+          "p95": 1268.5
+        },
+        "clean": {
+          "median": 753.7,
+          "p95": 1625.3
+        },
+        "code": {
+          "median": 584.1,
+          "p95": 767.7
+        },
+        "command": {
+          "median": 336.1,
+          "p95": 462.1
+        },
+        "dictation": {
+          "median": 754.1,
+          "p95": 1359.9
+        },
+        "longform": {
+          "median": 682.2,
+          "p95": 1346.8
+        },
+        "noise": {
+          "median": 1056.2,
+          "p95": 1621.2
+        }
+      },
+      "time_to_first_text_ms_median": 8548.0,
+      "rtf_median": 0.0783,
+      "peak_rss_mb": 602.7,
+      "cpu_s_per_audio_min": 14.47,
+      "load_ms": 45,
+      "paced": false,
+      "load1_median": 3.72,
+      "load1_max": 4.83
+    },
+    {
+      "id": "moonshine-streaming-medium-q8",
+      "label": "Moonshine Streaming Medium, Q8_0",
+      "model": "handy-computer/moonshine-streaming-medium-gguf moonshine-streaming-medium-Q8_0.gguf",
+      "revision": "56302cde2ae162d1357a833d91775bcd06e91e1b",
+      "sha256": "f7c9564249b508f6012927ec4f9e536087da53a7047f858ca9975bea5f75299e",
+      "size_mb": 296,
+      "download_mb": 296,
+      "lab": "Moonshine AI",
+      "license": "MIT",
+      "license_url": "https://opensource.org/license/mit",
+      "base_model": "UsefulSensors/moonshine-streaming-medium",
+      "languages": "English",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend",
+      "rows": "catalog-2026-11/moonshine-streaming-medium-q8.jsonl.gz",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0632,
+      "wer_ci": [
+        0.0509,
+        0.0813
+      ],
+      "wer_by_category": {
+        "clean": 0.0168,
+        "noise": 0.0537,
+        "accent": 0.2219,
+        "dictation": 0.0547,
+        "code": 0.2853,
+        "longform": 0.0281,
+        "command": 0.0189
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0097,
+          0.0246
+        ],
+        "noise": [
+          0.0368,
+          0.0723
+        ],
+        "accent": [
+          0.1911,
+          0.2593
+        ],
+        "dictation": [
+          0.0255,
+          0.0906
+        ],
+        "code": [
+          0.1865,
+          0.402
+        ],
+        "longform": [
+          0.0183,
+          0.0365
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0168,
+        "noise": 0.0537,
+        "accent": 0.1981,
+        "dictation": 0.0537,
+        "code": 0.2853,
+        "command": 0.0189,
+        "longform": 0.028,
+        "all": 0.0597
+      },
+      "formatted_error": 0.1953,
+      "punctuation_f1": 0.6266,
+      "wait_after_key_up_ms": {
+        "median": 1764.8,
+        "p95": 6790.3
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 1279.7,
+          "p95": 4575.8
+        },
+        "clean": {
+          "median": 1626.4,
+          "p95": 5701.9
+        },
+        "code": {
+          "median": 3041.3,
+          "p95": 7489.2
+        },
+        "command": {
+          "median": 629.4,
+          "p95": 1080.3
+        },
+        "dictation": {
+          "median": 5235.9,
+          "p95": 8862.9
+        },
+        "longform": {
+          "median": 1120.8,
+          "p95": 5363.0
+        },
+        "noise": {
+          "median": 1916.1,
+          "p95": 5434.1
+        }
+      },
+      "time_to_first_text_ms_median": 10282.9,
+      "rtf_median": 0.1947,
+      "peak_rss_mb": 906.4,
+      "cpu_s_per_audio_min": 38.5,
+      "load_ms": 42,
+      "paced": false,
+      "load1_median": 8.47,
+      "load1_max": 14.25
+    },
+    {
+      "id": "qwen3-asr-0.6b-q4km",
+      "label": "Qwen3-ASR 0.6B, Q4_K_M",
+      "model": "handy-computer/Qwen3-ASR-0.6B-gguf Qwen3-ASR-0.6B-Q4_K_M.gguf",
+      "revision": "7e7c69a577fa2725dfedbe34b5e999336e30a19b",
+      "sha256": "5b58f32a58ffa2c8783e0b0963485623e286e6272d953dfc9e28bc3447dee0c0",
+      "size_mb": 590,
+      "download_mb": 590,
+      "lab": "Qwen (Alibaba)",
+      "license": "Apache-2.0",
+      "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "base_model": "Qwen/Qwen3-ASR-0.6B",
+      "languages": "30 languages + 22 Chinese dialects",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend",
+      "rows": "catalog-2026-11/qwen3-asr-0.6b-q4km.jsonl.gz",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0508,
+      "wer_ci": [
+        0.042,
+        0.0623
+      ],
+      "wer_by_category": {
+        "clean": 0.0216,
+        "noise": 0.031,
+        "accent": 0.1533,
+        "dictation": 0.0578,
+        "code": 0.232,
+        "longform": 0.0288,
+        "command": 0.0
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0111,
+          0.0341
+        ],
+        "noise": [
+          0.0192,
+          0.0442
+        ],
+        "accent": [
+          0.1261,
+          0.1848
+        ],
+        "dictation": [
+          0.0311,
+          0.0937
+        ],
+        "code": [
+          0.1384,
+          0.3354
+        ],
+        "longform": [
+          0.0199,
+          0.0364
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0216,
+        "noise": 0.031,
+        "accent": 0.137,
+        "dictation": 0.0569,
+        "code": 0.232,
+        "command": 0.0,
+        "longform": 0.0286,
+        "all": 0.0484
+      },
+      "formatted_error": 0.1583,
+      "punctuation_f1": 0.7081,
+      "wait_after_key_up_ms": {
+        "median": 2004.1,
+        "p95": 3641.2
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 1820.5,
+          "p95": 3051.4
+        },
+        "clean": {
+          "median": 1882.8,
+          "p95": 3811.6
+        },
+        "code": {
+          "median": 1459.0,
+          "p95": 1831.4
+        },
+        "command": {
+          "median": 736.9,
+          "p95": 1132.5
+        },
+        "dictation": {
+          "median": 2016.0,
+          "p95": 2855.3
+        },
+        "longform": {
+          "median": 2260.1,
+          "p95": 8889.2
+        },
+        "noise": {
+          "median": 2657.9,
+          "p95": 3716.1
+        }
+      },
+      "time_to_first_text_ms_median": 9760.3,
+      "rtf_median": 0.2432,
+      "peak_rss_mb": 1217.6,
+      "cpu_s_per_audio_min": 46.46,
+      "load_ms": 177,
+      "paced": false,
+      "load1_median": 3.22,
+      "load1_max": 14.04
+    },
+    {
+      "id": "qwen3-asr-1.7b-q4km",
+      "label": "Qwen3-ASR 1.7B, Q4_K_M",
+      "model": "handy-computer/Qwen3-ASR-1.7B-gguf Qwen3-ASR-1.7B-Q4_K_M.gguf",
+      "revision": "0e0a596e3959c3f3f2ab7d443a5b6f0f4a4bba6f",
+      "sha256": "b7afe3674f653fa84f712ed2440353c6e7cf7f93697fef76b05a26538b24844e",
+      "size_mb": 1320,
+      "download_mb": 1320,
+      "lab": "Qwen (Alibaba)",
+      "license": "Apache-2.0",
+      "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "base_model": "Qwen/Qwen3-ASR-1.7B",
+      "languages": "30 languages + 22 Chinese dialects",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend",
+      "rows": "catalog-2026-11/qwen3-asr-1.7b-q4km.jsonl.gz",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0458,
+      "wer_ci": [
+        0.0371,
+        0.0581
+      ],
+      "wer_by_category": {
+        "clean": 0.0176,
+        "noise": 0.0263,
+        "accent": 0.1426,
+        "dictation": 0.0609,
+        "code": 0.2069,
+        "longform": 0.0248,
+        "command": 0.0
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0102,
+          0.0259
+        ],
+        "noise": [
+          0.0173,
+          0.0367
+        ],
+        "accent": [
+          0.1169,
+          0.1785
+        ],
+        "dictation": [
+          0.0304,
+          0.101
+        ],
+        "code": [
+          0.1159,
+          0.3114
+        ],
+        "longform": [
+          0.0158,
+          0.0329
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0176,
+        "noise": 0.0263,
+        "accent": 0.1176,
+        "dictation": 0.06,
+        "code": 0.2069,
+        "command": 0.0,
+        "longform": 0.0248,
+        "all": 0.0425
+      },
+      "formatted_error": 0.151,
+      "punctuation_f1": 0.7222,
+      "wait_after_key_up_ms": {
+        "median": 3874.9,
+        "p95": 6541.7
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 3514.9,
+          "p95": 6157.7
+        },
+        "clean": {
+          "median": 3531.2,
+          "p95": 6451.2
+        },
+        "code": {
+          "median": 2825.6,
+          "p95": 3392.8
+        },
+        "command": {
+          "median": 1266.0,
+          "p95": 2176.3
+        },
+        "dictation": {
+          "median": 3979.2,
+          "p95": 5590.6
+        },
+        "longform": {
+          "median": 4759.9,
+          "p95": 6655.0
+        },
+        "noise": {
+          "median": 5161.6,
+          "p95": 7194.6
+        }
+      },
+      "time_to_first_text_ms_median": 11570.3,
+      "rtf_median": 0.4868,
+      "peak_rss_mb": 1919.3,
+      "cpu_s_per_audio_min": 85.97,
+      "load_ms": 132,
+      "paced": false,
+      "load1_median": 3.07,
+      "load1_max": 3.35
+    },
+    {
+      "id": "granite-470m-q4km",
+      "label": "Granite Speech 5.0 470M TurboCTC, Q4_K_M",
+      "model": "handy-computer/granite-speech-5.0-470m-turboctc-gguf granite-speech-5.0-470m-turboctc-Q4_K_M.gguf",
+      "revision": "0cf5be9f4bcd479989e6a24d142094d34d552daa",
+      "sha256": "3f30525381d72246b7f99e49b6cb66b249cf1b990c6c3d0e031a7765735f513e",
+      "size_mb": 279,
+      "download_mb": 279,
+      "lab": "IBM",
+      "license": "Apache-2.0",
+      "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "base_model": "ibm-granite/granite-speech-5.0-470m-turboctc",
+      "languages": "7",
+      "runtime": "transcribe.cpp through the transcribe-cpp crate 0.4.2, CPU backend",
+      "rows": "catalog-2026-11/granite-470m-q4km.jsonl.gz",
+      "clips": 250,
+      "missing": [],
+      "wer": 0.0762,
+      "wer_ci": [
+        0.0634,
+        0.0948
+      ],
+      "wer_by_category": {
+        "clean": 0.0216,
+        "noise": 0.0228,
+        "accent": 0.2531,
+        "dictation": 0.1469,
+        "code": 0.3605,
+        "longform": 0.0401,
+        "command": 0.0189
+      },
+      "wer_ci_by_category": {
+        "clean": [
+          0.0134,
+          0.031
+        ],
+        "noise": [
+          0.0162,
+          0.0303
+        ],
+        "accent": [
+          0.2223,
+          0.292
+        ],
+        "dictation": [
+          0.1062,
+          0.1965
+        ],
+        "code": [
+          0.2552,
+          0.4647
+        ],
+        "longform": [
+          0.0321,
+          0.0491
+        ]
+      },
+      "wer_without_fillers": {
+        "clean": 0.0216,
+        "noise": 0.0228,
+        "accent": 0.2259,
+        "dictation": 0.1422,
+        "code": 0.3605,
+        "command": 0.0189,
+        "longform": 0.0395,
+        "all": 0.0719
+      },
+      "formatted_error": 0.2957,
+      "punctuation_f1": 0.0,
+      "wait_after_key_up_ms": {
+        "median": 1517.6,
+        "p95": 3229.1
+      },
+      "wait_after_key_up_ms_by_category": {
+        "accent": {
+          "median": 1771.7,
+          "p95": 3427.2
+        },
+        "clean": {
+          "median": 1298.4,
+          "p95": 2314.3
+        },
+        "code": {
+          "median": 951.1,
+          "p95": 1784.4
+        },
+        "command": {
+          "median": 1178.3,
+          "p95": 1432.0
+        },
+        "dictation": {
+          "median": 1876.6,
+          "p95": 2575.6
+        },
+        "longform": {
+          "median": 1024.4,
+          "p95": 1923.3
+        },
+        "noise": {
+          "median": 1981.7,
+          "p95": 3532.6
+        }
+      },
+      "time_to_first_text_ms_median": 9323.6,
+      "rtf_median": 0.1899,
+      "peak_rss_mb": 477.5,
+      "cpu_s_per_audio_min": 22.36,
+      "load_ms": 129,
+      "paced": false,
+      "load1_median": 15.04,
+      "load1_max": 20.32
+    }
+  ]
+}

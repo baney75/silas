@@ -97,9 +97,17 @@ pub fn live(
     })
 }
 
-/// The same decisions on a simulated clock, for quick runs: the model's time is real, the waiting for speech is not.
-/// The worker looks every `POLL` of clip time and a piece or a guess holds it for as long as the model took, so they
-/// are made where the live worker would make them on an idle machine.
+/// The model's speed on the simulated clock: seconds of work per second of audio it hears. The median `rtf` of the
+/// 40 `--fast` rows in `bench/rivals/opencode-chapel1/silas-fast.jsonl.gz` (0.123): Parakeet v3 on transcribe.cpp,
+/// chapel1's Intel i5-10210U, load average about 1, 2026-11-18.
+pub const SIM_RTF: f64 = 0.123;
+
+/// The same decisions on a simulated clock, for quick runs: neither the waiting for speech nor the model's time is
+/// real. The worker looks every `POLL` of clip time, and a piece or a guess holds it for `SIM_RTF` times the audio
+/// the model hears, so they are made where the live worker would make them on an idle chapel1, and the same text
+/// comes out on every machine at any load. `compute` is the model's real time. `first` is on the simulated clock.
+/// `after_release` is the simulated wait for a piece or guess still running at key up (or the tail), plus the real
+/// time the rest and the dictionary took.
 pub fn simulated(
     audio: &[f32],
     model: &mut Model,
@@ -134,9 +142,8 @@ pub fn simulated(
             Some(job) => {
                 let t = Instant::now();
                 let text = model(job.audio());
-                let took = t.elapsed();
-                compute += took;
-                now += took.as_secs_f64();
+                compute += t.elapsed();
+                now += job.audio().len() as f64 / rate * SIM_RTF;
                 busy_until = now;
                 cutter.finished(job, text)
             }
@@ -262,11 +269,13 @@ mod tests {
 
     #[test]
     fn a_long_clip_is_cut_at_its_pause_before_release() {
-        let audio = [speech(7.0), pause(0.6), speech(3.0)].concat();
+        // The pause outlasts the guess made in it (7.3 s of audio at SIM_RTF), so that guess becomes the piece.
+        let audio = [speech(7.0), pause(1.2), speech(3.0)].concat();
         let d = simulated(&audio, &mut counting(), |t| t.to_string()).unwrap();
         assert_eq!(d.pieces, 1, "{}", d.raw);
         // The first piece was ready while the speaker was still talking.
-        assert!(d.first < Duration::from_secs(8), "{:?}", d.first);
+        let key_up = Duration::from_secs_f64(audio.len() as f64 / RATE as f64);
+        assert!(d.first < key_up, "{:?}", d.first);
         let words: Vec<usize> = d
             .raw
             .split(" samples.")
@@ -359,6 +368,30 @@ mod tests {
         let live = live(audio, &model, |t| t.to_string()).unwrap();
         assert!(sim.guess_used && live.guess_used, "{sim:?} {live:?}");
         assert!(live.after_release < TAIL, "{:?}", live.after_release);
+    }
+
+    #[test]
+    fn simulated_gives_the_same_text_however_fast_the_model_runs() {
+        // A piece, then short pauses a 50 ms poll can only just catch: whether each gets a guess used to depend on
+        // where the model's real time had moved the poll to.
+        let mut audio = [speech(7.0), pause(0.6), speech(1.0)].concat();
+        for _ in 0..6 {
+            audio.extend(pause(0.15));
+            audio.extend(speech(0.3));
+        }
+        audio.extend(pause(0.6));
+        let run = |ms: u64| {
+            let mut model: Model = Box::new(move |a: &[f32]| {
+                std::thread::sleep(Duration::from_millis(ms));
+                Ok(format!("{} samples.", a.len()))
+            });
+            let d = simulated(&audio, &mut model, |t| t.to_string()).unwrap();
+            (d.raw, d.pieces, d.guesses, d.guess_used, d.first)
+        };
+        let (fast, slow) = (run(0), run(30));
+        assert_eq!(fast.1, 1, "{fast:?}");
+        assert!(fast.2 > 1, "{fast:?}");
+        assert_eq!(fast, slow);
     }
 
     #[test]
