@@ -149,6 +149,7 @@ pub fn run() {
             commands::download_model,
             commands::select_model,
             commands::delete_model,
+            commands::open_model_card,
             commands::get_history,
             commands::correct_history,
             commands::delete_history,

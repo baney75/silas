@@ -1350,6 +1350,45 @@ button {
 
 /* ---------- Model ---------- */
 
+.model-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.model-section-title {
+  font: 600 18px/1.3 var(--serif);
+}
+
+.model-section-blurb {
+  margin: 4px 0 16px;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.model-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  margin: -8px 0 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--gold-ink);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.model-link:hover {
+  text-decoration: underline;
+}
+.model-link:focus-visible {
+  outline: 2px solid var(--gold-line);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
 .model-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));

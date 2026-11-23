@@ -9,6 +9,7 @@ of review diffs). Models and audio are not in git.
 | Study | Question |
 | --- | --- |
 | [accent-2026-11](accent-2026-11.md) | Which free CPU model should be Silas's default, now that Hex's Parakeet Unified beats Parakeet v3 on accents |
+| [catalog-2026-11](catalog-2026-11.md) | Which of the GGUF speech models transcribe.cpp runs Silas should offer, and for what (19 candidates, two machines) |
 
 ## Run a study
 

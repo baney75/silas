@@ -162,14 +162,26 @@ is never rewritten into jargon, which is the failure that made us leave TypeWhis
 
 ## Models
 
-| Model | Size | Word errors: all, accented speech | Notes |
-| --- | --- | --- | --- |
-| **Parakeet v3** (default) | 485 MB | 4.4%, 12.0% | 25 European languages. Runs on transcribe.cpp; about 1 s from key up to text |
-| Parakeet v3 (ONNX) | 478 MB | 5.8%, 19.8% | The same model on the older engine, for x86 processors without AVX2 |
-| Cohere Transcribe (int4) | 2 GB | 4.6%, 20.2% | Best on code; waits about 4.5 s after key up on a laptop CPU |
+Every model runs on your computer; the Model page groups them by what each is best at and links each
+one's model card and license.
 
-Measured through Silas's dictation path on all 250 clips of the [bench set](bench/README.md), on a 4-core
-laptop CPU ([the study](bench/models/accent-2026-11.md)).
+| Model | Size | Word errors: all, accented speech | Best for |
+| --- | --- | --- | --- |
+| **Parakeet v3** (default) | 485 MB | 4.4%, 12.0% | Most people. 25 European languages, the best with accents, about 1 s from key up to text |
+| Parakeet v3 (ONNX) | 478 MB | 5.8%, 19.8% | The same model on the older engine, for x86 processors without AVX2 |
+| Parakeet v2 | 475 MB | 4.4%, 16.5% | English only. The best of the fast models with code (14.7%) |
+| Canary 180M Flash | 218 MB | 5.5%, 22.4% | Older laptops: less than half the download and a shorter wait (0.9 s). Choose its language in Settings |
+| Moonshine Tiny | 35 MB | 10.7%, 30.6% | The smallest and lightest; English only, more than twice the mistakes |
+| Qwen3-ASR 0.6B | 590 MB | 5.1%, 15.3% | Chinese, Japanese, Korean, Arabic, Hindi and 25 more; about 2 s wait |
+| Whisper Large v3 Turbo | 536 MB | 5.5%, 19.9% | 99 languages; slow on a laptop (13 s wait), fine for transcribing files |
+| Canary-Qwen 2.5B | 1.7 GB | 4.4%, 16.0% | English only. The fewest mistakes with code (13.8%) and dictation; waits about 4 s on a laptop CPU |
+| Cohere Transcribe | 2 GB | 4.5%, 20.2% | 14 languages, as good with code as Canary-Qwen; waits about 4.5 s on a laptop CPU |
+
+Measured through Silas's dictation path on all 250 clips of the [bench set](bench/README.md) (English),
+on a 4-core laptop CPU ([the catalog study](bench/models/catalog-2026-11.md); the default and its ONNX
+build come from [the accent study](bench/models/accent-2026-11.md)). Every download is pinned to one
+revision and checked against its SHA-256 before Silas uses it. Pick your language in Settings for the
+models that take one.
 
 ### The right model for your computer
 
@@ -285,7 +297,13 @@ device type from the report service. Those requests carry your device type and n
 Speech engines through [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) (MIT) and
 [transcribe-rs](https://github.com/cjpais/transcribe-rs) (MIT, vendored with a decoder fix), keys
 through [handy-keys](https://github.com/handy-computer/handy-keys) (MIT); all three come from the
-[Handy](https://github.com/cjpais/Handy) project. Parakeet is NVIDIA's (CC-BY-4.0). The benchmark
+[Handy](https://github.com/cjpais/Handy) project. The speech models are
+NVIDIA's Parakeet, Canary and Canary-Qwen ([CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/)),
+OpenAI's Whisper ([MIT](https://opensource.org/license/mit)), Moonshine AI's Moonshine
+([MIT](https://opensource.org/license/mit)), the Qwen team's (Alibaba) Qwen3-ASR and Cohere's Cohere
+Transcribe ([Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0)); Silas downloads them as
+quantized GGUF conversions by [handy-computer](https://huggingface.co/handy-computer) (Cohere as an int4
+ONNX conversion by [cstr](https://huggingface.co/cstr/cohere-transcribe-onnx-int4)), unchanged otherwise. The benchmark
 clips come from [LibriSpeech](https://www.openslr.org/12) (CC BY 4.0; Panayotov et al., ICASSP 2015),
 [EdAcc](https://groups.inf.ed.ac.uk/edacc/) (CC BY-SA 4.0; Sanabria et al., ICASSP 2023),
 [DEMAND](https://zenodo.org/records/1227121) and [FSD50K](https://zenodo.org/records/4060432) noise, and
