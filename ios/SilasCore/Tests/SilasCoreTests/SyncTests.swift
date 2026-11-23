@@ -543,6 +543,20 @@ final class HandoffTests: XCTestCase {
         XCTAssertEqual(h.last?.text, "Hello from Silas.")
     }
 
+    /// review-r2 first condition: the field's id after the trip to Silas and back may differ
+    /// from the one at start. The stop, pressed in the field, names it, and the text goes there.
+    func testStopNamesTheFieldItWasPressedIn() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("silas-handoff-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let h = Handoff(directory: dir)
+        let atStart = UUID(), afterReturn = UUID()
+        h.send(.start, document: atStart, notify: false)
+        h.send(.stop, document: afterReturn)
+        h.publish("Typed after the trip.", dictation: h.request?.dictation)
+        XCTAssertNil(h.takePending(for: atStart))
+        XCTAssertEqual(h.takePending(for: afterReturn)?.text, "Typed after the trip.")
+    }
+
     /// Text is typed by itself only into the field its dictation started in; elsewhere it waits
     /// for "type last again".
     func testPendingTextGoesOnlyToItsOwnField() {
